@@ -1,0 +1,51 @@
+-- Alphafitus OS — Fase 13 (Custeio de Produção: custo real de produção e
+-- custo das perdas, a partir do custo médio de compra dos insumos)
+-- Aplicado DEPOIS de schema_fase12.sql, nunca remove nem altera nada das
+-- fases anteriores (o ALTER TABLE abaixo só ADICIONA uma coluna nova,
+-- opcional, com DEFAULT NULL, então nenhuma linha existente quebra).
+-- Mesmas notas de portabilidade para PostgreSQL das fases anteriores se
+-- aplicam aqui.
+--
+-- Contexto (decidido com o usuário antes de implementar): o custo de cada
+-- insumo deve vir do CUSTO MÉDIO REAL DAS COMPRAS, não de um valor
+-- cadastrado "à mão" no item. Até aqui, nada no sistema registrava quanto
+-- se pagou por um lote recebido — `contas_pagar` (Fase 6) pode até
+-- referenciar um lote para rastreabilidade, mas de propósito NÃO tem
+-- relação 1:1 com um item/preço específico (uma nota fiscal cobre vários
+-- itens, frete, impostos etc. — ver comentário no topo de
+-- schema_fase6.sql). O ponto certo para capturar "quanto custou este
+-- lote" é o RECEBIMENTO do próprio lote (Fase 2), onde quem recebe já
+-- sabe o preço pago — por isso o campo novo entra em `lotes`, não em
+-- `itens` nem em `contas_pagar`.
+--
+-- O campo é OPCIONAL (nullable) de propósito: nem toda entrada precisa
+-- informar custo imediatamente (ex.: lote de amostra, doação, ajuste de
+-- inventário inicial sem nota fiscal em mãos ainda) — o motor de custeio
+-- (ver app/routes/custeio.py) trata a ausência de custo com transparência
+-- (marca o item como "custo indisponível" em vez de tratar como zero, o
+-- que inflaria artificialmente a margem/subestimaria o custo real).
+--
+-- O "custo médio real de compra" de um item, em qualquer momento, é
+-- sempre CALCULADO NA HORA como a média ponderada por quantidade de
+-- `custo_unitario` entre todos os lotes desse item que têm custo
+-- informado — nunca um número guardado à parte que poderia
+-- dessincronizar (mesmo princípio de saldo/status "sempre recalculado"
+-- já usado em toda fase anterior: estoque, reservas, contas financeiras).
+
+PRAGMA foreign_keys = ON;
+
+-- Custo unitário pago por este lote especificamente (na mesma unidade de
+-- `lotes.unidade`), informado opcionalmente no recebimento
+-- (POST /lotes/recebimento) por quem já tem a permissão `lotes.receber`
+-- — não é uma permissão nova. NULL significa "custo não informado para
+-- este lote" (o motor de custeio cai para a média do item, ou marca como
+-- indisponível se nenhum lote do item tiver custo).
+ALTER TABLE lotes ADD COLUMN custo_unitario REAL CHECK (custo_unitario IS NULL OR custo_unitario >= 0);
+
+-- Nenhuma tabela nova: o custo de uma ordem de produção (por insumo, e a
+-- fatia atribuível à perda) é 100% derivado, em tempo real, a partir de
+-- `ordem_producao_consumo` (Fase 3) + `lotes.custo_unitario` (acima) +
+-- `ordens_producao.quantidade_produzida`/`quantidade_perda` (Fase 9) —
+-- ver `app/routes/custeio.py`. Guardar um "custo da ordem" calculado à
+-- parte reabriria exatamente o problema que este sistema evita desde a
+-- Fase 1: um número congelado que pode dessincronizar do dado de origem.

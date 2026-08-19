@@ -1,0 +1,35 @@
+-- Fase 9 — Apontamento de Perdas/Refugo na Produção
+--
+-- Até a Fase 8, a conclusão de uma ordem de produção (POST
+-- /producao/ordens/<id>/concluir) só registrava a quantidade PRODUZIDA.
+-- Isso deixava uma lacuna de rastreabilidade real de chão de fábrica: se
+-- a ordem planejou produzir 100kg e só saíram 92kg de produto aprovável,
+-- o sistema não tinha como saber se os 8kg "sumiram" por perda normal de
+-- processo (evaporação, ajuste de umidade, quebra de comprimido, etc.) ou
+-- se simplesmente ninguém apontou — a diferença entre planejado e
+-- produzido ficava sem explicação nenhuma no sistema.
+--
+-- Esta fase adiciona duas colunas em ordens_producao para fechar essa
+-- lacuna, seguindo a mesma filosofia aditiva das fases anteriores:
+-- nenhuma tabela nova, nenhuma coluna existente alterada, nenhuma rota já
+-- existente teve seu contrato quebrado (quantidade_perda é OPCIONAL e
+-- tem default 0 — ordens concluídas do jeito antigo continuam
+-- funcionando exatamente como antes).
+--
+-- quantidade_perda: quanto do material processado NÃO virou produto
+-- aprovável (refugo/perda de processo). É informação declarada por quem
+-- conclui a ordem, sempre >= 0. Fica registrada permanentemente junto da
+-- ordem — não é uma tabela de ledger à parte porque, diferente de
+-- consumo/movimentação de estoque, a perda de uma ordem é um fato único
+-- e final apurado no momento da conclusão, não algo que se acumula em
+-- múltiplos lançamentos ao longo do tempo.
+--
+-- motivo_perda: texto livre explicando a causa da perda. Só é
+-- obrigatório (validado na camada de aplicação, não aqui no schema) se
+-- quantidade_perda > 0 — uma ordem sem perda não precisa de motivo
+-- nenhum. Isso dá ao QMS um registro auditável do "porquê" sempre que
+-- houver refugo, essencial para investigação de causa-raiz e para
+-- indicadores de eficiência de processo (OEE-like) que o Painel
+-- Gerencial (Fase 7) poderá futuramente agregar.
+ALTER TABLE ordens_producao ADD COLUMN quantidade_perda REAL NOT NULL DEFAULT 0 CHECK (quantidade_perda >= 0);
+ALTER TABLE ordens_producao ADD COLUMN motivo_perda TEXT;

@@ -1,0 +1,48 @@
+# Dependências mínimas do backend Fase 1.
+# Waitress é o servidor WSGI recomendado para rodar em produção no Windows
+# (puro Python, sem compilação nativa, muito usado em serviços Windows).
+Flask>=3.0
+PyJWT>=2.8
+waitress>=3.0
+# reportlab: geração de PDFs — Certificado de Análise/CoA (Fase 10) e
+# Relatório de Simulação de Recall (Fase 11).
+reportlab>=4.0
+# pypdf: ler/mesclar PDFs já existentes (não gerar do zero, isso continua
+# sendo o reportlab acima) — usado para combinar o Memorial Técnico com
+# os anexos em PDF num único arquivo (Fase 43, "PDF Completo").
+pypdf>=3.17
+# img2pdf: converter um anexo de imagem (JPG/PNG/etc.) numa página de PDF
+# sem perda de qualidade, para incorporar no "PDF Completo" (Fase 43).
+# Puxa por baixo dos panos o pacote `pikepdf` (que por sua vez puxa o
+# `lxml`) — nenhum dos dois aparece aqui porque não são usados
+# diretamente, mas se algum dia o instalador falhar tentando compilar
+# `lxml`/`pikepdf` numa versão de Python muito nova/sem pacote pronto
+# ainda publicado, é esta dependência transitiva a origem (ver a nota
+# sobre isso em `_ambiente.bat`, no instalador).
+img2pdf>=0.5
+# openpyxl: gerar um .xlsx de verdade (abas, formatação de célula, fórmula)
+# para a exportação do Painel Gerencial (Fase 45) — a Fase 19 (exportação
+# em CSV) já documentava isso como pendente por falta desta biblioteca.
+openpyxl>=3.1
+# boto3: SDK da AWS, usado aqui só pelo CLIENTE de S3 (`boto3.client("s3",
+# endpoint_url=...)`) — funciona com qualquer provedor de object storage
+# compatível com a API S3 (AWS S3, Backblaze B2, Cloudflare R2, Wasabi,
+# MinIO, DigitalOcean Spaces etc.), não só a AWS. Usado pelo envio do
+# Backup Automático para a nuvem (Fase 67) — app/backup_service.py importa
+# isso sob demanda (só quando o envio para nuvem está ligado), então uma
+# instalação que nunca ativar esse destino não é afetada mesmo que esta
+# biblioteca falhe ao instalar por algum motivo.
+boto3>=1.34
+# pywin32: dá acesso às APIs do Windows a partir do Python — usado só por
+# service_windows.py (Fase 68), para registrar o Alphafitus OS como um
+# Serviço de verdade do Windows (inicia sozinho com o Windows, reinicia
+# sozinho se cair). O marcador "; sys_platform == 'win32'" faz o pip
+# pular esta linha em qualquer sistema que não seja Windows (inclusive
+# neste ambiente de desenvolvimento em nuvem, que é Linux) — só quem
+# instalar de verdade no Windows recebe esta dependência.
+pywin32>=306 ; sys_platform == "win32"
+# requests: usado só pela integração de NF-e (Fase 70) para falar com a
+# API REST do provedor terceirizado (Focus NFe) — importado sob demanda
+# dentro de app/nfe_service.py (mesmo padrão de boto3 acima), então uma
+# instalação que nunca emitir uma NF-e não é afetada mesmo sem esta biblioteca.
+requests>=2.31

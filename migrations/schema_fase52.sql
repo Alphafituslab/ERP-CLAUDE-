@@ -1,0 +1,73 @@
+-- Fase 52 — Painel Gerencial: Filtro por EMPRESA
+--
+-- Pendência documentada desde a Fase 42 (filtro por PERÍODO): o cadastro
+-- de "empresas/unidades" (Fase 1) sempre foi só um dado de REFERÊNCIA —
+-- nenhuma tabela operacional (ordem de produção, lote, pedido de venda,
+-- conta a pagar/receber) tinha uma coluna `empresa_id` própria para
+-- filtrar por ela. A única tabela de negócio com esse vínculo até aqui é
+-- `unidades` (depósito/unidade física, Fase 1) — mas nem toda transação
+-- passa por uma unidade de estoque (uma ordem de produção ou uma conta a
+-- pagar, por exemplo, não têm posição física nenhuma), então esse caminho
+-- não cobre os cinco blocos do Painel Gerencial (Fase 7).
+--
+-- Esta fase adiciona `empresa_id` (opcional, sem valor padrão) direto nas
+-- CINCO fontes de dado que os blocos do Painel Gerencial agregam:
+--
+--   ordens_producao  (bloco Produção)
+--   lotes            (bloco Qualidade e parte do bloco Estoque)
+--   pedidos_venda    (bloco Comercial)
+--   contas_receber   (bloco Financeiro — herdado do pedido de venda que
+--                     gerou a conta automaticamente na expedição, Fase 6;
+--                     nunca precisa ser informado à mão)
+--   contas_pagar     (bloco Financeiro — informado na hora de lançar)
+--
+-- Decisões de escopo, documentadas para não haver dúvida no futuro:
+--
+-- 1. É OPCIONAL e sem valor padrão — um registro criado sem informar
+--    empresa_id fica com `NULL` ("sem empresa definida"). Isso é
+--    deliberado: não existe uma "empresa padrão" nem uma migração que
+--    tenta adivinhar a empresa de um registro já existente — registros
+--    antigos (de antes desta fase) e novos registros que não informarem
+--    o campo simplesmente não entram em NENHUM filtro por empresa
+--    específica (mas continuam contando normalmente quando NENHUM filtro
+--    é aplicado — ver app/routes/relatorios.py: sem `empresa_id` na
+--    query string, a consulta roda exatamente igual a antes desta fase,
+--    sem nenhum `WHERE` novo).
+--
+-- 2. O bloco ESTOQUE é um caso especial: a Fase 1 já linka
+--    `posicoes_estoque` → `unidades` → `empresas` (unidades sempre
+--    pertencem a uma empresa, `NOT NULL`). Em vez de reaproveitar esse
+--    caminho para TODO o bloco Estoque, esta fase usa `lotes.empresa_id`
+--    (o mesmo campo novo, direto no lote) para as métricas de saldo por
+--    tipo de item e lotes vencidos/a vencer — pela mesma razão de sempre
+--    neste sistema: uma fonte de verdade ÚNICA e consistente com os
+--    outros quatro blocos, em vez de dois conceitos de "empresa deste
+--    estoque" que podem discordar entre si (o lote pertence à empresa X,
+--    mas está fisicamente guardado num depósito da empresa Y). SÓ a
+--    métrica "posições ativas" (que é sobre a INFRAESTRUTURA do depósito,
+--    não sobre um lote específico) continua usando o caminho
+--    `unidades.empresa_id` já existente desde a Fase 1 — é o vínculo
+--    correto para essa métrica específica, e já existia antes desta fase.
+--
+-- 3. Nem toda métrica de cada bloco recebeu o filtro: `desvios_por_status`
+--    e `analises_aguardando_resultado` (bloco Qualidade) e
+--    `clientes_ativos` (bloco Comercial) continuam SEMPRE sem filtro —
+--    um desvio pode não estar ligado a nenhum lote (`desvios.lote_id` é
+--    opcional, ver schema_fase2.sql) e um cliente pode comprar de
+--    qualquer empresa, então não há uma coluna natural de empresa para
+--    essas três métricas hoje. Documentado aqui pela mesma razão que a
+--    Fase 42 documentou que os 5 blocos de "situação atual" não são
+--    afetados pelo filtro de período: mais vale um limite claro e
+--    explícito do que fingir uma precisão que o modelo de dados não tem.
+--
+-- 4. `memorial_produtos.empresa_id` (Fase 24) referencia `memorial_empresas`
+--    — uma tabela PARALELA e completamente separada desta `empresas`
+--    (o Memorial Técnico ANVISA tem seu próprio cadastro de
+--    empresas/produtos, por design, desde a Fase 24). Não confundir os
+--    dois: esta fase não toca em nada do Memorial Técnico.
+
+ALTER TABLE ordens_producao ADD COLUMN empresa_id INTEGER REFERENCES empresas(id);
+ALTER TABLE lotes           ADD COLUMN empresa_id INTEGER REFERENCES empresas(id);
+ALTER TABLE pedidos_venda   ADD COLUMN empresa_id INTEGER REFERENCES empresas(id);
+ALTER TABLE contas_receber  ADD COLUMN empresa_id INTEGER REFERENCES empresas(id);
+ALTER TABLE contas_pagar    ADD COLUMN empresa_id INTEGER REFERENCES empresas(id);

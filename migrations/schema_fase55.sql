@@ -1,0 +1,43 @@
+-- Fase 55 — Conciliação Bancária: Processamento em Lote + Janela de Dias
+-- Configurável
+--
+-- Duas melhorias sobre a Fase 40, ambas de escopo puramente local (nenhuma
+-- integração de rede/banco nova, nenhuma tabela nova):
+--
+-- 1) JANELA DE DIAS CONFIGURÁVEL — até aqui a tolerância de dias entre a
+--    data de uma transação do extrato e a data de uma baixa já registrada,
+--    para considerá-las candidatas uma da outra, era fixa em 3 dias no
+--    código (`TOLERANCIA_DIAS_CONCILIACAO`, em app/routes/financeiro.py).
+--    Mesmo espírito da Fase 32 (`configuracoes_estoque`) e da Fase 33
+--    (`configuracoes_financeiro.limite_dias_estorno_baixa`): a régua passa
+--    a morar numa coluna configurável pela tela, na MESMA linha única de
+--    configuração do Financeiro e com a MESMA permissão de escrita já
+--    usada desde a Fase 33/41 (`configurar_limite_estorno`) — não parecia
+--    valer a pena abrir uma permissão nova só para mais um campo da mesma
+--    tela "Configurações do Financeiro".
+--
+--    O valor padrão continua 3, idêntico ao que já era fixo no código,
+--    para não mudar o comportamento de absolutamente ninguém que já usa o
+--    sistema sem configurar nada.
+ALTER TABLE configuracoes_financeiro
+    ADD COLUMN tolerancia_dias_conciliacao INTEGER NOT NULL DEFAULT 3
+        CHECK (tolerancia_dias_conciliacao >= 0);
+
+-- 2) PROCESSAMENTO EM LOTE — nenhuma tabela nova aqui: o botão novo
+--    "Conciliar todos os candidatos únicos" (rota
+--    POST /financeiro/extratos/conciliar-pendentes-em-massa) só REPETE, sob
+--    demanda, a mesma regra automática que já roda no momento da
+--    importação (Fase 40) — nunca inventa um critério de correspondência
+--    novo, e nunca concilia na presença de ambiguidade (0 ou 2+
+--    candidatos), exatamente como a importação.
+--
+--    Existe porque hoje essa auto-conciliação só é tentada UMA VEZ, no
+--    instante da importação do arquivo — uma transação que ficou pendente
+--    só porque a baixa correspondente ainda não tinha sido lançada no
+--    Financeiro (ex.: extrato do banco chegou antes de o pagamento ser
+--    registrado na tela) nunca é reprocessada automaticamente depois,
+--    mesmo que a baixa apareça minutos ou dias mais tarde — o usuário
+--    tinha que conciliar essa transação manualmente uma a uma, mesmo
+--    sendo, agora, um candidato único e óbvio. A rota nova pode ser
+--    chamada para um extrato específico ou para TODAS as transações
+--    pendentes do sistema de uma vez.

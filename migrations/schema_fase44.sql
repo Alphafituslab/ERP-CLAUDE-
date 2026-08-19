@@ -1,0 +1,26 @@
+-- Fase 44 — Memorial Técnico ANVISA: Administração — Usuários Online
+--
+-- A Fase 24 (fundação do Memorial Técnico) deixou de propósito de fora a
+-- seção de "Administração" que o sistema original tinha (gerenciar
+-- usuários daquele sistema, ver usuários online, snapshots/restauração,
+-- backups) — Alphafitus já tem seu próprio módulo de Usuários/Perfis/
+-- Permissões (Fase 1) e sua própria trilha de auditoria, então duplicar
+-- essa administração criaria dois lugares diferentes para a mesma coisa.
+-- O cliente pediu explicitamente para replicar mesmo assim; esta fase
+-- entrega o primeiro pedaço: "Usuários Online".
+--
+-- O sistema original guardava sessão em Postgres (connect-pg-simple) e
+-- não tinha equivalente pronto em SQLite — só que a Fase 1 do Alphafitus
+-- JÁ tem uma tabela `sessoes` (refresh token) desde o início. Ela não
+-- basta por si só para "quem está online AGORA": um refresh token pode
+-- durar dias sem o usuário estar de fato usando o sistema neste minuto.
+-- Por isso esta coluna nova: `ultimo_acesso_em`, atualizada silenciosamente
+-- (sem entrada na trilha de auditoria — vira ruído a cada requisição, o
+-- mesmo raciocínio de não auditar leituras simples) a cada requisição
+-- autenticada com sucesso, em `get_current_user()` (app/context.py). Um
+-- usuário é considerado "online" quando esse timestamp está dentro de uma
+-- janela curta (ver ONLINE_JANELA_MINUTOS em app/routes/usuarios.py) —
+-- mesmo espírito de "verificado a cada requisição" já usado pela Fase 35
+-- (contagens cíclicas agendadas), sem precisar de um cron de sistema
+-- operacional de verdade.
+ALTER TABLE usuarios ADD COLUMN ultimo_acesso_em TEXT;

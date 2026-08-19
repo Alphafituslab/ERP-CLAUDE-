@@ -1,0 +1,11575 @@
+/*
+ * Alphafitus OS — Frontend da Fase 1 (Fundação).
+ *
+ * Escrito em JavaScript puro (sem React/bundler): o ambiente onde este
+ * projeto foi montado não tinha acesso de rede para instalar ferramentas de
+ * build nem para carregar bibliotecas de CDN, então uma SPA sem dependências
+ * externas é também a opção mais robusta para uma fábrica — nada aqui
+ * depende de um CDN de terceiros no ar, o que reduz superfície de ataque e
+ * evita quebra caso o firewall da empresa bloqueie domínios externos.
+ * Pode ser reescrito em React/Vue mais tarde sem tocar no backend, que é
+ * uma API JSON comum.
+ */
+(function () {
+  "use strict";
+
+  const API = "/api/v1";
+  const app = document.getElementById("app");
+
+  // ---------------------------------------------------------------------
+  // Estado global + persistência mínima (apenas os tokens, para não exigir
+  // login a cada F5). Em produção real, considere migrar o refresh_token
+  // para um cookie httpOnly assinado pelo servidor — ver README.
+  // ---------------------------------------------------------------------
+  const state = {
+    accessToken: null,
+    refreshToken: localStorage.getItem("alphafitus_refresh_token") || null,
+    usuarioAtual: null,
+    tema: localStorage.getItem("alphafitus_tema") || "claro",
+    flash: null,
+    cache: {}, // caches leves usados entre páginas (ex.: catálogo de permissões)
+    notificacoesNaoLidas: 0, // Fase 37 — mostrado no sino da barra superior
+    // Fase 51 — grupos do menu lateral que o próprio usuário já abriu ou
+    // fechou manualmente pelo menos uma vez (clicando no <summary>).
+    // Chave = chave do grupo, valor = true (aberto)/false (fechado). Um
+    // grupo que nunca foi tocado simplesmente não aparece aqui — nesse
+    // caso o padrão é "só abre se a página atual estiver dentro dele" (ver
+    // `grupoMenuAberto()`). Guardado no navegador (mesmo padrão já usado
+    // para tema/refresh_token acima), não no servidor: é preferência de
+    // navegação de tela, não dado de negócio.
+    gruposMenuAbertos: (() => {
+      try {
+        return JSON.parse(localStorage.getItem("alphafitus_grupos_menu")) || {};
+      } catch (e) {
+        return {};
+      }
+    })(),
+  };
+
+  document.documentElement.setAttribute("data-tema", state.tema);
+
+  function escapeHtml(s) {
+    if (s === null || s === undefined) return "";
+    return String(s)
+      .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+  }
+
+  function fmtData(iso) {
+    if (!iso) return "—";
+    try {
+      const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
+      return d.toLocaleString("pt-BR");
+    } catch (e) {
+      return iso;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Cliente da API
+  // ---------------------------------------------------------------------
+  async function chamarApi(caminho, { method = "GET", body, semAuth = false } = {}) {
+    const headers = { "Content-Type": "application/json" };
+    if (!semAuth && state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
+
+    let resp = await fetch(API + caminho, {
+      method,
+      headers,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+
+    if (resp.status === 401 && !semAuth && state.refreshToken) {
+      const renovou = await tentarRenovarToken();
+      if (renovou) {
+        headers["Authorization"] = "Bearer " + state.accessToken;
+        resp = await fetch(API + caminho, {
+          method,
+          headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+        });
+      }
+    }
+
+    let dados = {};
+    try { dados = await resp.json(); } catch (e) { /* corpo vazio, ok */ }
+
+    if (!resp.ok) {
+      // Só limpa a sessão e força a volta pra tela de login quando o 401
+      // veio de uma chamada AUTENTICADA (token de acesso expirado/inválido,
+      // mesmo depois de tentar renovar acima) — nunca para uma chamada
+      // `semAuth` como `/auth/login` ou `/auth/2fa/verificar`, onde um 401
+      // significa simplesmente "email/senha (ou código) errados", não
+      // "sessão expirou". Bug real encontrado num teste automatizado:
+      // chamar `navegarPara("#/login")` aqui, na tela de login, competia
+      // (corrida de eventos) com o `definirFlash(...) + montarRota()` que
+      // o formulário de login já faz no catch dele — quando a página tinha
+      // acabado de carregar (hash ainda vazio, antes do primeiro
+      // `navegarPara`), o `location.hash = "#/login"` daqui disparava um
+      // `hashchange` assíncrono que re-renderizava a tela LOGO DEPOIS do
+      // catch já ter mostrado a mensagem de erro — sem a mensagem (que só
+      // existe naquele instante em `state.flash`), apagando o aviso e
+      // deixando a pessoa vendo a tela de login voltar em branco, sem
+      // nenhuma explicação do que deu errado.
+      if (resp.status === 401 && !semAuth) {
+        limparSessao();
+        navegarPara("#/login");
+      }
+      const erro = new Error(dados.mensagem || `Erro ${resp.status} na requisição.`);
+      erro.status = resp.status;
+      erro.codigo = dados.erro;
+      throw erro;
+    }
+    return dados;
+  }
+
+  // Fase 10 — download de arquivo binário (ex.: PDF do CoA). Diferente de
+  // chamarApi(), que sempre espera um corpo JSON: aqui buscamos o corpo
+  // como blob e disparamos o download via um <a> temporário com
+  // object URL. Não dá pra simplesmente usar <a href="/api/...">
+  // diretamente porque a rota exige o header Authorization (Bearer),
+  // que um link normal do navegador não envia.
+  async function baixarArquivo(caminho, nomeArquivoSugerido) {
+    const headers = {};
+    if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
+    const resp = await fetch(API + caminho, { headers });
+    if (!resp.ok) {
+      let dados = {};
+      try { dados = await resp.json(); } catch (e) { /* corpo vazio, ok */ }
+      const erro = new Error(dados.mensagem || `Erro ${resp.status} ao baixar o arquivo.`);
+      erro.status = resp.status;
+      throw erro;
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = nomeArquivoSugerido;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  async function tentarRenovarToken() {
+    try {
+      const resp = await fetch(API + "/auth/refresh", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: state.refreshToken }),
+      });
+      if (!resp.ok) return false;
+      const dados = await resp.json();
+      state.accessToken = dados.access_token;
+      state.refreshToken = dados.refresh_token;
+      localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function limparSessao() {
+    state.accessToken = null;
+    state.refreshToken = null;
+    state.usuarioAtual = null;
+    localStorage.removeItem("alphafitus_refresh_token");
+  }
+
+  // ---------------------------------------------------------------------
+  // Permissões (espelha a checagem do backend só para decidir o que
+  // MOSTRAR na tela — a garantia de segurança de verdade é sempre no
+  // servidor, que recusa a chamada mesmo que alguém force a navegação)
+  // ---------------------------------------------------------------------
+  function temPermissao(modulo, acao) {
+    if (!state.usuarioAtual) return false;
+    return state.usuarioAtual.permissoes.some((p) => p.modulo === modulo && p.acao === acao);
+  }
+
+  // ---------------------------------------------------------------------
+  // Fase 37 — polling da contagem de notificações não lidas, para o sino
+  // da barra superior. Deliberadamente não é uma re-renderização de tela
+  // inteira (que interromperia o que a pessoa estiver fazendo, ex.:
+  // digitando num formulário) — só atualiza o número/visibilidade do
+  // badge diretamente no DOM. `renderShell` já desenha o sino em toda
+  // navegação normal; isto aqui só mantém o número atualizado ENQUANTO a
+  // pessoa fica parada numa tela sem navegar.
+  // ---------------------------------------------------------------------
+  let timerNotificacoes = null;
+
+  function pararPollingNotificacoes() {
+    if (timerNotificacoes) {
+      clearInterval(timerNotificacoes);
+      timerNotificacoes = null;
+    }
+  }
+
+  function atualizarBadgeNotificacoesNoDom() {
+    const badge = document.querySelector("[data-badge-notificacoes]");
+    if (!badge) return;
+    if (state.notificacoesNaoLidas > 0) {
+      badge.hidden = false;
+      badge.textContent = state.notificacoesNaoLidas > 99 ? "99+" : String(state.notificacoesNaoLidas);
+    } else {
+      badge.hidden = true;
+    }
+  }
+
+  async function atualizarContagemNotificacoes() {
+    try {
+      const resp = await chamarApi("/notificacoes/nao-lidas/contagem");
+      state.notificacoesNaoLidas = resp.contagem;
+      atualizarBadgeNotificacoesNoDom();
+    } catch (e) {
+      // Silencioso — só uma próxima tentativa periódica corrige, não vale
+      // a pena interromper a pessoa por causa de um badge.
+    }
+  }
+
+  function iniciarPollingNotificacoes() {
+    if (timerNotificacoes) return; // já rodando, não duplica
+    atualizarContagemNotificacoes();
+    timerNotificacoes = setInterval(atualizarContagemNotificacoes, 30000);
+  }
+
+  // ---------------------------------------------------------------------
+  // Roteador (hash simples, sem dependências)
+  // ---------------------------------------------------------------------
+  function navegarPara(hash) {
+    if (location.hash === hash) montarRota();
+    else location.hash = hash;
+  }
+
+  window.addEventListener("hashchange", montarRota);
+
+  async function montarRota() {
+    // NÃO zera state.flash aqui: cada função renderX/renderLogin já limpa
+    // state.flash sozinha, DEPOIS de usá-la para montar o HTML (ver
+    // renderShell). Zerar aqui, no topo, apagaria a mensagem antes mesmo
+    // dela ser exibida sempre que o padrão for `definirFlash(...);
+    // montarRota();` (usado pelos handlers de erro de clique/submit) ou
+    // `definirFlash(...); navegarPara(...)` (usado ao criar um pedido de
+    // venda e navegar direto para a tela de detalhe) — nos dois casos
+    // montarRota roda de novo antes da mensagem ter sido renderizada uma
+    // única vez, e um reset prematuro aqui a descartava silenciosamente.
+    const rota = location.hash || "#/login";
+    // Fase 36 — a sincronização automática do App de Vendas só faz sentido
+    // enquanto a tela dele estiver aberta; qualquer navegação (inclusive
+    // para a própria tela de novo) para o timer anterior antes de decidir
+    // se cria um novo, para nunca deixar dois timers rodando ao mesmo tempo.
+    pararSincronizacaoAppVendas();
+
+    if (!state.refreshToken) {
+      if (rota !== "#/login") return navegarPara("#/login");
+      return renderLogin();
+    }
+
+    if (!state.usuarioAtual) {
+      // Tem refresh token salvo (de uma sessão anterior) mas ainda não
+      // carregou o usuário nesta aba: tenta restaurar a sessão.
+      app.innerHTML = '<div class="carregando">Restaurando sessão…</div>';
+      const ok = await tentarRenovarToken();
+      if (!ok) {
+        limparSessao();
+        return renderLogin();
+      }
+      try {
+        state.usuarioAtual = await chamarApi("/auth/me");
+      } catch (e) {
+        limparSessao();
+        return renderLogin();
+      }
+    }
+
+    if (rota === "#/login") return navegarPara("#/dashboard");
+
+    // Fase 37 — inicia (uma única vez por sessão logada) o polling da
+    // contagem de notificações não lidas, para o sino da barra superior
+    // ficar atualizado mesmo sem o usuário abrir a tela de Notificações.
+    // `iniciarPollingNotificacoes` já se protege contra criar dois timers.
+    iniciarPollingNotificacoes();
+
+    const [, pagina, param] = rota.split("/");
+    try {
+      // A chamada às funções renderX abaixo é sempre async (mesmo quando o
+      // "case" não usa await antes de chamá-la) — por isso todo o switch
+      // vai dentro de um `await (async () => {...})()`: sem isso, uma
+      // rejeição de Promise (ex.: 403 de permissão negada logo no
+      // carregamento da página) escaparia deste try/catch por ser
+      // assíncrona, e a tela ficaria travada em "Carregando…" para sempre
+      // em vez de mostrar a mensagem de erro abaixo.
+      await (async () => {
+        switch (pagina) {
+          case "dashboard": return renderDashboard();
+          case "usuarios": return renderUsuarios();
+          case "perfis": return renderPerfis();
+          case "permissoes": return renderPermissoes();
+          case "empresas": return renderEmpresas();
+          case "auditoria": return renderAuditoria();
+          case "notificacoes": return renderNotificacoes();
+          case "conta": return renderMinhaConta();
+          case "itens": return renderItens();
+          case "fornecedores": return renderFornecedores();
+          case "lotes": return param ? renderLoteDetalhe(Number(param)) : renderLotes();
+          case "desvios": return renderDesvios();
+          case "formulas": return renderFormulas();
+          case "producao": return param ? renderOrdemDetalhe(Number(param)) : renderOrdensProducao();
+          case "centros-trabalho": return renderCentrosTrabalho();
+          case "tipos-etapa-producao": return renderTiposEtapaProducao();
+          case "painel-tempo-real": return renderPainelTempoReal();
+          case "painel-executivo": return param ? renderLinhaDoTempoOrdemExecutivo(Number(param)) : renderPainelExecutivo();
+          case "aps-agenda": return renderApsAgenda();
+          case "aps-mrp": return renderApsMrp();
+          case "aps-sugestoes-compra": return renderApsSugestoesCompra();
+          case "compras-pedidos": return param ? renderPedidoCompraDetalhe(Number(param)) : renderPedidosCompra();
+          case "compras-cotacoes": return param ? renderCotacaoDetalhe(Number(param)) : renderCotacoes();
+          case "estoque": return renderEstoque();
+          case "comercial": return renderComercial();
+          case "pedido": return param ? renderPedidoDetalhe(Number(param)) : renderComercial();
+          case "app-vendas": return param === "portfolio" ? renderPortfolioVendas() : renderAppVendas();
+          case "minhas-comissoes": return renderMinhasComissoes();
+          case "financeiro": return renderFinanceiro();
+          case "fiscal": return param ? renderNotaFiscalDetalhe(Number(param)) : renderNotasFiscais();
+          case "fiscal-configuracao": return renderFiscalConfiguracao();
+          case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
+          case "conciliacao-bancaria": return param ? renderConciliacaoBancariaDetalhe(Number(param)) : renderConciliacaoBancaria();
+          case "painel-gerencial": return renderPainelGerencial();
+          case "rastreabilidade": return renderRastreabilidade();
+          case "custeio": return param ? renderCustoProdutoDetalhe(Number(param)) : renderCustoProdutos();
+          case "dre": return renderDre();
+          case "memorial": {
+            // Sub-rotas dentro de um único item de menu ("Memorial Técnico"):
+            // #/memorial/visao-geral (painel, tela de entrada — igual ao "/"
+            // do sistema original), #/memorial/empresas, #/memorial/produtos,
+            // #/memorial/memoriais e #/memorial/memoriais/<id>. Lido
+            // direto de `rota` (não do `param` já desestruturado acima,
+            // que representa só o 2º segmento e é usado por outras
+            // páginas como #/lotes/<id>) para não interferir em nenhuma
+            // outra rota existente.
+            const partes = rota.split("/");
+            const sub = partes[2];
+            const subId = partes[3];
+            if (sub === "empresas") return renderMemorialEmpresas();
+            if (sub === "produtos") return renderMemorialProdutos();
+            if (sub === "memoriais" && subId) return renderMemorialDetalhe(Number(subId));
+            if (sub === "memoriais") return renderMemoriais();
+            // Fase 26 — #/memorial/catalogo/<chave> (metodologias,
+            // nutrientes, legislacoes, etc.)
+            if (sub === "catalogo" && subId) return renderMemorialCatalogo(subId);
+            // Fase 48 — #/memorial/administracao/usuarios (mesma tela
+            // central de Usuários, só com a nav do Memorial ao redor).
+            if (sub === "administracao" && subId === "usuarios") return renderUsuarios(true);
+            // Fase 44 — #/memorial/administracao/usuarios-online.
+            if (sub === "administracao" && subId === "usuarios-online") return renderMemorialUsuariosOnline();
+            // Fase 46 — #/memorial/administracao/snapshots.
+            if (sub === "administracao" && subId === "snapshots") return renderMemorialSnapshots();
+            // Fase 47 — #/memorial/administracao/backups.
+            if (sub === "administracao" && subId === "backups") return renderMemorialBackups();
+            // Fase 49 — #/memorial/administracao/configuracao.
+            if (sub === "administracao" && subId === "configuracao") return renderMemorialConfiguracoes();
+            return renderMemorialDashboard();
+          }
+          default: return renderDashboard();
+        }
+      })();
+    } catch (e) {
+      renderShell(`<div class="cartao"><p class="mensagem-erro">Erro ao carregar página: ${escapeHtml(e.message)}</p></div>`, pagina);
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Layout (barra lateral + topo) — reaproveitado por toda página logada
+  // ---------------------------------------------------------------------
+  // Fase 51 — o menu que começou como uma lista solta de 3 itens na Fase 1
+  // chegou aqui com 28 (!), um por permissão, sem hierarquia nenhuma — cada
+  // fase nova só empilhava mais um `<a>` no fim. Em vez de continuar assim,
+  // os itens de módulo (não os soltos: Painel, Itens, Memorial Técnico,
+  // Minha Conta, Notificações — esses continuam sempre visíveis, sem
+  // pertencer a nenhum módulo específico) agora vêm agrupados dentro de um
+  // `{ tipo: "grupo", ... }`, renderizado como um `<details>/<summary>`
+  // nativo — o MESMO padrão que o Memorial Técnico já usa desde a Fase 26
+  // para "Catálogos" e depois para o grupo "Administração" (ver
+  // `.memorial-nav-grupo` em styles.css) — só reaplicado aqui na navegação
+  // central. Um item dentro de um grupo continua tendo sua PRÓPRIA
+  // permissão avaliada normalmente; o grupo inteiro só aparece se sobrar
+  // pelo menos um item visível depois do filtro (ver `renderShell` abaixo)
+  // — ninguém vê uma "gaveta vazia" no menu.
+  const ITENS_MENU = [
+    { rota: "#/dashboard", chave: "dashboard", label: "Painel" },
+    // Fase 75 — sem `permissao` de propósito: o próprio endpoint filtra o
+    // CONTEÚDO por seção (produção/comercial/compras) de acordo com as
+    // permissões que o usuário logado já tem (ver app/routes/
+    // painel_tempo_real.py) — mesmo um usuário sem nenhuma das três ainda
+    // pode abrir a tela (só vê "nenhuma seção disponível"), então esconder
+    // o ITEM DO MENU inteiro atrás de uma permissão fixa não faria sentido.
+    { rota: "#/painel-tempo-real", chave: "painel-tempo-real", label: "Painel Tempo Real (Chão de Fábrica)" },
+    // Fase 76 — mesmo raciocínio acima: o Painel Executivo filtra suas
+    // próprias seções (comercial/produção) pelas permissões que o usuário
+    // já tem (ver app/routes/painel_executivo.py), então também fica sem
+    // `permissao` fixa aqui no item de menu.
+    { rota: "#/painel-executivo", chave: "painel-executivo", label: "Painel Executivo (BI em Tempo Real)" },
+    { rota: "#/itens", chave: "itens", label: "Itens", permissao: ["itens", "visualizar"] },
+    {
+      tipo: "grupo", chave: "grupo-qualidade", nome: "Qualidade",
+      itens: [
+        { rota: "#/fornecedores", chave: "fornecedores", label: "Fornecedores", permissao: ["fornecedores", "visualizar"] },
+        { rota: "#/lotes", chave: "lotes", label: "Lotes / Qualidade", permissao: ["lotes", "visualizar"] },
+        { rota: "#/desvios", chave: "desvios", label: "Desvios", permissao: ["desvios", "visualizar"] },
+      ],
+    },
+    {
+      tipo: "grupo", chave: "grupo-producao", nome: "Produção & PCP",
+      itens: [
+        { rota: "#/formulas", chave: "formulas", label: "Fórmulas (BOM)", permissao: ["formulas", "visualizar"] },
+        { rota: "#/producao", chave: "producao", label: "Ordens de Produção", permissao: ["producao", "visualizar"] },
+        { rota: "#/centros-trabalho", chave: "centros-trabalho", label: "Centros de Trabalho (APS)", permissao: ["centros_trabalho", "visualizar"] },
+        { rota: "#/tipos-etapa-producao", chave: "tipos-etapa-producao", label: "Tipos de Etapa (Pesagem, Mistura...)", permissao: ["producao", "visualizar"] },
+        { rota: "#/aps-agenda", chave: "aps-agenda", label: "Agenda (APS)", permissao: ["producao", "visualizar"] },
+        { rota: "#/aps-mrp", chave: "aps-mrp", label: "MRP (Necessidade de Materiais)", permissao: ["producao", "visualizar"] },
+        { rota: "#/aps-sugestoes-compra", chave: "aps-sugestoes-compra", label: "Sugestões de Compra (MRP)", permissao: ["producao", "visualizar"] },
+        { rota: "#/compras-pedidos", chave: "compras-pedidos", label: "Pedidos de Compra", permissao: ["compras", "visualizar"] },
+        { rota: "#/compras-cotacoes", chave: "compras-cotacoes", label: "Cotações de Fornecedores (RFQ)", permissao: ["compras", "visualizar"] },
+      ],
+    },
+    {
+      tipo: "grupo", chave: "grupo-estoque", nome: "Estoque",
+      itens: [
+        { rota: "#/estoque", chave: "estoque", label: "Estoque (WMS)", permissao: ["estoque", "visualizar"] },
+      ],
+    },
+    {
+      tipo: "grupo", chave: "grupo-comercial", nome: "Comercial & Vendas",
+      itens: [
+        { rota: "#/comercial", chave: "comercial", label: "Comercial (CRM)", permissao: ["comercial", "visualizar"] },
+        { rota: "#/app-vendas", chave: "app-vendas", label: "App de Vendas", permissao: ["vendas_app", "usar"] },
+        { rota: "#/app-vendas/portfolio", chave: "app-vendas-portfolio", label: "Portfólio", permissao: ["vendas_app", "usar"] },
+        { rota: "#/minhas-comissoes", chave: "minhas-comissoes", label: "Minhas Comissões", permissao: ["vendas_app", "usar"] },
+        // Fase 70 — Fiscal (NF-e).
+        { rota: "#/fiscal", chave: "fiscal", label: "Notas Fiscais (NF-e)", permissao: ["fiscal", "visualizar"] },
+        { rota: "#/fiscal-configuracao", chave: "fiscal-configuracao", label: "Configuração NF-e", permissao: ["fiscal", "configurar"] },
+      ],
+    },
+    {
+      tipo: "grupo", chave: "grupo-financeiro", nome: "Financeiro",
+      itens: [
+        { rota: "#/financeiro", chave: "financeiro", label: "Financeiro", permissao: ["financeiro", "visualizar"] },
+        { rota: "#/conciliacao-bancaria", chave: "conciliacao-bancaria", label: "Conciliação Bancária", permissao: ["financeiro", "conciliar_extrato"] },
+        { rota: "#/dre", chave: "dre", label: "DRE Simplificado", permissao: ["custeio", "visualizar"] },
+        // Fase 71 — Boleto Bancário.
+        { rota: "#/financeiro-configuracao-boleto", chave: "financeiro-configuracao-boleto", label: "Configuração de Boleto", permissao: ["financeiro", "configurar_boleto"] },
+      ],
+    },
+    {
+      tipo: "grupo", chave: "grupo-relatorios", nome: "Relatórios & Custos",
+      itens: [
+        { rota: "#/painel-gerencial", chave: "painel-gerencial", label: "Painel Gerencial (BI)", permissao: ["relatorios", "visualizar"] },
+        { rota: "#/rastreabilidade", chave: "rastreabilidade", label: "Rastreabilidade (Recall)", permissao: ["rastreabilidade", "visualizar"] },
+        { rota: "#/custeio", chave: "custeio", label: "Custo do Produto", permissao: ["custeio", "visualizar"] },
+      ],
+    },
+    { rota: "#/memorial/visao-geral", chave: "memorial", label: "Memorial Técnico", permissao: ["memoriais", "visualizar"] },
+    {
+      tipo: "grupo", chave: "grupo-administracao", nome: "Administração",
+      itens: [
+        { rota: "#/usuarios", chave: "usuarios", label: "Usuários", permissao: ["usuarios", "visualizar"] },
+        { rota: "#/perfis", chave: "perfis", label: "Perfis", permissao: ["perfis", "visualizar"] },
+        { rota: "#/permissoes", chave: "permissoes", label: "Permissões", permissao: ["permissoes", "visualizar"] },
+        { rota: "#/empresas", chave: "empresas", label: "Empresas", permissao: ["empresas", "visualizar"] },
+        { rota: "#/auditoria", chave: "auditoria", label: "Auditoria", permissao: ["auditoria", "visualizar"] },
+      ],
+    },
+    { rota: "#/conta", chave: "conta", label: "Minha Conta" },
+    { rota: "#/notificacoes", chave: "notificacoes", label: "Notificações" },
+  ];
+
+  // Fase 51 — decide se um GRUPO do menu deve renderizar aberto: a página
+  // atual estar dentro dele SEMPRE força aberto (nunca esconde o grupo em
+  // que o usuário está navegando agora, mesmo que ele tenha fechado esse
+  // grupo manualmente numa visita anterior); fora disso, respeita a última
+  // escolha manual do usuário guardada em `state.gruposMenuAbertos`; um
+  // grupo que o usuário nunca tocou fica fechado por padrão (só abre
+  // sozinho quando é o grupo da página atual).
+  function grupoMenuAberto(grupo, itensVisiveis, paginaAtiva) {
+    if (itensVisiveis.some((it) => it.chave === paginaAtiva)) return true;
+    return state.gruposMenuAbertos[grupo.chave] === true;
+  }
+
+  function renderShell(conteudoHtml, paginaAtiva) {
+    const linksHtml = ITENS_MENU.map((it) => {
+      if (it.tipo === "grupo") {
+        const itensVisiveis = it.itens.filter((sub) => !sub.permissao || temPermissao(sub.permissao[0], sub.permissao[1]));
+        if (!itensVisiveis.length) return "";
+        const aberto = grupoMenuAberto(it, itensVisiveis, paginaAtiva);
+        const subitensHtml = itensVisiveis
+          .map((sub) => `<a class="link-nav barra-lateral-subitem ${sub.chave === paginaAtiva ? "ativo" : ""}" href="${sub.rota}">${sub.label}</a>`)
+          .join("");
+        return `<details class="barra-lateral-grupo" data-grupo="${it.chave}" ${aberto ? "open" : ""}>
+          <summary>${escapeHtml(it.nome)}</summary>
+          <div class="barra-lateral-subitens">${subitensHtml}</div>
+        </details>`;
+      }
+      if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return "";
+      return `<a class="link-nav ${it.chave === paginaAtiva ? "ativo" : ""}" href="${it.rota}">${it.label}</a>`;
+    }).join("");
+
+    const flashHtml = state.flash
+      ? `<p class="${state.flash.tipo === "erro" ? "mensagem-erro" : "mensagem-ok"}">${escapeHtml(state.flash.texto)}</p>`
+      : "";
+
+    app.innerHTML = `
+      <div class="layout">
+        <div class="fundo-menu-mobile" data-acao="alternar-menu-mobile"></div>
+        <aside class="barra-lateral">
+          <div class="marca">ALPHAFITUS OS<small>Fase 1 a 71 — Fundação + Qualidade + Produção + Estoque + Comercial + Financeiro + Painel Gerencial + Rastreabilidade + Perdas/Refugo + CoA em PDF + Relatório de Recall em PDF + Reserva Real de Material entre Módulos + Custeio de Produção + Estorno de Baixa + Fluxo de Caixa Projetado + Bloqueio em Massa por Recall + Contagem de Inventário + Painel Gerencial em PDF + Painel Gerencial em CSV + DRE Simplificado + Aprovação de Ajuste de Contagem + Aprovação Dupla de Estorno de Baixa + Código Automático de Item + Memorial Técnico ANVISA + APS (Sequenciamento e Capacidade Finita) + Catálogos do Memorial Técnico + Anexos e Padronização de Rótulo + Agenda Visual (APS) + Catálogos como Seletores no Memorial + Custo de Mão de Obra e Overhead na Produção + Aprovação Dupla de Registro de Baixa + Limiar de Divergência Configurável + Limite de Prazo para Estorno + Alçada por Valor do Ajuste de Contagem + Agendamento de Contagens Cíclicas + App de Vendas (Reserva Temporária, Verbas e Comissão) + Notificações do Sistema com Envio Real por E-mail + Responsividade e App Instalável para Celular/Tablet + MRP (Necessidade de Materiais) + Conciliação Bancária (Importação de Extrato OFX) + DRE Completo (Despesas Operacionais e Impostos sobre Vendas) + Painel Gerencial com Filtro por Período + Memorial Técnico — PDF Completo (Memorial + Anexos) + Memorial Técnico — Administração: Usuários Online + Painel Gerencial — Exportar em XLSX + Memorial Técnico — Administração: Snapshots & Restauração + Memorial Técnico — Administração: Backups do Sistema + Memorial Técnico — Administração: Gerenciar Usuários + Memorial Técnico — Administração: Configurações + Perda/Refugo por ETAPA do Processo + Menu Lateral Agrupado por Módulo + Painel Gerencial — Filtro por Empresa + Recall — Decisão sobre Pedidos Já Expedidos + MRP — Sugestão Automática de Compra + Conciliação Bancária em Lote + Janela de Dias Configurável + DRE — Impostos Detalhados (PIS/COFINS/ICMS/ISS) + MRP — Lead Time de Compra do Fornecedor + Pedido de Compra Formal + Conta a Pagar Gerada a partir do Pedido de Compra + Pedido de Compra — Alerta de Atraso (Lead Time do Fornecedor) + Pedido de Compra — Alçada por Valor no Envio + Desempenho de Fornecedor (Scorecard) + Limite de Crédito do Cliente (Alçada na Confirmação do Pedido) + Desempenho de Cliente (Scorecard) + Bloqueio de Lote Vencido na Alocação FEFO + Cotação Comparativa de Fornecedores (RFQ) + Backup Automático Agendado (Nuvem + E-mail) e Restauração + Instalação Real (Servidor/Terminal) e Serviço do Windows + Painel Gerencial — Série Histórica/Tendência + Fiscal — Emissão de NF-e (Focus NFe) + Financeiro — Emissão de Boleto Bancário (Asaas)</small></div>
+          <nav>${linksHtml}</nav>
+        </aside>
+        <div class="conteudo-principal">
+          <div class="barra-superior">
+            <button class="botao-icone botao-menu-mobile" data-acao="alternar-menu-mobile" title="Abrir menu">☰</button>
+            <span class="espacador-barra-superior"></span>
+            <button class="botao-icone botao-icone-com-badge" data-acao="ir-notificacoes" title="Notificações">🔔<span class="badge-notificacoes" data-badge-notificacoes ${state.notificacoesNaoLidas > 0 ? "" : "hidden"}>${state.notificacoesNaoLidas > 99 ? "99+" : state.notificacoesNaoLidas}</span></button>
+            <button class="botao-icone" data-acao="alternar-tema" title="Alternar tema claro/escuro">🌓</button>
+            <span class="texto-suave nome-usuario-barra">${escapeHtml(state.usuarioAtual ? state.usuarioAtual.nome : "")}</span>
+            <button class="botao secundario pequeno" data-acao="logout">Sair</button>
+          </div>
+          <div class="pagina">${flashHtml}${conteudoHtml}</div>
+        </div>
+      </div>`;
+    state.flash = null;
+    envolverTabelasComRolagem(app);
+
+    // Fase 51 — o evento nativo "toggle" do <details> dispara quando o
+    // ESTADO muda (clique no <summary>, ou `.open` setado via JS), não só
+    // por já vir com o atributo `open` no HTML inicial acima — por isso é
+    // seguro escutar aqui sem disparar um "toggle" falso a cada re-render.
+    // Não usa delegação de evento (`addEventListener` num ancestral): o
+    // "toggle" não borbulha (bubbles: false) pela especificação do HTML,
+    // então cada `<details>` precisa do próprio listener.
+    app.querySelectorAll(".barra-lateral-grupo").forEach((el) => {
+      el.addEventListener("toggle", () => {
+        state.gruposMenuAbertos[el.dataset.grupo] = el.open;
+        localStorage.setItem("alphafitus_grupos_menu", JSON.stringify(state.gruposMenuAbertos));
+      });
+    });
+  }
+
+  function definirFlash(tipo, texto) {
+    state.flash = { tipo, texto };
+  }
+
+  // ---------------------------------------------------------------------
+  // Delegação de eventos global (um único listener cobre toda a SPA)
+  // ---------------------------------------------------------------------
+  // Anexados em `document` (não em `app`) porque os modais são inseridos
+  // como filhos diretos de <body> (ver abrirModal) — se o listener ficasse
+  // em `app`, cliques/submits dentro de um modal nunca seriam capturados.
+  document.addEventListener("click", async (e) => {
+    const alvo = e.target.closest("[data-acao]");
+    if (!alvo) return;
+    const acao = alvo.dataset.acao;
+    try {
+      await tratarAcao(acao, alvo, e);
+    } catch (erro) {
+      definirFlash("erro", erro.message || "Ocorreu um erro.");
+      montarRota();
+    }
+  });
+
+  document.addEventListener("submit", async (e) => {
+    const form = e.target.closest("form[data-form]");
+    if (!form) return;
+    e.preventDefault();
+    try {
+      await tratarFormulario(form.dataset.form, form, e);
+    } catch (erro) {
+      definirFlash("erro", erro.message || "Ocorreu um erro.");
+      montarRota();
+    }
+  });
+
+  // Fase 38 — em vez de exigir que cada uma das dezenas de telas que já
+  // desenham uma `<table>` se preocupe em envolvê-la manualmente num
+  // container com rolagem própria (necessário em telas estreitas, ver
+  // `.tabela-scroll` em styles.css), esta função varre o HTML recém-
+  // inserido no DOM e envolve toda tabela encontrada — roda tanto depois
+  // de `renderShell` (telas normais) quanto depois de `abrirModal`
+  // (algumas telas mostram tabela dentro de modal, ex.: "Ver baixas" no
+  // Financeiro). Idempotente: se a tabela já estiver envolvida, não faz
+  // nada de novo.
+  function envolverTabelasComRolagem(raiz) {
+    raiz.querySelectorAll("table").forEach((tabela) => {
+      if (tabela.parentElement && tabela.parentElement.classList.contains("tabela-scroll")) return;
+      const envolucro = document.createElement("div");
+      envolucro.className = "tabela-scroll";
+      tabela.parentElement.insertBefore(envolucro, tabela);
+      envolucro.appendChild(tabela);
+    });
+  }
+
+  function abrirModal(html, opcoes) {
+    opcoes = opcoes || {};
+    const wrap = document.createElement("div");
+    wrap.className = "fundo-modal";
+    wrap.innerHTML = `<div class="modal${opcoes.largo ? " modal-largo" : ""}">${html}</div>`;
+    wrap.addEventListener("click", (e) => {
+      if (e.target === wrap) wrap.remove();
+    });
+    document.body.appendChild(wrap);
+    envolverTabelasComRolagem(wrap);
+    return wrap;
+  }
+
+  function fecharModais() {
+    document.querySelectorAll(".fundo-modal").forEach((m) => m.remove());
+  }
+
+  // =======================================================================
+  // LOGIN
+  // =======================================================================
+  let ticket2fa = null;
+  // Guarda email/senha só durante o intervalo entre "login exige 2FA" e "2FA
+  // confirmado", para poder oferecer salvar a senha no navegador só depois
+  // que o login como um todo (incluindo o segundo fator) realmente deu
+  // certo — nunca é enviado para o backend nem persistido em lugar nenhum,
+  // só fica em memória, e é apagado assim que o login termina (com ou sem
+  // 2FA) ou se a pessoa recarregar a página.
+  let credenciaisPendentes2fa = null;
+
+  // Pede para o navegador oferecer salvar o login/senha (o popup nativo
+  // "Salvar senha?" do Chrome/Edge), usando a Credential Management API —
+  // a tela de login é uma SPA (o `fetch` do login não é uma submissão de
+  // formulário de verdade, e o DOM do formulário é substituído pelo
+  // dashboard logo em seguida), então o navegador não teria como detectar
+  // sozinho que um login deu certo; isso pede explicitamente. Só existe no
+  // Chrome/Edge (Firefox e Safari não implementam `store()`) — por isso o
+  // `typeof` antes de usar, e nunca deixa um erro aqui atrapalhar o login
+  // em si (a pessoa já está logada de qualquer forma, salvar a senha é só
+  // uma conveniência a mais).
+  async function ofertarSalvarSenha(email, senha) {
+    if (typeof PasswordCredential === "undefined" || !navigator.credentials || !navigator.credentials.store) {
+      return;
+    }
+    try {
+      const credencial = new PasswordCredential({ id: email, password: senha, name: email });
+      await navigator.credentials.store(credencial);
+    } catch (erro) {
+      // Silencioso de propósito — ex.: aba não é HTTPS/localhost, ou a
+      // pessoa recusou no passado e o navegador não pergunta de novo.
+    }
+  }
+
+  // Grava ou apaga o email lembrado em localStorage, de acordo com a
+  // caixinha "Lembrar meu email" da tela de login. Nunca guarda a senha
+  // aqui — só o email (que não é segredo, ao contrário da senha).
+  function aplicarLembrarEmail(email, lembrar) {
+    try {
+      if (lembrar) localStorage.setItem(CHAVE_EMAIL_LEMBRADO, email);
+      else localStorage.removeItem(CHAVE_EMAIL_LEMBRADO);
+    } catch (erro) {
+      // localStorage indisponível (raro) — não impede o login.
+    }
+  }
+
+  // Fase 74 — "Lembrar meu email": guarda só o EMAIL (nunca a senha) em
+  // localStorage, e pré-preenche a tela de login com ele da próxima vez.
+  // A senha continua responsabilidade do navegador (ver
+  // `ofertarSalvarSenha`, acima) — é o gerenciador de senha nativo do
+  // Chrome/Edge que guarda e preenche a senha com segurança de verdade;
+  // este app nunca guarda senha em texto puro em lugar nenhum.
+  const CHAVE_EMAIL_LEMBRADO = "alphafitus_email_lembrado";
+
+  function renderLogin() {
+    const emailLembrado = localStorage.getItem(CHAVE_EMAIL_LEMBRADO) || "";
+    app.innerHTML = `
+      <div class="tela-login">
+        <div class="cartao-login">
+          <img class="logo-marca" src="/static/img/logo_alphafitus.png" alt="Alphafitus">
+          <h1>Alphafitus OS</h1>
+          <p class="subtitulo">Sistema Integrado de Gestão</p>
+          ${state.flash ? `<p class="mensagem-erro">${escapeHtml(state.flash.texto)}</p>` : ""}
+          <form data-form="login">
+            <div class="campo">
+              <label for="login-email">Email</label>
+              <input id="login-email" name="email" type="email" autocomplete="username" required
+                     ${emailLembrado ? "" : "autofocus"} value="${escapeHtml(emailLembrado)}">
+            </div>
+            <div class="campo">
+              <label for="login-senha">Senha</label>
+              <div class="campo-senha">
+                <input id="login-senha" name="senha" type="password" autocomplete="current-password" required
+                       ${emailLembrado ? "autofocus" : ""}>
+                <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha"
+                        data-alvo="login-senha" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+              </div>
+            </div>
+            <label class="campo-lembrar">
+              <input type="checkbox" id="login-lembrar" name="lembrar" ${emailLembrado ? "checked" : ""}>
+              Lembrar meu email
+            </label>
+            <button class="botao largura-total" type="submit">Entrar</button>
+          </form>
+        </div>
+      </div>`;
+    state.flash = null;
+  }
+
+  function renderLogin2fa() {
+    app.innerHTML = `
+      <div class="tela-login">
+        <div class="cartao-login">
+          <img class="logo-marca" src="/static/img/logo_alphafitus.png" alt="Alphafitus">
+          <h1>Verificação em duas etapas</h1>
+          <p class="subtitulo">Digite o código de 6 dígitos do seu aplicativo autenticador.</p>
+          ${state.flash ? `<p class="mensagem-erro">${escapeHtml(state.flash.texto)}</p>` : ""}
+          <form data-form="login-2fa">
+            <div class="campo">
+              <label for="codigo-2fa">Código</label>
+              <input id="codigo-2fa" name="codigo" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autofocus>
+            </div>
+            <button class="botao largura-total" type="submit">Confirmar</button>
+          </form>
+        </div>
+      </div>`;
+    state.flash = null;
+  }
+
+  // =======================================================================
+  // DASHBOARD
+  // =======================================================================
+  function renderDashboard() {
+    const totalPermissoes = state.usuarioAtual.permissoes.length;
+    renderShell(
+      `<h2>Painel</h2>
+       <div class="cartao">
+         <p>Bem-vindo(a), <strong>${escapeHtml(state.usuarioAtual.nome)}</strong>.</p>
+         <p class="texto-suave">Perfis: ${state.usuarioAtual.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "nenhum"}</p>
+         <p class="texto-suave">${totalPermissoes} permissões concedidas ao seu usuário.</p>
+       </div>
+       <div class="cartao">
+         <p class="texto-suave">Esta é a Fase 1 (Fundação) do Alphafitus OS: usuários, perfis, permissões
+         granulares, autenticação com dois fatores e trilha de auditoria imutável. As próximas fases vão
+         adicionar qualidade/laboratório, produção, estoque, comercial e financeiro sobre esta base.</p>
+       </div>`,
+      "dashboard"
+    );
+  }
+
+  // =======================================================================
+  // USUÁRIOS
+  // =======================================================================
+  // Fase 48 — "Gerenciar Usuários" dentro de Memorial Técnico →
+  // Administração é, de propósito, a MESMA função de sempre — não uma
+  // segunda tela/tabela de usuários. Duplicar o CRUD inteiro criaria dois
+  // lugares diferentes editando o mesmo dado (exatamente o problema que a
+  // Fase 24 já tinha citado como motivo para NÃO replicar essa parte da
+  // Administração do sistema original) — em vez disso, `renderUsuarios`
+  // aceita um parâmetro (`dentroDoMemorial`) que só troca a MOLDURA
+  // (nav do Memorial + `.memorial-shell` em vez da barra lateral central),
+  // reaproveitando 100% da consulta à API, dos modais e das permissões.
+  // Chamada sem argumento (rota `#/usuarios`), continua idêntica a antes.
+  function estaNaTelaMemorialDeUsuarios() {
+    return location.hash === "#/memorial/administracao/usuarios";
+  }
+
+  async function renderUsuarios(dentroDoMemorial) {
+    app.innerHTML = '<div class="carregando">Carregando usuários…</div>';
+    const [usuarios, perfis] = await Promise.all([chamarApi("/usuarios"), chamarApi("/perfis")]);
+    state.cache.perfis = perfis;
+
+    const podeCadastrar = temPermissao("usuarios", "cadastrar");
+    const podeEditar = temPermissao("usuarios", "editar");
+    const podeInativar = temPermissao("usuarios", "inativar");
+
+    const linhas = usuarios
+      .map((u) => {
+        const selo = u.status === "ativo" ? "ativo" : u.status === "bloqueado" ? "bloqueado" : "inativo";
+        return `<tr>
+          <td>${escapeHtml(u.nome)}</td>
+          <td>${escapeHtml(u.email)}</td>
+          <td>${u.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "—"}</td>
+          <td><span class="selo ${selo}">${escapeHtml(u.status)}</span></td>
+          <td>${u.dois_fatores_ativo ? "Sim" : "Não"}</td>
+          <td>${fmtData(u.ultimo_login_em)}</td>
+          <td>
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-usuario" data-id="${u.id}">Editar</button>` : ""}
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="perfis-usuario" data-id="${u.id}">Perfis</button>` : ""}
+            ${podeInativar && u.status === "ativo" ? `<button class="botao perigo pequeno" data-acao="inativar-usuario" data-id="${u.id}">Inativar</button>` : ""}
+            ${podeInativar && u.status !== "ativo" ? `<button class="botao pequeno" data-acao="reativar-usuario" data-id="${u.id}">Reativar</button>` : ""}
+          </td>
+        </tr>`;
+      })
+      .join("");
+
+    const conteudo = `<h2>Usuários</h2>
+       ${dentroDoMemorial ? `<p class="dica">É o mesmo cadastro de usuários do sistema (Alphafitus OS → Usuários) — acessível também por aqui, dentro da Administração do Memorial Técnico, como no sistema original. Criar, editar ou inativar um usuário aqui tem exatamente o mesmo efeito que fazer isso pelo menu central.</p>` : ""}
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${usuarios.length} usuário(s)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-usuario">+ Novo usuário</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>Email</th><th>Perfis</th><th>Status</th><th>2FA</th><th>Último login</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum usuário cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>`;
+
+    if (dentroDoMemorial) {
+      renderShell(
+        `<div class="memorial-shell">
+           ${navMemorial("administracao:usuarios")}
+           <div class="memorial-content">${conteudo}</div>
+         </div>`,
+        "memorial"
+      );
+    } else {
+      renderShell(conteudo, "usuarios");
+    }
+  }
+
+  function modalNovoUsuario() {
+    const perfis = state.cache.perfis || [];
+    const opcoes = perfis
+      .map((p) => `<label><input type="checkbox" name="perfil_ids" value="${p.id}"> ${escapeHtml(p.nome)}</label>`)
+      .join("");
+    abrirModal(`
+      <h3>Novo usuário</h3>
+      <form data-form="criar-usuario">
+        <div class="campo"><label>Nome</label><input name="nome" required></div>
+        <div class="campo"><label>Email</label><input name="email" type="email" required></div>
+        <div class="campo"><label>Senha temporária</label><input name="senha" type="password" required minlength="12">
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Mínimo 12 caracteres, com maiúscula, minúscula, número e símbolo. O usuário será obrigado a trocá-la no primeiro login.</div>
+        </div>
+        <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoes || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarUsuario(usuario) {
+    abrirModal(`
+      <h3>Editar usuário</h3>
+      <form data-form="editar-usuario" data-id="${usuario.id}">
+        <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(usuario.nome)}" required></div>
+        <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(usuario.email)}" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalPerfisUsuario(usuario) {
+    const perfis = state.cache.perfis || [];
+    const atuais = new Set(usuario.perfis.map((p) => p.id));
+    const opcoes = perfis
+      .map(
+        (p) =>
+          `<label><input type="checkbox" name="perfil_ids" value="${p.id}" ${atuais.has(p.id) ? "checked" : ""}> ${escapeHtml(p.nome)}</label>`
+      )
+      .join("");
+    abrirModal(`
+      <h3>Perfis de ${escapeHtml(usuario.nome)}</h3>
+      <form data-form="definir-perfis-usuario" data-id="${usuario.id}">
+        <div class="grade-checkbox">${opcoes}</div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // PERFIS
+  // =======================================================================
+  async function renderPerfis() {
+    app.innerHTML = '<div class="carregando">Carregando perfis…</div>';
+    const [perfis, permissoes] = await Promise.all([chamarApi("/perfis"), chamarApi("/permissoes")]);
+    state.cache.permissoes = permissoes;
+
+    const podeCadastrar = temPermissao("perfis", "cadastrar");
+    const podeEditar = temPermissao("perfis", "editar");
+    const podeExcluir = temPermissao("perfis", "excluir");
+
+    const linhas = perfis
+      .map(
+        (p) => `<tr>
+          <td>${escapeHtml(p.nome)} ${!p.editavel ? '<span class="selo bloqueado">sistema</span>' : ""}</td>
+          <td class="texto-suave">${escapeHtml(p.descricao || "—")}</td>
+          <td>${p.permissoes.length}</td>
+          <td>
+            ${podeEditar && p.editavel ? `<button class="botao secundario pequeno" data-acao="editar-permissoes-perfil" data-id="${p.id}">Permissões</button>` : ""}
+            ${podeExcluir && p.editavel ? `<button class="botao perigo pequeno" data-acao="excluir-perfil" data-id="${p.id}">Excluir</button>` : ""}
+          </td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Perfis</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${perfis.length} perfil(is)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-perfil">+ Novo perfil</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>Descrição</th><th>Permissões</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="4" class="texto-suave">Nenhum perfil cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "perfis"
+    );
+  }
+
+  function gradePermissoesHtml(permissoes, selecionadas) {
+    const porModulo = {};
+    permissoes.forEach((p) => {
+      porModulo[p.modulo] = porModulo[p.modulo] || [];
+      porModulo[p.modulo].push(p);
+    });
+    return Object.keys(porModulo)
+      .sort()
+      .map((modulo) => {
+        const itens = porModulo[modulo]
+          .map(
+            (p) =>
+              `<label><input type="checkbox" name="permissao_ids" value="${p.id}" ${selecionadas.has(p.id) ? "checked" : ""}> ${escapeHtml(p.acao)}</label>`
+          )
+          .join("");
+        return `<div class="chip-modulo">${escapeHtml(modulo)}</div><div class="grade-checkbox">${itens}</div>`;
+      })
+      .join("");
+  }
+
+  function modalNovoPerfil() {
+    const permissoes = state.cache.permissoes || [];
+    abrirModal(`
+      <h3>Novo perfil</h3>
+      <form data-form="criar-perfil">
+        <div class="campo"><label>Nome</label><input name="nome" required></div>
+        <div class="campo"><label>Descrição</label><input name="descricao"></div>
+        <div class="campo"><label>Permissões</label>${gradePermissoesHtml(permissoes, new Set())}</div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalPermissoesPerfil(perfil) {
+    const permissoes = state.cache.permissoes || [];
+    const selecionadas = new Set(perfil.permissoes.map((p) => p.id));
+    abrirModal(`
+      <h3>Permissões de ${escapeHtml(perfil.nome)}</h3>
+      <form data-form="definir-permissoes-perfil" data-id="${perfil.id}">
+        ${gradePermissoesHtml(permissoes, selecionadas)}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // CATÁLOGO DE PERMISSÕES (somente leitura)
+  // =======================================================================
+  async function renderPermissoes() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const permissoes = await chamarApi("/permissoes");
+    const linhas = permissoes
+      .map(
+        (p) => `<tr>
+          <td>${escapeHtml(p.modulo)}</td>
+          <td>${escapeHtml(p.acao)}</td>
+          <td class="texto-suave">${escapeHtml(p.descricao || "—")}</td>
+          <td>${p.exige_dupla_aprovacao ? "Sim" : "Não"}</td>
+        </tr>`
+      )
+      .join("");
+    renderShell(
+      `<h2>Catálogo de Permissões</h2>
+       <div class="cartao">
+         <p class="texto-suave">Este é o catálogo completo de ações controláveis do sistema. Permissões
+         são atribuídas a perfis na tela "Perfis" — nunca concedidas diretamente a uma tela inteira.</p>
+         <table>
+           <thead><tr><th>Módulo</th><th>Ação</th><th>Descrição</th><th>Exige dupla aprovação</th></tr></thead>
+           <tbody>${linhas}</tbody>
+         </table>
+       </div>`,
+      "permissoes"
+    );
+  }
+
+  // =======================================================================
+  // EMPRESAS
+  // =======================================================================
+  async function renderEmpresas() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const empresas = await chamarApi("/empresas");
+    const podeCadastrar = temPermissao("empresas", "cadastrar");
+    const podeEditar = temPermissao("empresas", "editar");
+
+    const linhas = await Promise.all(
+      empresas.map(async (emp) => {
+        const unidades = await chamarApi(`/empresas/${emp.id}/unidades`);
+        const listaUnidades = unidades.map((u) => `${escapeHtml(u.nome)} (${escapeHtml(u.tipo)})`).join(", ") || "—";
+        // Fase 70 — "completo"/"incompleto" avisa de longe se esta empresa
+        // já pode ser usada como emitente de NF-e, sem precisar abrir o
+        // modal para descobrir (mesmos campos exigidos em
+        // app/nfe_service.py::CAMPOS_FISCAIS_EMPRESA).
+        const dadosFiscaisCompletos = emp.inscricao_estadual && emp.logradouro && emp.municipio && emp.uf && emp.cep && emp.codigo_ibge_municipio;
+        return `<tr>
+          <td>${escapeHtml(emp.razao_social)}</td>
+          <td>${escapeHtml(emp.cnpj)}</td>
+          <td class="texto-suave">${listaUnidades}</td>
+          <td>${dadosFiscaisCompletos ? '<span class="selo ativo">completos</span>' : '<span class="selo bloqueado">incompletos</span>'}</td>
+          <td style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-dados-fiscais-empresa" data-id="${emp.id}">Dados fiscais</button>` : ""}
+            ${podeCadastrar ? `<button class="botao secundario pequeno" data-acao="nova-unidade" data-id="${emp.id}">+ Unidade</button>` : ""}
+          </td>
+        </tr>`;
+      })
+    );
+
+    renderShell(
+      `<h2>Empresas</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${empresas.length} empresa(s)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="nova-empresa">+ Nova empresa</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Razão social</th><th>CNPJ</th><th>Unidades/depósitos/laboratórios</th><th>Dados fiscais (NF-e)</th><th>Ações</th></tr></thead>
+           <tbody>${linhas.join("") || '<tr><td colspan="5" class="texto-suave">Nenhuma empresa cadastrada ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "empresas"
+    );
+  }
+
+  // Fase 70 — Regimes tributários suportados (ver CHECK em schema_fase70.sql).
+  const REGIMES_TRIBUTARIOS = [
+    { valor: "simples_nacional", rotulo: "Simples Nacional" },
+    { valor: "lucro_presumido", rotulo: "Lucro Presumido" },
+    { valor: "lucro_real", rotulo: "Lucro Real" },
+  ];
+
+  function modalDadosFiscaisEmpresa(empresa) {
+    const opcoesRegime = REGIMES_TRIBUTARIOS
+      .map((r) => `<option value="${r.valor}" ${empresa.regime_tributario === r.valor ? "selected" : ""}>${r.rotulo}</option>`)
+      .join("");
+    abrirModal(`
+      <h3>Dados fiscais — ${escapeHtml(empresa.nome_fantasia || empresa.razao_social)}</h3>
+      <p class="dica">
+        Exigidos para emitir NF-e com esta empresa como emitente (Fiscal &gt; Notas Fiscais). Nenhum é obrigatório
+        para o cadastro em si — só na hora de tentar emitir uma nota.
+      </p>
+      <form data-form="salvar-dados-fiscais-empresa" data-id="${empresa.id}">
+        <div class="campo"><label>Regime tributário</label><select name="regime_tributario">${opcoesRegime}</select></div>
+        <div class="campo"><label>Inscrição Estadual</label><input name="inscricao_estadual" value="${escapeHtml(empresa.inscricao_estadual || "")}"></div>
+        <div class="campo"><label>Logradouro</label><input name="logradouro" value="${escapeHtml(empresa.logradouro || "")}"></div>
+        <div class="campo"><label>Número</label><input name="numero_endereco" value="${escapeHtml(empresa.numero_endereco || "")}"></div>
+        <div class="campo"><label>Complemento</label><input name="complemento_endereco" value="${escapeHtml(empresa.complemento_endereco || "")}"></div>
+        <div class="campo"><label>Bairro</label><input name="bairro" value="${escapeHtml(empresa.bairro || "")}"></div>
+        <div class="campo"><label>Município</label><input name="municipio" value="${escapeHtml(empresa.municipio || "")}"></div>
+        <div class="campo"><label>Código IBGE do município</label>
+          <input name="codigo_ibge_municipio" value="${escapeHtml(empresa.codigo_ibge_municipio || "")}" placeholder="ex.: 3550308 (São Paulo/SP)">
+          <div class="dica">Consulte em <a href="https://www.ibge.gov.br/explica/codigos-dos-municipios.php" target="_blank" rel="noopener">ibge.gov.br</a> se não souber.</div>
+        </div>
+        <div class="campo"><label>UF</label><input name="uf" value="${escapeHtml(empresa.uf || "")}" maxlength="2" style="text-transform:uppercase;"></div>
+        <div class="campo"><label>CEP</label><input name="cep" value="${escapeHtml(empresa.cep || "")}"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`, { largo: true });
+  }
+
+  function modalNovaEmpresa() {
+    abrirModal(`
+      <h3>Nova empresa</h3>
+      <form data-form="criar-empresa">
+        <div class="campo"><label>Razão social</label><input name="razao_social" required></div>
+        <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia"></div>
+        <div class="campo"><label>CNPJ</label><input name="cnpj" required placeholder="00.000.000/0000-00"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalNovaUnidade(empresaId) {
+    abrirModal(`
+      <h3>Nova unidade</h3>
+      <form data-form="criar-unidade" data-id="${empresaId}">
+        <div class="campo"><label>Nome</label><input name="nome" required></div>
+        <div class="campo"><label>Tipo</label>
+          <select name="tipo">
+            <option value="unidade">Unidade</option>
+            <option value="deposito">Depósito</option>
+            <option value="laboratorio">Laboratório</option>
+          </select>
+        </div>
+        <div class="campo"><label>Endereço</label><input name="endereco"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  // Fase 52 — helper compartilhado pelos formulários de criação de ordem
+  // de produção, recebimento de lote, pedido de venda e conta a pagar: os
+  // quatro ganham um seletor OPCIONAL de empresa (o novo `empresa_id`,
+  // nullable, de schema_fase52.sql). GET /empresas exige a permissão
+  // `empresas.visualizar`, que nem todo perfil tem (ex.: Compras pode
+  // registrar recebimento sem enxergar o cadastro de empresas) — por
+  // isso, sem essa permissão, o seletor simplesmente não aparece (a API
+  // continua aceitando o recebimento/ordem/pedido/conta sem empresa_id,
+  // exatamente como antes desta fase), em vez de quebrar o formulário.
+  async function carregarEmpresasParaSeletor() {
+    if (!temPermissao("empresas", "visualizar")) return [];
+    if (!state.cache.empresasSeletor) {
+      state.cache.empresasSeletor = await chamarApi("/empresas");
+    }
+    return state.cache.empresasSeletor;
+  }
+
+  function campoSeletorEmpresa(empresas, selecionadoId) {
+    if (!empresas.length) return "";
+    const opcoes = empresas
+      .map((e) => `<option value="${e.id}" ${String(selecionadoId) === String(e.id) ? "selected" : ""}>${escapeHtml(e.nome_fantasia || e.razao_social)}</option>`)
+      .join("");
+    return `<div class="campo"><label>Empresa (opcional)</label>
+      <select name="empresa_id"><option value="">— nenhuma —</option>${opcoes}</select>
+      <div class="dica">Só afeta o filtro por empresa do Painel Gerencial — deixe em branco se não se aplica.</div>
+    </div>`;
+  }
+
+  // =======================================================================
+  // AUDITORIA
+  // =======================================================================
+  async function renderAuditoria(filtros) {
+    filtros = filtros || {};
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const params = new URLSearchParams();
+    if (filtros.tabela) params.set("tabela", filtros.tabela);
+    if (filtros.usuario_id) params.set("usuario_id", filtros.usuario_id);
+    if (filtros.data_inicio) params.set("data_inicio", filtros.data_inicio);
+    if (filtros.data_fim) params.set("data_fim", filtros.data_fim);
+    params.set("limite", filtros.limite || 100);
+
+    const registros = await chamarApi("/auditoria?" + params.toString());
+
+    const linhas = registros
+      .map((r) => {
+        const detalhes = [];
+        if (r.valor_anterior) detalhes.push(`<div class="texto-suave">antes: <span class="mono">${escapeHtml(r.valor_anterior)}</span></div>`);
+        if (r.valor_novo) detalhes.push(`<div class="texto-suave">depois: <span class="mono">${escapeHtml(r.valor_novo)}</span></div>`);
+        if (r.motivo) detalhes.push(`<div class="texto-suave">motivo: ${escapeHtml(r.motivo)}</div>`);
+        return `<tr>
+          <td>${fmtData(r.criado_em)}</td>
+          <td>${escapeHtml(r.acao)}</td>
+          <td>${escapeHtml(r.tabela)}${r.registro_id ? " #" + escapeHtml(r.registro_id) : ""}</td>
+          <td>${r.usuario_id ?? "—"}</td>
+          <td>${escapeHtml(r.ip || "—")}</td>
+          <td>${detalhes.join("") || "—"}</td>
+        </tr>`;
+      })
+      .join("");
+
+    renderShell(
+      `<h2>Trilha de Auditoria</h2>
+       <div class="cartao">
+         <form data-form="filtrar-auditoria">
+           <div class="grade-filtros">
+             <div class="campo"><label>Tabela</label><input name="tabela" value="${escapeHtml(filtros.tabela || "")}" placeholder="ex.: usuarios"></div>
+             <div class="campo"><label>ID do usuário</label><input name="usuario_id" type="number" value="${escapeHtml(filtros.usuario_id || "")}"></div>
+             <div class="campo"><label>De</label><input name="data_inicio" type="datetime-local" value="${escapeHtml(filtros.data_inicio || "")}"></div>
+             <div class="campo"><label>Até</label><input name="data_fim" type="datetime-local" value="${escapeHtml(filtros.data_fim || "")}"></div>
+             <button class="botao secundario" type="submit">Filtrar</button>
+           </div>
+         </form>
+         <p class="texto-suave">Esta trilha é somente-leitura: nenhum registro pode ser alterado ou apagado, nem por administradores.</p>
+         <table>
+           <thead><tr><th>Quando</th><th>Ação</th><th>Registro</th><th>Usuário</th><th>IP</th><th>Detalhes</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum registro encontrado para este filtro.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "auditoria"
+    );
+  }
+
+  // =======================================================================
+  // NOTIFICAÇÕES (Fase 37)
+  // =======================================================================
+  // Lista as notificações do próprio usuário (mais recentes primeiro,
+  // igual ao backend), deixa marcar como lida uma a uma ou todas de uma
+  // vez, e deixa qualquer pessoa desligar/religar o recebimento por
+  // e-mail para si mesma. Quem tem "sistema.configurar_email" também vê
+  // aqui (mesma tela, um cartão a mais) a configuração do servidor SMTP
+  // usado para o envio real — não ganhou uma tela própria porque só faz
+  // sentido no contexto de "notificações", e só o Administrador por
+  // padrão chega a ver esse cartão.
+  async function renderNotificacoes() {
+    app.innerHTML = '<div class="carregando">Carregando notificações…</div>';
+    const podeConfigurarEmail = temPermissao("sistema", "configurar_email");
+    const [notificacoes, configuracaoEmail] = await Promise.all([
+      chamarApi("/notificacoes"),
+      podeConfigurarEmail ? chamarApi("/notificacoes/configuracao-email") : Promise.resolve(null),
+    ]);
+
+    // Já que a tela acabou de buscar a lista completa, aproveita para
+    // sincronizar o número do sino com o que está sendo mostrado agora,
+    // em vez de esperar o próximo tick do polling de 30s.
+    state.notificacoesNaoLidas = notificacoes.filter((n) => !n.lida).length;
+    atualizarBadgeNotificacoesNoDom();
+
+    const seloEnvioEmail = (n) => {
+      if (n.email_enviado) return '<span class="selo ativo">e-mail enviado</span>';
+      if (n.email_erro) return `<span class="selo inativo" title="${escapeHtml(n.email_erro)}">e-mail não enviado</span>`;
+      return "—";
+    };
+
+    const linhas = notificacoes
+      .map(
+        (n) => `<tr class="${n.lida ? "" : "linha-nao-lida"}">
+          <td class="texto-suave">${fmtData(n.criado_em)}</td>
+          <td>${escapeHtml(n.mensagem)}</td>
+          <td>${seloEnvioEmail(n)}</td>
+          <td>${n.lida
+            ? '<span class="texto-suave">lida</span>'
+            : `<button class="botao secundario pequeno" data-acao="marcar-notificacao-lida" data-id="${n.id}">Marcar como lida</button>`}</td>
+        </tr>`
+      )
+      .join("");
+
+    const temNaoLida = notificacoes.some((n) => !n.lida);
+
+    renderShell(
+      `<h2>Notificações</h2>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <form data-form="salvar-preferencia-notificacao" style="margin:0;">
+             <label><input type="checkbox" name="notificar_por_email" ${state.usuarioAtual.notificar_por_email ? "checked" : ""}>
+             Também receber estas notificações por e-mail</label>
+             <button type="submit" class="botao secundario pequeno" style="margin-left:8px;">Salvar</button>
+           </form>
+           ${temNaoLida ? `<button class="botao secundario pequeno" data-acao="marcar-todas-notificacoes-lidas">Marcar todas como lidas</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Quando</th><th>Mensagem</th><th>E-mail</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="4" class="texto-suave">Nenhuma notificação por aqui ainda.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       ${podeConfigurarEmail ? cartaoConfiguracaoEmail(configuracaoEmail) : ""}`,
+      "notificacoes"
+    );
+  }
+
+  function cartaoConfiguracaoEmail(config) {
+    return `<div class="cartao">
+      <h3 style="margin-top:0;">Configuração de E-mail (SMTP) — Fase 37</h3>
+      <p class="texto-suave">Servidor usado para o envio real das notificações por e-mail. Enquanto "Ativo"
+      estiver desmarcado, as notificações continuam sendo criadas e aparecem na lista acima normalmente —
+      isso só liga/desliga o e-mail.</p>
+      <form data-form="salvar-configuracao-email">
+        <div class="campo"><label><input type="checkbox" name="ativo" ${config.ativo ? "checked" : ""}> Ativo (ligar o envio de e-mail)</label></div>
+        <div class="campo"><label>Servidor SMTP (host)</label><input name="smtp_host" value="${escapeHtml(config.smtp_host || "")}" placeholder="smtp.seuservidor.com.br"></div>
+        <div class="campo"><label>Porta</label><input name="smtp_porta" type="number" step="1" min="1" max="65535" value="${config.smtp_porta}"></div>
+        <div class="campo"><label><input type="checkbox" name="usar_tls" ${config.usar_tls ? "checked" : ""}> Usar TLS (STARTTLS)</label></div>
+        <div class="campo"><label>Usuário SMTP</label><input name="smtp_usuario" value="${escapeHtml(config.smtp_usuario || "")}"></div>
+        <div class="campo"><label>Senha SMTP</label><input name="smtp_senha" type="password" autocomplete="new-password"
+          placeholder="${config.senha_configurada ? "deixe em branco para manter a senha atual" : "nenhuma senha configurada ainda"}"></div>
+        <div class="campo"><label>Nome do remetente</label><input name="remetente_nome" value="${escapeHtml(config.remetente_nome || "")}"></div>
+        <div class="campo"><label>E-mail do remetente</label><input name="remetente_email" value="${escapeHtml(config.remetente_email || "")}" placeholder="nao-responda@suaempresa.com.br"></div>
+        ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
+        <div class="rodape-modal" style="padding:0;">
+          <button type="button" class="botao secundario" data-acao="testar-configuracao-email">Enviar e-mail de teste</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>
+    </div>`;
+  }
+
+  // =======================================================================
+  // MINHA CONTA
+  // =======================================================================
+  async function renderMinhaConta() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const [me, sessoes] = await Promise.all([chamarApi("/auth/me"), chamarApi("/auth/sessoes")]);
+    state.usuarioAtual = me;
+
+    const linhasSessoes = sessoes
+      .map(
+        (s) => `<tr>
+          <td>${fmtData(s.criado_em)}</td>
+          <td class="texto-suave">${escapeHtml(s.dispositivo || "—")}</td>
+          <td>${escapeHtml(s.ip || "—")}</td>
+          <td>${s.revogado ? '<span class="selo inativo">encerrada</span>' : '<span class="selo ativo">ativa</span>'}</td>
+          <td>${!s.revogado ? `<button class="botao perigo pequeno" data-acao="encerrar-sessao" data-id="${s.id}">Encerrar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Minha Conta</h2>
+       <div class="cartao">
+         <p><strong>${escapeHtml(me.nome)}</strong> — ${escapeHtml(me.email)}</p>
+         <p class="texto-suave">Perfis: ${me.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "nenhum"}</p>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Trocar senha</h3>
+         <form data-form="trocar-senha">
+           <div class="campo"><label>Senha atual</label><input name="senha_atual" type="password" required></div>
+           <div class="campo"><label>Nova senha</label><input name="senha_nova" type="password" required minlength="12"></div>
+           <button class="botao" type="submit">Trocar senha</button>
+         </form>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Autenticação em duas etapas</h3>
+         ${me.dois_fatores_ativo
+           ? '<p class="mensagem-ok">2FA está ativo na sua conta.</p>'
+           : `<p class="texto-suave">2FA está desativado. Ative para uma camada extra de segurança.</p>
+              <button class="botao" data-acao="iniciar-2fa">Ativar 2FA</button>`}
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Minhas sessões</h3>
+         <table>
+           <thead><tr><th>Criada em</th><th>Dispositivo</th><th>IP</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhasSessoes}</tbody>
+         </table>
+       </div>`,
+      "conta"
+    );
+  }
+
+  function modalConfirmar2fa(secret, otpauthUri) {
+    abrirModal(`
+      <h3>Ativar autenticação em duas etapas</h3>
+      <p class="texto-suave">Adicione esta chave no seu aplicativo autenticador (Google Authenticator, Microsoft
+      Authenticator etc.) e depois digite o código de 6 dígitos gerado para confirmar.</p>
+      <div class="campo">
+        <label>Chave manual</label>
+        <div class="mono cartao">${escapeHtml(secret)}</div>
+      </div>
+      <div class="campo">
+        <label>URI (para leitores compatíveis)</label>
+        <div class="mono cartao">${escapeHtml(otpauthUri)}</div>
+      </div>
+      <form data-form="confirmar-2fa">
+        <div class="campo"><label>Código de 6 dígitos</label><input name="codigo" inputmode="numeric" maxlength="6" required autofocus></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Confirmar e ativar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // Auxiliares da Fase 2 (Qualidade e Laboratório)
+  // =======================================================================
+  function seloLote(status) {
+    const mapa = {
+      quarentena: ["amarelo", "Quarentena"],
+      em_analise: ["azul", "Em análise"],
+      aguardando_aprovacao: ["amarelo", "Aguardando aprovação"],
+      aprovado: ["ativo", "Aprovado"],
+      aprovado_com_ressalva: ["ativo", "Aprovado c/ ressalva"],
+      reprovado: ["bloqueado", "Reprovado"],
+      bloqueado: ["bloqueado", "Bloqueado"],
+    };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  // Fase 65 — selo "Vencido" (só exibição; o bloqueio de verdade acontece
+  // no backend, nas alocações FEFO) para acompanhar `lote.vencido` /
+  // `saldo.vencido`, sempre que a tela já mostra o status ou a validade
+  // do lote.
+  function seloVencido() {
+    return ' <span class="selo bloqueado">Vencido</span>';
+  }
+
+  function parseEnsaiosTexto(texto) {
+    return (texto || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((linha) => {
+        const [ensaio, min, max, unidade] = linha.split(";").map((p) => (p || "").trim());
+        return {
+          ensaio,
+          especificacao_min: min ? Number(min) : null,
+          especificacao_max: max ? Number(max) : null,
+          unidade: unidade || null,
+        };
+      });
+  }
+
+  // =======================================================================
+  // ITENS
+  // =======================================================================
+  const TIPOS_ITEM = [
+    "materia_prima", "embalagem_primaria", "embalagem_secundaria",
+    "produto_intermediario", "produto_a_granel", "produto_acabado", "material_de_laboratorio",
+  ];
+
+  async function renderItens() {
+    app.innerHTML = '<div class="carregando">Carregando itens…</div>';
+    const itens = await chamarApi("/itens");
+    state.cache.itens = itens;
+    const podeCadastrar = temPermissao("itens", "cadastrar");
+    const podeEditar = temPermissao("itens", "editar");
+
+    const linhas = itens
+      .map(
+        (i) => `<tr>
+          <td class="mono">${escapeHtml(i.codigo)}</td>
+          <td>${escapeHtml(i.descricao)}</td>
+          <td class="texto-suave">${escapeHtml(i.tipo)}</td>
+          <td>${escapeHtml(i.unidade_medida)}</td>
+          <td>${i.requer_fornecedor_homologado ? "Sim" : "Não"}</td>
+          <td><span class="selo ${i.status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(i.status)}</span></td>
+          <td>${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-item" data-id="${i.id}">Editar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Itens</h2>
+       <div class="cartao">
+         <p class="texto-suave">Matérias-primas, embalagens e demais materiais controlados. Itens marcados como
+         "exige fornecedor homologado" só podem ser recebidos de fornecedores previamente aprovados.</p>
+         <div class="barra-acoes">
+           <span class="texto-suave">${itens.length} item(ns)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-item">+ Novo item</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Código</th><th>Descrição</th><th>Tipo</th><th>Unidade</th><th>Exige homologação</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum item cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "itens"
+    );
+  }
+
+  function modalNovoItem() {
+    const opcoesTipo = TIPOS_ITEM.map((t) => `<option value="${t}">${t}</option>`).join("");
+    abrirModal(`
+      <h3>Novo item</h3>
+      <form data-form="criar-item">
+        <p class="dica">O código é gerado automaticamente pelo sistema, de acordo com o tipo escolhido
+        (ex.: MP000001 para matéria-prima, PA000001 para produto acabado), para ser usado de forma
+        consistente nas OPs, no ERP e no APS.</p>
+        <div class="campo"><label>Descrição</label><input name="descricao" required></div>
+        <div class="campo"><label>Tipo</label><select name="tipo">${opcoesTipo}</select></div>
+        <div class="campo"><label>Unidade de medida</label><input name="unidade_medida" value="kg" required></div>
+        <div class="campo"><label>Estoque mínimo</label><input name="estoque_minimo" type="number" step="any"></div>
+        <div class="campo"><label>Categoria (opcional)</label><input name="categoria" placeholder="ex.: Proteínas, Vitaminas — só usada para agrupar no Portfólio do App de Vendas"></div>
+        <div class="campo"><label><input type="checkbox" name="requer_analise" checked> Exige análise de laboratório</label></div>
+        <div class="campo"><label><input type="checkbox" name="requer_fornecedor_homologado"> Exige fornecedor homologado</label></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarItem(item) {
+    abrirModal(`
+      <h3>Editar ${escapeHtml(item.codigo)}</h3>
+      <form data-form="editar-item" data-id="${item.id}">
+        <div class="campo"><label>Descrição</label><input name="descricao" value="${escapeHtml(item.descricao)}" required></div>
+        <div class="campo"><label>Estoque mínimo</label><input name="estoque_minimo" type="number" step="any" value="${item.estoque_minimo ?? ""}"></div>
+        <div class="campo"><label>Categoria (opcional)</label><input name="categoria" value="${escapeHtml(item.categoria || "")}" placeholder="ex.: Proteínas, Vitaminas — só usada para agrupar no Portfólio do App de Vendas"></div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${item.status === "ativo" ? "selected" : ""}>Ativo</option>
+            <option value="inativo" ${item.status === "inativo" ? "selected" : ""}>Inativo</option>
+          </select>
+        </div>
+        <h4>Dados fiscais (Fase 70 — exigidos para incluir este item numa NF-e)</h4>
+        <div class="campo"><label>NCM</label><input name="ncm" value="${escapeHtml(item.ncm || "")}" placeholder="ex.: 21069090" maxlength="8"></div>
+        <div class="campo"><label>CFOP padrão</label><input name="cfop_padrao" value="${escapeHtml(item.cfop_padrao || "")}" placeholder="ex.: 5102 (venda dentro do estado)"></div>
+        <div class="campo"><label>Origem da mercadoria</label>
+          <select name="origem_mercadoria">
+            <option value="0" ${item.origem_mercadoria === "0" ? "selected" : ""}>0 — Nacional</option>
+            <option value="1" ${item.origem_mercadoria === "1" ? "selected" : ""}>1 — Estrangeira (importação direta)</option>
+            <option value="2" ${item.origem_mercadoria === "2" ? "selected" : ""}>2 — Estrangeira (adquirida no mercado interno)</option>
+            <option value="3" ${item.origem_mercadoria === "3" ? "selected" : ""}>3 — Nacional (conteúdo importado 40-70%)</option>
+            <option value="4" ${item.origem_mercadoria === "4" ? "selected" : ""}>4 — Nacional (processos produtivos básicos)</option>
+            <option value="5" ${item.origem_mercadoria === "5" ? "selected" : ""}>5 — Nacional (conteúdo importado ≤ 40%)</option>
+            <option value="6" ${item.origem_mercadoria === "6" ? "selected" : ""}>6 — Estrangeira (importação direta, sem similar nacional)</option>
+            <option value="7" ${item.origem_mercadoria === "7" ? "selected" : ""}>7 — Estrangeira (mercado interno, sem similar nacional)</option>
+            <option value="8" ${item.origem_mercadoria === "8" ? "selected" : ""}>8 — Nacional (conteúdo importado > 70%)</option>
+          </select>
+        </div>
+        <div class="campo"><label>CEST (opcional)</label><input name="cest" value="${escapeHtml(item.cest || "")}"></div>
+        <div class="campo"><label>Código tributário do ICMS (CST/CSOSN, opcional)</label>
+          <input name="codigo_tributario_icms" value="${escapeHtml(item.codigo_tributario_icms || "")}" placeholder="deixe em branco para usar o padrão automático do regime da empresa">
+          <div class="dica">
+            Deixe em branco para usar o padrão calculado automaticamente a partir do regime tributário da empresa
+            emitente na hora de emitir (CSOSN 102 no Simples Nacional, CST 00 nos demais) — só preencha se este
+            item específico precisar de um código diferente. <strong>Isto não é aconselhamento fiscal:</strong>
+            confirme com um contador antes de emitir notas valendo de verdade.
+          </div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`, { largo: true });
+  }
+
+  // =======================================================================
+  // FORNECEDORES
+  // =======================================================================
+  async function renderFornecedores() {
+    app.innerHTML = '<div class="carregando">Carregando fornecedores…</div>';
+    const [fornecedores, itens] = await Promise.all([chamarApi("/fornecedores"), chamarApi("/itens")]);
+    state.cache.itens = itens;
+    const podeCadastrar = temPermissao("fornecedores", "cadastrar");
+    const podeHomologar = temPermissao("fornecedores", "homologar");
+
+    const seloFornecedor = (status) => {
+      const mapa = {
+        em_avaliacao: ["amarelo", "Em avaliação"], aprovado: ["ativo", "Aprovado"],
+        aprovado_com_ressalva: ["ativo", "Aprovado c/ ressalva"], bloqueado: ["bloqueado", "Bloqueado"],
+        reprovado: ["bloqueado", "Reprovado"],
+      };
+      const par = mapa[status] || ["inativo", status];
+      return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+    };
+
+    const linhas = fornecedores
+      .map(
+        (f) => `<tr>
+          <td>${escapeHtml(f.nome)}</td>
+          <td class="mono">${escapeHtml(f.cnpj)}</td>
+          <td>${seloFornecedor(f.status)}</td>
+          <td class="texto-suave">${f.itens_homologados.map((i) => escapeHtml(i.codigo)).join(", ") || "—"}</td>
+          <td>${f.lead_time_dias != null ? `${f.lead_time_dias} dia(s)` : '<span class="texto-suave">não informado</span>'}</td>
+          <td>
+            <button class="botao secundario pequeno" data-acao="ver-desempenho-fornecedor" data-id="${f.id}" data-nome="${escapeHtml(f.nome)}">Desempenho</button>
+            ${podeHomologar ? `<button class="botao secundario pequeno" data-acao="alterar-status-fornecedor" data-id="${f.id}">Status</button>` : ""}
+            ${podeHomologar ? `<button class="botao secundario pequeno" data-acao="homologar-item-fornecedor" data-id="${f.id}">Homologar item</button>` : ""}
+            ${podeCadastrar ? `<button class="botao secundario pequeno" data-acao="editar-lead-time-fornecedor" data-id="${f.id}">Lead time</button>` : ""}
+          </td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Fornecedores</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${fornecedores.length} fornecedor(es)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-fornecedor">+ Novo fornecedor</button>` : ""}
+         </div>
+         <p class="texto-suave">Lead time (Fase 57): prazo de entrega, em dias, usado pelo MRP para sugerir até
+         quando comprar de cada fornecedor — opcional; sem ele configurado, o MRP continua mostrando a falta e o
+         fornecedor sugerido normalmente, só sem nenhuma data-limite calculada.</p>
+         <table>
+           <thead><tr><th>Nome</th><th>CNPJ</th><th>Status</th><th>Itens homologados</th><th>Lead time</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum fornecedor cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "fornecedores"
+    );
+  }
+
+  function modalNovoFornecedor() {
+    abrirModal(`
+      <h3>Novo fornecedor</h3>
+      <form data-form="criar-fornecedor">
+        <div class="campo"><label>Nome</label><input name="nome" required></div>
+        <div class="campo"><label>CNPJ</label><input name="cnpj" required placeholder="00.000.000/0000-00"></div>
+        <div class="campo"><label>Lead time de entrega (dias) — opcional</label>
+          <input name="lead_time_dias" type="number" step="1" min="0" placeholder="ex.: 7">
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarLeadTimeFornecedor(fornecedor) {
+    abrirModal(`
+      <h3>Lead time de ${escapeHtml(fornecedor.nome)}</h3>
+      <p class="texto-suave">Prazo de entrega, em dias, usado pelo MRP (Fase 57) para sugerir até quando comprar
+      quando este for o fornecedor sugerido para algum insumo em falta. Deixe em branco para marcar como "não
+      informado" — o MRP volta a não calcular nenhuma data-limite para ele.</p>
+      <form data-form="editar-lead-time-fornecedor" data-id="${fornecedor.id}">
+        <div class="campo"><label>Lead time de entrega (dias)</label>
+          <input name="lead_time_dias" type="number" step="1" min="0" value="${fornecedor.lead_time_dias != null ? fornecedor.lead_time_dias : ""}">
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalAlterarStatusFornecedor(fornecedor) {
+    abrirModal(`
+      <h3>Status de ${escapeHtml(fornecedor.nome)}</h3>
+      <form data-form="alterar-status-fornecedor" data-id="${fornecedor.id}">
+        <div class="campo"><label>Novo status</label>
+          <select name="status">
+            <option value="em_avaliacao" ${fornecedor.status === "em_avaliacao" ? "selected" : ""}>Em avaliação</option>
+            <option value="aprovado" ${fornecedor.status === "aprovado" ? "selected" : ""}>Aprovado</option>
+            <option value="aprovado_com_ressalva" ${fornecedor.status === "aprovado_com_ressalva" ? "selected" : ""}>Aprovado com ressalva</option>
+            <option value="bloqueado" ${fornecedor.status === "bloqueado" ? "selected" : ""}>Bloqueado</option>
+            <option value="reprovado" ${fornecedor.status === "reprovado" ? "selected" : ""}>Reprovado</option>
+          </select>
+        </div>
+        <div class="campo"><label>Observações</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalHomologarItem(fornecedor) {
+    const itens = state.cache.itens || [];
+    const opcoes = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+    abrirModal(`
+      <h3>Homologar item para ${escapeHtml(fornecedor.nome)}</h3>
+      <form data-form="homologar-item" data-id="${fornecedor.id}">
+        <div class="campo"><label>Item</label><select name="item_id" required>${opcoes}</select></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Homologar</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Fase 62: Desempenho de Fornecedor (Scorecard) ----
+  function modalDesempenhoFornecedor(nomeFornecedor, desempenho) {
+    const e = desempenho.entregas;
+    const q = desempenho.qualidade;
+    const p = desempenho.pedidos_por_status;
+    const rotuloStatus = { rascunho: "Rascunho", enviado: "Enviado", parcialmente_recebido: "Parcial", recebido: "Recebido", cancelado: "Cancelado" };
+    const linhasStatus = Object.keys(p)
+      .filter((k) => p[k] > 0)
+      .map((k) => `<tr><td>${rotuloStatus[k] || k}</td><td>${p[k]}</td></tr>`)
+      .join("");
+    abrirModal(`
+      <h3>Desempenho — ${escapeHtml(nomeFornecedor)}</h3>
+      <p class="texto-suave">Calculado na hora, a partir do histórico de Pedidos de Compra (Fase 58) e Qualidade
+      (Fase 2) deste fornecedor — não é um dado salvo à parte, então nunca fica desatualizado.</p>
+      <div class="linha-detalhe">
+        <div><div class="rotulo">Total de pedidos</div>${desempenho.total_pedidos_compra}</div>
+        <div><div class="rotulo">Valor total comprado</div>${fmtMoeda(desempenho.valor_total_comprado)}</div>
+      </div>
+      ${linhasStatus ? `
+      <table>
+        <thead><tr><th>Status do pedido</th><th>Quantidade</th></tr></thead>
+        <tbody>${linhasStatus}</tbody>
+      </table>` : '<p class="texto-suave">Nenhum pedido de compra registrado ainda.</p>'}
+
+      <h4>Entregas no prazo</h4>
+      ${e.total_avaliadas > 0
+        ? `<p>${e.no_prazo} de ${e.total_avaliadas} pedido(s) totalmente recebido(s) chegaram dentro do prazo previsto — <strong>${e.taxa_no_prazo_pct}%</strong> no prazo (${e.atrasadas} atrasado(s)).</p>`
+        : '<p class="texto-suave">Ainda não há pedidos totalmente recebidos com um prazo de entrega calculado (depende de lead time configurado no fornecedor no momento do envio, Fase 60) para avaliar.</p>'}
+
+      <h4>Qualidade dos lotes recebidos</h4>
+      ${q.taxa_aprovacao_pct !== null
+        ? `<p>${q.lotes_aprovados} aprovado(s) de ${q.lotes_aprovados + q.lotes_reprovados} lote(s) já julgado(s) — <strong>${q.taxa_aprovacao_pct}%</strong> de aprovação (${q.lotes_reprovados} reprovado(s)). Total recebido: ${q.lotes_recebidos} lote(s), incluindo os ainda em análise.</p>`
+        : `<p class="texto-suave">${q.lotes_recebidos > 0 ? `${q.lotes_recebidos} lote(s) recebido(s), nenhum ainda julgado (aprovado/reprovado) pela Qualidade.` : "Nenhum lote recebido deste fornecedor ainda."}</p>`}
+
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+      </div>`, { largo: true });
+  }
+
+  // =======================================================================
+  // LOTES (recebimento, quarentena, análise, aprovação — LIMS/QMS)
+  // =======================================================================
+  async function renderLotes() {
+    app.innerHTML = '<div class="carregando">Carregando lotes…</div>';
+    const [lotes, itens, fornecedores] = await Promise.all([
+      chamarApi("/lotes"), chamarApi("/itens"), chamarApi("/fornecedores"),
+    ]);
+    state.cache.itens = itens;
+    state.cache.fornecedores = fornecedores;
+    await carregarEmpresasParaSeletor();
+    const podeReceber = temPermissao("lotes", "receber");
+
+    const linhas = lotes
+      .map(
+        (l) => `<tr>
+          <td class="mono"><a href="#/lotes/${l.id}">${escapeHtml(l.codigo_lote)}</a></td>
+          <td>${escapeHtml(l.item_codigo)} — ${escapeHtml(l.item_descricao)}</td>
+          <td class="texto-suave">${escapeHtml(l.fornecedor_nome || "—")}</td>
+          <td>${l.quantidade} ${escapeHtml(l.unidade)}</td>
+          <td>${seloLote(l.status)}${l.vencido ? seloVencido() : ""}</td>
+          <td><button class="botao secundario pequeno" data-acao="ver-lote" data-id="${l.id}">Abrir</button></td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Lotes / Qualidade</h2>
+       <div class="cartao">
+         <p class="texto-suave">Todo lote recebido entra automaticamente em quarentena e só pode ser usado/vendido
+         após análise de laboratório e aprovação da Qualidade (segregação de função: quem analisa não aprova).</p>
+         <div class="barra-acoes">
+           <span class="texto-suave">${lotes.length} lote(s)</span>
+           ${podeReceber ? `<button class="botao" data-acao="receber-lote">+ Registrar recebimento</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Lote</th><th>Item</th><th>Fornecedor</th><th>Quantidade</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum lote registrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "lotes"
+    );
+  }
+
+  function modalReceberLote() {
+    const itens = state.cache.itens || [];
+    const fornecedores = state.cache.fornecedores || [];
+    const opcoesItem = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+    const opcoesFornecedor = `<option value="">— nenhum —</option>` +
+      fornecedores.map((f) => `<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Registrar recebimento</h3>
+      <form data-form="receber-lote">
+        <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItem}</select></div>
+        <div class="campo"><label>Fornecedor</label><select name="fornecedor_id">${opcoesFornecedor}</select></div>
+        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
+        <div class="campo"><label>Lote do fornecedor</label><input name="lote_fornecedor"></div>
+        <div class="campo"><label>Nota fiscal</label><input name="nota_fiscal"></div>
+        <div class="campo"><label>Fabricação</label><input name="fabricacao" type="date"></div>
+        <div class="campo"><label>Validade</label><input name="validade" type="date"></div>
+        <div class="campo">
+          <label>Custo unitário pago (R$, opcional)</label>
+          <input name="custo_unitario" type="number" step="any" min="0" placeholder="ex.: 30.00">
+          <div class="dica">Alimenta o custo médio real de compra usado na tela "Custo do Produto" — deixe em branco se ainda não souber o preço.</div>
+        </div>
+        ${campoSeletorEmpresa(state.cache.empresasSeletor || [])}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Registrar (entra em quarentena)</button>
+        </div>
+      </form>`);
+  }
+
+  function modalSolicitarAnalise(lote) {
+    abrirModal(`
+      <h3>Solicitar análise — ${escapeHtml(lote.codigo_lote)}</h3>
+      <form data-form="solicitar-analise" data-id="${lote.id}">
+        <div class="campo">
+          <label>Ensaios (um por linha: <span class="mono">nome;min;max;unidade</span> — min/max/unidade opcionais)</label>
+          <textarea name="ensaios" required placeholder="pH;6.5;7.5;pH&#10;Umidade;;5;%"></textarea>
+          <div class="dica">Ex.: <span class="mono">Teor de proteína;80;;%</span> (sem máximo) ou <span class="mono">Umidade;;5;%</span> (sem mínimo).</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Solicitar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalRegistrarResultado(analiseId, resultado) {
+    const ehCorrecao = resultado.resultado !== null && resultado.resultado !== undefined;
+    abrirModal(`
+      <h3>${ehCorrecao ? "Corrigir" : "Registrar"} resultado — ${escapeHtml(resultado.ensaio)}</h3>
+      ${ehCorrecao ? `<p class="texto-suave">Valor atual: <strong>${resultado.resultado}</strong> ${escapeHtml(resultado.unidade || "")}. O valor anterior será preservado no histórico.</p>` : ""}
+      <form data-form="registrar-resultado" data-analise-id="${analiseId}" data-resultado-id="${resultado.id}">
+        <div class="campo">
+          <label>Resultado ${resultado.especificacao_min != null || resultado.especificacao_max != null
+            ? `(espec.: ${resultado.especificacao_min ?? "-∞"} a ${resultado.especificacao_max ?? "+∞"})` : ""}</label>
+          <input name="resultado" type="number" step="any" required>
+        </div>
+        ${ehCorrecao ? `<div class="campo"><label>Motivo da correção</label><textarea name="motivo" required></textarea></div>` : ""}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalAprovarLote(lote) {
+    abrirModal(`
+      <h3>Aprovar lote ${escapeHtml(lote.codigo_lote)}</h3>
+      <form data-form="aprovar-lote" data-id="${lote.id}">
+        <div class="campo"><label><input type="checkbox" name="aprovar_com_ressalva"> Aprovar com ressalva (necessário se a análise concluiu "não conforme")</label></div>
+        <div class="campo"><label>Justificativa (obrigatória se aprovar com ressalva)</label><textarea name="justificativa"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Aprovar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalReprovarLote(lote) {
+    abrirModal(`
+      <h3>Reprovar lote ${escapeHtml(lote.codigo_lote)}</h3>
+      <form data-form="reprovar-lote" data-id="${lote.id}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Reprovar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalBloquearLote(lote) {
+    abrirModal(`
+      <h3>Bloquear lote ${escapeHtml(lote.codigo_lote)}</h3>
+      <form data-form="bloquear-lote" data-id="${lote.id}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Bloquear</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderLoteDetalhe(loteId) {
+    app.innerHTML = '<div class="carregando">Carregando lote…</div>';
+    const [lote, rastreio] = await Promise.all([
+      chamarApi(`/lotes/${loteId}`),
+      temPermissao("lotes", "visualizar") ? chamarApi(`/lotes/${loteId}/rastreabilidade`) : Promise.resolve(null),
+    ]);
+
+    const podeAprovar = temPermissao("lotes", "aprovar");
+    const podeReprovar = temPermissao("lotes", "reprovar");
+    const podeBloquear = temPermissao("lotes", "bloquear");
+    const podeSolicitarAnalise = temPermissao("analises", "solicitar");
+    const podeRegistrarResultado = temPermissao("analises", "registrar_resultado");
+    const podeConcluirAnalise = temPermissao("analises", "concluir");
+
+    const analiseAberta = (lote.analises || []).find((a) => a.status === "aguardando_resultado");
+
+    const analisesHtml = (lote.analises || [])
+      .map((a) => {
+        const resultadosHtml = (a.resultados || [])
+          .map((r) => {
+            const conclusaoSelo = r.conclusao === "conforme"
+              ? '<span class="selo ativo">Conforme</span>'
+              : r.conclusao === "nao_conforme" ? '<span class="selo bloqueado">Não conforme</span>' : '<span class="selo inativo">Pendente</span>';
+            const podeAgir = a.status === "aguardando_resultado" && podeRegistrarResultado;
+            return `<tr>
+              <td>${escapeHtml(r.ensaio)}</td>
+              <td class="texto-suave">${r.especificacao_min ?? "-∞"} a ${r.especificacao_max ?? "+∞"} ${escapeHtml(r.unidade || "")}</td>
+              <td>${r.resultado ?? "—"}</td>
+              <td>${conclusaoSelo}</td>
+              <td>${podeAgir ? `<button class="botao secundario pequeno" data-acao="registrar-resultado" data-analise-id="${a.id}" data-resultado-id="${r.id}">${r.resultado != null ? "Corrigir" : "Registrar"}</button>` : ""}</td>
+            </tr>`;
+          })
+          .join("");
+        return `<div class="subcartao">
+          <div class="linha-detalhe">
+            <div><span class="rotulo">Análise #${a.id}</span><br>${escapeHtml(a.tipo)}</div>
+            <div><span class="rotulo">Status</span><br>${escapeHtml(a.status)}</div>
+            <div><span class="rotulo">Conclusão</span><br>${a.conclusao ? escapeHtml(a.conclusao) : "—"}</div>
+          </div>
+          <table>
+            <thead><tr><th>Ensaio</th><th>Especificação</th><th>Resultado</th><th>Conclusão</th><th></th></tr></thead>
+            <tbody>${resultadosHtml}</tbody>
+          </table>
+          ${a.status === "aguardando_resultado" && podeConcluirAnalise
+            ? `<div class="rodape-modal" style="margin-top:12px;"><button class="botao pequeno" data-acao="concluir-analise" data-id="${a.id}">Concluir análise</button></div>`
+            : ""}
+        </div>`;
+      })
+      .join("") || '<p class="texto-suave">Nenhuma análise solicitada ainda para este lote.</p>';
+
+    const coaHtml = lote.certificado_analise
+      ? `<div class="subcartao">
+           <p><strong>Certificado de Análise (CoA):</strong> ${escapeHtml(lote.certificado_analise.numero_unico)}</p>
+           <p class="texto-suave">Conclusão: ${escapeHtml(lote.certificado_analise.conclusao)} — emitido em ${fmtData(lote.certificado_analise.emitido_em)}</p>
+           <button class="botao secundario pequeno" data-acao="baixar-coa-pdf" data-id="${lote.id}" data-codigo="${escapeHtml(lote.codigo_lote)}">Baixar CoA (PDF)</button>
+         </div>`
+      : "";
+
+    const origemHtml = lote.origem === "producao"
+      ? `Produção — <a href="#/producao/${lote.ordem_producao_id}">ordem ${rastreio && rastreio.genealogia_origem ? escapeHtml(rastreio.genealogia_origem.ordem_producao.numero) : "#" + lote.ordem_producao_id}</a>`
+      : "Recebimento de fornecedor";
+
+    const genealogiaOrigemHtml = rastreio && rastreio.genealogia_origem
+      ? `<div class="subcartao">
+           <p class="rotulo">Este lote foi produzido a partir de</p>
+           <table>
+             <thead><tr><th>Lote consumido</th><th>Item</th><th>Quantidade</th></tr></thead>
+             <tbody>${rastreio.genealogia_origem.lotes_consumidos.map((c) => `<tr>
+               <td class="mono"><a href="#/lotes/${c.lote_id}">${escapeHtml(c.codigo_lote)}</a></td>
+               <td>${escapeHtml(c.item_codigo)} — ${escapeHtml(c.item_descricao)}</td>
+               <td>${c.quantidade} ${escapeHtml(c.unidade)}</td>
+             </tr>`).join("")}</tbody>
+           </table>
+         </div>`
+      : "";
+
+    const genealogiaDestinoHtml = rastreio && rastreio.genealogia_destino && rastreio.genealogia_destino.length
+      ? `<div class="subcartao">
+           <p class="rotulo">Este lote foi consumido em</p>
+           <table>
+             <thead><tr><th>Ordem de produção</th><th>Quantidade consumida</th><th>Lote gerado</th></tr></thead>
+             <tbody>${rastreio.genealogia_destino.map((c) => `<tr>
+               <td><a href="#/producao/${c.ordem_producao_id}">${escapeHtml(c.ordem_numero)}</a> <span class="texto-suave">(${escapeHtml(c.ordem_status)})</span></td>
+               <td>${c.quantidade} ${escapeHtml(c.unidade)}</td>
+               <td>${c.lote_gerado ? `<a href="#/lotes/${c.lote_gerado.id}" class="mono">${escapeHtml(c.lote_gerado.codigo_lote)}</a> ${seloLote(c.lote_gerado.status)}` : "—"}</td>
+             </tr>`).join("")}</tbody>
+           </table>
+         </div>`
+      : "";
+
+    const genealogiaHtml = (genealogiaOrigemHtml || genealogiaDestinoHtml)
+      ? `<div class="cartao"><h3 style="margin-top:0;">Rastreabilidade / Genealogia</h3>${genealogiaOrigemHtml}${genealogiaDestinoHtml}</div>`
+      : "";
+
+    renderShell(
+      `<a class="link-voltar" href="#/lotes">← Voltar para Lotes</a>
+       <h2>${escapeHtml(lote.codigo_lote)}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><span class="rotulo">Status</span><br>${seloLote(lote.status)}</div>
+           <div><span class="rotulo">Origem</span><br>${origemHtml}</div>
+           <div><span class="rotulo">Quantidade</span><br>${lote.quantidade} ${escapeHtml(lote.unidade)}</div>
+           <div><span class="rotulo">Nota fiscal</span><br>${escapeHtml(lote.nota_fiscal || "—")}</div>
+           <div><span class="rotulo">Fabricação</span><br>${escapeHtml(lote.fabricacao || "—")}</div>
+           <div><span class="rotulo">Validade</span><br>${escapeHtml(lote.validade || "—")}${lote.vencido ? seloVencido() : ""}</div>
+           ${temPermissao("custeio", "visualizar")
+             ? `<div><span class="rotulo">Custo unitário pago</span><br>${lote.custo_unitario != null ? `R$ ${Number(lote.custo_unitario).toFixed(4)}` : '<span class="texto-suave">não informado</span>'}</div>`
+             : ""}
+         </div>
+         ${lote.motivo_bloqueio ? `<p class="mensagem-erro">Bloqueado: ${escapeHtml(lote.motivo_bloqueio)}</p>` : ""}
+         ${lote.vencido ? '<p class="mensagem-erro">Este lote está vencido — mesmo aprovado e com saldo físico, não conta mais como disponível para venda (Comercial) nem para consumo em produção (Fase 65). Para retirá-lo do estoque, dê baixa nele em Estoque.</p>' : ""}
+         <div class="barra-acoes">
+           <span></span>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             ${lote.status === "quarentena" && podeSolicitarAnalise && !analiseAberta ? `<button class="botao" data-acao="solicitar-analise" data-id="${lote.id}">Solicitar análise</button>` : ""}
+             ${lote.status === "aguardando_aprovacao" && podeAprovar ? `<button class="botao" data-acao="aprovar-lote" data-id="${lote.id}">Aprovar</button>` : ""}
+             ${lote.status === "aguardando_aprovacao" && podeReprovar ? `<button class="botao perigo" data-acao="reprovar-lote" data-id="${lote.id}">Reprovar</button>` : ""}
+             ${lote.status !== "bloqueado" && podeBloquear ? `<button class="botao secundario" data-acao="bloquear-lote" data-id="${lote.id}">Bloquear</button>` : ""}
+             ${lote.status === "bloqueado" && podeBloquear ? `<button class="botao secundario" data-acao="desbloquear-lote" data-id="${lote.id}">Desbloquear</button>` : ""}
+           </div>
+         </div>
+       </div>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Análises de laboratório</h3>
+         ${analisesHtml}
+       </div>
+       ${coaHtml}
+       ${genealogiaHtml}`,
+      "lotes"
+    );
+  }
+
+  // =======================================================================
+  // DESVIOS (CAPA)
+  // =======================================================================
+  async function renderDesvios() {
+    app.innerHTML = '<div class="carregando">Carregando desvios…</div>';
+    const desvios = await chamarApi("/desvios");
+    const podeCadastrar = temPermissao("desvios", "cadastrar");
+    const podeEditar = temPermissao("desvios", "editar");
+    const podeEncerrar = temPermissao("desvios", "encerrar");
+
+    const seloDesvio = (status) => {
+      const mapa = { aberto: ["amarelo", "Aberto"], em_tratativa: ["azul", "Em tratativa"], encerrado: ["ativo", "Encerrado"] };
+      const par = mapa[status] || ["inativo", status];
+      return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+    };
+
+    const linhas = desvios
+      .map(
+        (d) => `<tr>
+          <td class="mono">${escapeHtml(d.numero)}</td>
+          <td>${escapeHtml(d.origem)}</td>
+          <td class="texto-suave">${escapeHtml(d.descricao)}</td>
+          <td>${escapeHtml(d.criticidade)}</td>
+          <td>${seloDesvio(d.status)}</td>
+          <td>
+            ${podeEditar && d.status !== "encerrado" ? `<button class="botao secundario pequeno" data-acao="editar-desvio" data-id="${d.id}">Editar</button>` : ""}
+            ${podeEncerrar && d.status !== "encerrado" ? `<button class="botao pequeno" data-acao="encerrar-desvio" data-id="${d.id}">Encerrar</button>` : ""}
+          </td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Desvios</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${desvios.length} desvio(s)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-desvio">+ Abrir desvio</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Número</th><th>Origem</th><th>Descrição</th><th>Criticidade</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum desvio registrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "desvios"
+    );
+  }
+
+  function modalNovoDesvio() {
+    abrirModal(`
+      <h3>Abrir desvio</h3>
+      <form data-form="criar-desvio">
+        <div class="campo"><label>Origem</label><input name="origem" required placeholder="ex.: Produção, Laboratório, Reclamação de cliente"></div>
+        <div class="campo"><label>Criticidade</label>
+          <select name="criticidade">
+            <option value="baixa">Baixa</option><option value="media" selected>Média</option>
+            <option value="alta">Alta</option><option value="critica">Crítica</option>
+          </select>
+        </div>
+        <div class="campo"><label>Descrição</label><textarea name="descricao" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Abrir</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarDesvio(desvio) {
+    abrirModal(`
+      <h3>Editar desvio ${escapeHtml(desvio.numero)}</h3>
+      <form data-form="editar-desvio" data-id="${desvio.id}">
+        <div class="campo"><label>Causa raiz</label><textarea name="causa_raiz">${escapeHtml(desvio.causa_raiz || "")}</textarea></div>
+        <div class="campo"><label>Plano de ação</label><textarea name="plano_acao">${escapeHtml(desvio.plano_acao || "")}</textarea></div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="aberto" ${desvio.status === "aberto" ? "selected" : ""}>Aberto</option>
+            <option value="em_tratativa" ${desvio.status === "em_tratativa" ? "selected" : ""}>Em tratativa</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEncerrarDesvio(desvio) {
+    abrirModal(`
+      <h3>Encerrar desvio ${escapeHtml(desvio.numero)}</h3>
+      ${!desvio.causa_raiz || !desvio.plano_acao ? '<p class="mensagem-erro">Registre causa raiz e plano de ação antes de encerrar (use "Editar").</p>' : ""}
+      <form data-form="encerrar-desvio" data-id="${desvio.id}">
+        <div class="campo"><label>Verificação de eficácia</label><textarea name="verificacao_eficacia" required placeholder="Descreva como foi verificado que a ação corretiva foi eficaz"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Encerrar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // FÓRMULAS (BOM / ficha técnica) — Fase 3
+  // =======================================================================
+  function parseComposicaoTexto(texto, itensPorCodigo) {
+    return (texto || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((linha) => {
+        const [codigo, quantidade, unidade] = linha.split(";").map((p) => (p || "").trim());
+        const item = itensPorCodigo[codigo];
+        if (!item) throw new Error(`Item de código "${codigo}" não encontrado. Confira o código na tela de Itens.`);
+        if (!quantidade || !unidade) throw new Error(`Linha "${linha}" precisa de quantidade e unidade (formato: codigo;quantidade;unidade).`);
+        return { item_id: item.id, quantidade: Number(quantidade), unidade };
+      });
+  }
+
+  async function renderFormulas() {
+    app.innerHTML = '<div class="carregando">Carregando fórmulas…</div>';
+    const [formulas, itens] = await Promise.all([chamarApi("/formulas"), chamarApi("/itens")]);
+    state.cache.itens = itens;
+    const podeCadastrar = temPermissao("formulas", "cadastrar");
+    const podeAtivar = temPermissao("formulas", "aprovar");
+
+    const seloFormula = (status) => {
+      const mapa = { rascunho: ["inativo", "Rascunho"], ativa: ["ativo", "Ativa"], obsoleta: ["bloqueado", "Obsoleta"] };
+      const par = mapa[status] || ["inativo", status];
+      return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+    };
+
+    const linhas = formulas
+      .map((f) => {
+        const item = itens.find((i) => i.id === f.item_produzido_id);
+        const composicao = f.itens.map((li) => `${escapeHtml(li.item_codigo)} (${li.quantidade} ${escapeHtml(li.unidade)})`).join(", ");
+        return `<tr>
+          <td>${item ? escapeHtml(item.codigo) + " — " + escapeHtml(item.descricao) : "item #" + f.item_produzido_id}</td>
+          <td>v${f.versao}</td>
+          <td class="texto-suave">${composicao}</td>
+          <td>${f.rendimento_teorico} ${escapeHtml(f.unidade_rendimento)}</td>
+          <td>${seloFormula(f.status)}</td>
+          <td>${podeAtivar && f.status === "rascunho" ? `<button class="botao secundario pequeno" data-acao="ativar-formula" data-id="${f.id}">Ativar</button>` : ""}</td>
+        </tr>`;
+      })
+      .join("");
+
+    renderShell(
+      `<h2>Fórmulas (BOM)</h2>
+       <div class="cartao">
+         <p class="texto-suave">A ficha técnica de cada produto. Só existe uma versão <strong>ativa</strong> por
+         item ao mesmo tempo — ativar uma nova versão torna a anterior obsoleta automaticamente. Uma ordem de
+         produção só pode ser criada a partir de uma fórmula ativa.</p>
+         <div class="barra-acoes">
+           <span class="texto-suave">${formulas.length} fórmula(s)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="nova-formula">+ Nova fórmula</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Produto</th><th>Versão</th><th>Composição</th><th>Rendimento</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhuma fórmula cadastrada.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "formulas"
+    );
+  }
+
+  function modalNovaFormula() {
+    const itens = state.cache.itens || [];
+    const opcoesProduzido = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+    abrirModal(`
+      <h3>Nova fórmula</h3>
+      <form data-form="criar-formula">
+        <div class="campo"><label>Produto (item produzido)</label><select name="item_produzido_id" required>${opcoesProduzido}</select></div>
+        <div class="campo"><label>Rendimento teórico</label><input name="rendimento_teorico" type="number" step="any" required></div>
+        <div class="campo"><label>Unidade do rendimento</label><input name="unidade_rendimento" value="kg" required></div>
+        <div class="campo">
+          <label>Composição (um insumo por linha: <span class="mono">codigo_item;quantidade;unidade</span>)</label>
+          <textarea name="composicao" required placeholder="MP-WHEY;0.85;kg&#10;EMB-001;1;un"></textarea>
+          <div class="dica">A quantidade é a necessária para produzir 1 unidade do rendimento teórico acima. Use os códigos cadastrados em Itens.</div>
+        </div>
+        <div class="campo"><label>Observações</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar (rascunho)</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // ORDENS DE PRODUÇÃO — Fase 3 (PCP/MES)
+  // =======================================================================
+  function seloOrdem(status) {
+    const mapa = {
+      planejada: ["inativo", "Planejada"], liberada: ["amarelo", "Liberada"], em_producao: ["azul", "Em produção"],
+      concluida: ["ativo", "Concluída"], cancelada: ["bloqueado", "Cancelada"],
+    };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  async function renderOrdensProducao() {
+    app.innerHTML = '<div class="carregando">Carregando ordens de produção…</div>';
+    const [ordens, formulasAtivas, itens] = await Promise.all([
+      chamarApi("/producao/ordens"), chamarApi("/formulas?status=ativa"), chamarApi("/itens"),
+    ]);
+    state.cache.formulasAtivas = formulasAtivas;
+    state.cache.itens = itens;
+    await carregarEmpresasParaSeletor();
+    const podePlanejar = temPermissao("producao", "planejar");
+
+    const linhas = ordens
+      .map(
+        (o) => `<tr>
+          <td class="mono"><a href="#/producao/${o.id}">${escapeHtml(o.numero)}</a></td>
+          <td>${escapeHtml(o.item_produzido_codigo)} — ${escapeHtml(o.item_produzido_descricao)}</td>
+          <td>${o.quantidade_planejada} ${escapeHtml(o.unidade)}${o.quantidade_produzida != null ? ` <span class="texto-suave">(produzido: ${o.quantidade_produzida}${o.quantidade_perda ? `, perda: ${o.quantidade_perda}` : ""})</span>` : ""}</td>
+          <td>${seloOrdem(o.status)}</td>
+          <td><button class="botao secundario pequeno" data-acao="ver-ordem" data-id="${o.id}">Abrir</button></td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Ordens de Produção</h2>
+       <div class="cartao">
+         <p class="texto-suave">Cada ordem consome lotes já <strong>aprovados</strong> (nunca em quarentena ou
+         reprovados) conforme a composição da fórmula ativa, e gera um novo lote — que nasce em quarentena e
+         precisa passar pelo mesmo fluxo de qualidade antes de poder ser usado ou vendido.</p>
+         <div class="barra-acoes">
+           <span class="texto-suave">${ordens.length} ordem(ns)</span>
+           ${podePlanejar ? `<button class="botao" data-acao="nova-ordem" ${formulasAtivas.length === 0 ? "disabled title='Cadastre e ative uma fórmula primeiro'" : ""}>+ Nova ordem</button>` : ""}
+         </div>
+         ${podePlanejar && formulasAtivas.length === 0 ? '<p class="texto-suave">Nenhuma fórmula ativa ainda — cadastre uma em "Fórmulas (BOM)" e ative-a antes de abrir uma ordem.</p>' : ""}
+         <table>
+           <thead><tr><th>Ordem</th><th>Produto</th><th>Quantidade</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhuma ordem de produção registrada.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "producao"
+    );
+  }
+
+  function modalNovaOrdem() {
+    const formulasAtivas = state.cache.formulasAtivas || [];
+    const opcoes = formulasAtivas
+      .map((f) => {
+        const item = (state.cache.itens || []).find((i) => i.id === f.item_produzido_id);
+        return `<option value="${f.id}" data-unidade="${escapeHtml(f.unidade_rendimento)}">${item ? escapeHtml(item.codigo) : "item #" + f.item_produzido_id} (v${f.versao})</option>`;
+      })
+      .join("");
+    abrirModal(`
+      <h3>Nova ordem de produção</h3>
+      <form data-form="criar-ordem">
+        <div class="campo"><label>Fórmula ativa</label><select name="formula_id" required>${opcoes}</select></div>
+        <div class="campo"><label>Quantidade planejada</label><input name="quantidade_planejada" type="number" step="any" required></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
+        ${campoSeletorEmpresa(state.cache.empresasSeletor || [])}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar (planejada)</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarOrdem(ordem) {
+    abrirModal(`
+      <h3>Cancelar ordem ${escapeHtml(ordem.numero)}</h3>
+      <form data-form="cancelar-ordem" data-id="${ordem.id}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Cancelar ordem</button>
+        </div>
+      </form>`);
+  }
+
+  async function modalRegistrarConsumo(ordem) {
+    // Só lotes aprovados (com ou sem ressalva) de um item que faça parte
+    // da composição desta fórmula podem ser consumidos — filtra no
+    // cliente por conveniência de UX; a garantia de verdade é sempre a
+    // validação do servidor em POST /consumir.
+    const itensDaComposicao = new Set(ordem.composicao_planejada.map((c) => c.item_id));
+    const todosLotes = await chamarApi("/lotes");
+    const disponiveis = todosLotes.filter(
+      (l) => itensDaComposicao.has(l.item_id) && (l.status === "aprovado" || l.status === "aprovado_com_ressalva")
+    );
+    const opcoes = disponiveis
+      .map((l) => `<option value="${l.id}">${escapeHtml(l.codigo_lote)} — ${escapeHtml(l.item_codigo)} (${l.quantidade} ${escapeHtml(l.unidade)} recebidos)</option>`)
+      .join("");
+    abrirModal(`
+      <h3>Registrar consumo — ${escapeHtml(ordem.numero)}</h3>
+      ${disponiveis.length === 0
+        ? '<p class="mensagem-erro">Nenhum lote aprovado disponível para os itens desta composição no momento.</p>'
+        : `<form data-form="registrar-consumo" data-id="${ordem.id}">
+             <div class="campo"><label>Lote</label><select name="lote_id" required>${opcoes}</select></div>
+             <div class="campo"><label>Quantidade consumida</label><input name="quantidade" type="number" step="any" required></div>
+             <div class="rodape-modal">
+               <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+               <button type="submit" class="botao">Registrar consumo</button>
+             </div>
+           </form>`}
+    `);
+  }
+
+  function modalConcluirOrdem(ordem) {
+    // Fase 50 — quando a ordem tem ao menos uma etapa cadastrada, a perda
+    // agregada é somada automaticamente a partir das etapas concluídas
+    // (ver "Etapas do processo" na tela de detalhe) — o backend REJEITA
+    // quantidade_perda/motivo_perda enviados aqui nesse caso, então nem
+    // mostra os campos, pra não sugerir algo que vai dar erro.
+    const temEtapas = (ordem.etapas || []).length > 0;
+    const etapasPendentes = (ordem.etapas || []).filter((e) => e.status !== "concluida");
+    abrirModal(`
+      <h3>Concluir ordem ${escapeHtml(ordem.numero)}</h3>
+      <p class="texto-suave">Isso gera o lote de ${escapeHtml(ordem.item_produzido_codigo)}, que nasce em
+      quarentena e precisará passar por análise e aprovação antes de poder ser usado ou vendido.</p>
+      ${
+        etapasPendentes.length
+          ? `<p class="mensagem-erro">Existem etapas ainda pendentes: ${etapasPendentes.map((e) => escapeHtml(e.nome)).join(", ")}.
+             Conclua todas as etapas (seção "Etapas do processo") antes de concluir a ordem.</p>`
+          : ""
+      }
+      <form data-form="concluir-ordem" data-id="${ordem.id}" data-tem-etapas="${temEtapas ? "1" : "0"}">
+        <div class="campo"><label>Quantidade realmente produzida</label>
+          <input name="quantidade_produzida" type="number" step="any" required value="${ordem.quantidade_planejada}">
+          <div class="dica">Planejado: ${ordem.quantidade_planejada} ${escapeHtml(ordem.unidade)}. Ajuste para o rendimento real, se diferente.</div>
+        </div>
+        ${
+          temEtapas
+            ? `<p class="dica">Esta ordem tem etapas cadastradas — a perda/refugo já foi apontada por etapa e é somada
+               automaticamente (não precisa informar de novo aqui).</p>`
+            : `<div class="campo"><label>Quantidade de perda/refugo (opcional)</label>
+                 <input name="quantidade_perda" type="number" step="any" min="0" value="0">
+                 <div class="dica">Material processado que não virou produto aprovável (evaporação, quebra, ajuste, etc.). Deixe 0 se não houve perda.</div>
+               </div>
+               <div class="campo"><label>Motivo da perda</label>
+                 <textarea name="motivo_perda" placeholder="Obrigatório apenas se houver quantidade de perda maior que zero."></textarea>
+               </div>`
+        }
+        <div class="campo"><label>Horas apontadas (opcional)</label>
+          <input name="horas_apontadas" type="number" step="any" min="0" placeholder="ex.: 4.5">
+          <div class="dica">Fase 30: quantas horas essa produção levou de verdade. Se a ordem estiver agendada
+          num centro de trabalho (APS) com custo/hora cadastrado, isso entra no Custo de Produção como mão de
+          obra/overhead. Deixe em branco se não for apontar agora.</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao" ${etapasPendentes.length ? "disabled" : ""}>Concluir e gerar lote</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Fase 50 — Apontamento de perda/refugo por ETAPA do processo ----
+  function seloEtapaOrdem(situacao) {
+    if (situacao === "concluida") return '<span class="selo ativo">Concluída</span>';
+    if (situacao === "em_andamento") return '<span class="selo amarelo">Em andamento</span>';
+    return '<span class="selo inativo">Pendente</span>';
+  }
+
+  // Fase 75 — `tipos` é o catálogo de tipos de etapa (Pesagem, Mistura...)
+  // já carregado antes de abrir este modal (ver "abrir-nova-etapa-ordem"),
+  // para oferecer um `<select>` em vez de só um campo de nome livre — sem
+  // perder a opção de nome livre de sempre (Fase 50), que continua abaixo
+  // do seletor como alternativa para quem não usa o catálogo.
+  function modalNovaEtapaOrdem(ordemId, tipos) {
+    const opcoesTipo = (tipos || [])
+      .filter((t) => t.status === "ativo")
+      .map((t) => `<option value="${t.id}">${escapeHtml(t.nome)}${t.unidade_valor ? ` (${escapeHtml(t.unidade_valor)})` : ""}</option>`)
+      .join("");
+    abrirModal(`
+      <h3>Nova etapa do processo</h3>
+      <p class="texto-suave">Escolha um tipo do catálogo (Pesagem, Granulação, Compressão, Encapsulamento,
+      Embalagem etc.) ou digite um nome livre — a numeração de sequência é automática se você não informar.</p>
+      <form data-form="criar-etapa-ordem" data-id="${ordemId}">
+        <div class="campo"><label>Tipo de etapa (opcional)</label>
+          <select name="tipo_etapa_id">
+            <option value="">— nenhum (usar nome livre abaixo) —</option>
+            ${opcoesTipo}
+          </select>
+        </div>
+        <div class="campo"><label>Nome da etapa</label>
+          <input name="nome" placeholder="Preenchido automaticamente se você escolher um tipo acima">
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Cadastrar etapa</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarEtapaOrdem(ordemId, etapa) {
+    abrirModal(`
+      <h3>Editar etapa</h3>
+      <form data-form="editar-etapa-ordem" data-id="${ordemId}" data-etapa-id="${etapa.id}">
+        <div class="campo"><label>Nome da etapa</label>
+          <input name="nome" required value="${escapeHtml(etapa.nome)}">
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalConcluirEtapaOrdem(ordemId, etapa) {
+    abrirModal(`
+      <h3>Concluir etapa "${escapeHtml(etapa.nome)}"</h3>
+      <p class="texto-suave">Uma vez concluída, esta etapa não pode ser editada nem apontada de novo.</p>
+      <form data-form="concluir-etapa-ordem" data-id="${ordemId}" data-etapa-id="${etapa.id}">
+        ${
+          etapa.tipo_unidade_valor
+            ? `<div class="campo"><label>Valor registrado (${escapeHtml(etapa.tipo_unidade_valor)})</label>
+                 <input name="valor_registrado" type="number" step="any" min="0">
+               </div>`
+            : ""
+        }
+        <div class="campo"><label>Quantidade de perda/refugo nesta etapa (opcional)</label>
+          <input name="quantidade_perda" type="number" step="any" min="0" value="0">
+          <div class="dica">Deixe 0 se esta etapa não teve perda.</div>
+        </div>
+        <div class="campo"><label>Motivo da perda</label>
+          <textarea name="motivo_perda" placeholder="Obrigatório apenas se houver quantidade de perda maior que zero."></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Concluir etapa</button>
+        </div>
+      </form>`);
+  }
+
+  function origemCustoLabel(origem) {
+    const mapa = {
+      lote: "custo do lote", media_item: "média do item", misto: "misto (lote + média)",
+      parcial: "parcial (alguns lotes sem custo)", indisponivel: "indisponível",
+    };
+    return mapa[origem] || origem;
+  }
+
+  async function renderOrdemDetalhe(ordemId) {
+    app.innerHTML = '<div class="carregando">Carregando ordem…</div>';
+    const ordem = await chamarApi(`/producao/ordens/${ordemId}`);
+
+    // Fase 13 — Custeio de Produção: dado financeiro sensível, só busca
+    // se o usuário tiver a permissão nova `custeio.visualizar` (que é
+    // independente de `producao.visualizar` de propósito — ver
+    // app/routes/custeio.py) e só depois que houver algum consumo
+    // registrado (antes disso não há nada a custear ainda).
+    let custoData = null;
+    if (temPermissao("custeio", "visualizar") && ordem.consumos.length > 0) {
+      try {
+        custoData = await chamarApi(`/custeio/ordens/${ordemId}`);
+      } catch (e) {
+        custoData = null;
+      }
+    }
+
+    // Fase 25 — APS: agendamento (centro de trabalho + janela de tempo)
+    // desta ordem, se houver. Buscar o agendamento não exige nenhuma
+    // permissão além de já poder ver a ordem (producao.visualizar); só a
+    // AÇÃO de agendar/reagendar/desagendar exige producao.agendar, e só
+    // quem pode ver a lista de centros de trabalho (centros_trabalho.
+    // visualizar) recebe o seletor para escolher um.
+    const agendamento = await chamarApi(`/aps/ordens/${ordemId}/agendamento`).catch(() => null);
+    const podeAgendar = temPermissao("producao", "agendar");
+    const podeVerCentros = temPermissao("centros_trabalho", "visualizar");
+    const centrosTrabalho = podeAgendar && podeVerCentros ? await chamarApi("/aps/centros-trabalho") : [];
+
+    const podeLiberar = temPermissao("producao", "liberar");
+    const podeApontar = temPermissao("producao", "apontar");
+    const podeCancelar = temPermissao("producao", "planejar");
+
+    // Fase 50 — Etapas do processo (recurso OPCIONAL): cadastro/edição só
+    // faz sentido enquanto a ordem ainda pode receber apontamento
+    // (liberada/em_producao — mesma janela em que dá pra "Registrar
+    // consumo"). O cartão inteiro só aparece se já houver etapa
+    // cadastrada OU se ainda for possível cadastrar uma agora — uma
+    // ordem concluída sem nenhuma etapa (a grande maioria) não mostra
+    // nada disso, exatamente como antes desta fase existir.
+    const etapas = ordem.etapas || [];
+    const ordemAceitaEtapas = ["liberada", "em_producao"].includes(ordem.status);
+    const etapasHtml =
+      etapas.length || (podeApontar && ordemAceitaEtapas)
+        ? `<div class="cartao">
+             <h3 style="margin-top:0;">Etapas do processo (opcional)</h3>
+             <p class="texto-suave" style="margin-top:-8px;">Detalhe a perda por etapa (pesagem, granulação,
+             compressão, embalagem etc.) em vez de um total único na conclusão. Cadastrando ao menos uma etapa,
+             a perda agregada da ordem passa a ser somada automaticamente a partir das etapas concluídas — e o
+             Custo com Perdas mostra a fatia do custo atribuível a cada uma.</p>
+             <table>
+               <thead><tr><th>#</th><th>Etapa</th><th>Situação</th><th>Valor apontado</th><th>Perda</th><th>Motivo</th><th>Ações</th></tr></thead>
+               <tbody>${
+                 etapas.length
+                   ? etapas.map((e) => `<tr>
+                       <td>${e.sequencia}</td>
+                       <td>${escapeHtml(e.nome)}</td>
+                       <td>${seloEtapaOrdem(e.situacao)}</td>
+                       <td>${e.valor_registrado !== null && e.valor_registrado !== undefined ? `${e.valor_registrado} ${escapeHtml(e.tipo_unidade_valor || "")}` : "—"}</td>
+                       <td>${e.status === "concluida" ? `${e.quantidade_perda} ${escapeHtml(ordem.unidade)}` : "—"}</td>
+                       <td class="texto-suave">${escapeHtml(e.motivo_perda || "—")}</td>
+                       <td>${
+                         e.status === "pendente" && podeApontar && ordemAceitaEtapas
+                           ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+                                ${
+                                  e.situacao === "pendente"
+                                    ? `<button class="botao secundario pequeno" data-acao="iniciar-etapa-ordem" data-id="${ordem.id}" data-etapa-id="${e.id}">Iniciar</button>`
+                                    : `<button class="botao secundario pequeno" data-acao="abrir-concluir-etapa-ordem" data-id="${ordem.id}" data-etapa-id="${e.id}">Concluir</button>`
+                                }
+                                <button class="botao secundario pequeno" data-acao="abrir-editar-etapa-ordem" data-id="${ordem.id}" data-etapa-id="${e.id}">Editar</button>
+                                <button class="botao perigo pequeno" data-acao="excluir-etapa-ordem" data-id="${ordem.id}" data-etapa-id="${e.id}">Excluir</button>
+                              </div>`
+                           : ""
+                       }</td>
+                     </tr>`).join("")
+                   : '<tr><td colspan="7" class="texto-suave">Nenhuma etapa cadastrada — a ordem continua no fluxo de perda agregada de sempre.</td></tr>'
+               }</tbody>
+             </table>
+             ${
+               podeApontar && ordemAceitaEtapas
+                 ? `<button class="botao secundario pequeno" style="margin-top:12px;" data-acao="abrir-nova-etapa-ordem" data-id="${ordem.id}">+ Nova etapa</button>`
+                 : ""
+             }
+           </div>`
+        : "";
+
+    const composicaoHtml = ordem.composicao_planejada
+      .map((c) => `<tr><td>${escapeHtml(c.codigo)} — ${escapeHtml(c.descricao)}</td><td>${c.quantidade_planejada} ${escapeHtml(c.unidade)}</td></tr>`)
+      .join("");
+
+    const consumosHtml = ordem.consumos.length
+      ? ordem.consumos.map((c) => `<tr>
+           <td class="mono"><a href="#/lotes/${c.lote_id}">${escapeHtml(c.codigo_lote)}</a></td>
+           <td>${escapeHtml(c.item_codigo)}</td><td>${c.quantidade} ${escapeHtml(c.unidade)}</td>
+           <td class="texto-suave">${fmtData(c.registrado_em)}</td>
+         </tr>`).join("")
+      : '<tr><td colspan="4" class="texto-suave">Nenhum consumo registrado ainda.</td></tr>';
+
+    // Fase 12 — reserva real de material feita automaticamente ao liberar a
+    // ordem (via FEFO). Mostra de onde vem o material que essa ordem já
+    // garantiu, para deixar visível ao usuário que outros módulos
+    // (Comercial, Estoque) não podem mais usar esse saldo enquanto a ordem
+    // estiver liberada/em produção.
+    const reservasHtml = (ordem.reservas_material || []).length
+      ? ordem.reservas_material.map((r) => `<tr>
+           <td class="mono"><a href="#/lotes/${r.lote_id}">${escapeHtml(r.codigo_lote)}</a></td>
+           <td>${escapeHtml(r.item_codigo)} — ${escapeHtml(r.item_descricao)}</td>
+           <td>${r.quantidade}</td>
+           <td class="texto-suave">${fmtData(r.criado_em)}</td>
+         </tr>`).join("")
+      : '<tr><td colspan="4" class="texto-suave">Nenhuma reserva de material (ordem ainda planejada, ou já concluída/cancelada).</td></tr>';
+    const reservasSecaoHtml = (ordem.reservas_material || []).length || ordem.status === "liberada" || ordem.status === "em_producao"
+      ? `<div class="cartao">
+           <h3 style="margin-top:0;">Material reservado (garantido via FEFO ao liberar)</h3>
+           <p class="texto-suave" style="margin-top:-8px;">Esse saldo já está comprometido com esta ordem e não pode ser vendido pelo Comercial nem reservado por outra ordem de produção enquanto ela estiver liberada/em produção.</p>
+           <table><thead><tr><th>Lote</th><th>Item</th><th>Quantidade</th><th>Reservado em</th></tr></thead><tbody>${reservasHtml}</tbody></table>
+         </div>`
+      : "";
+
+    const loteProduzidoHtml = ordem.lote_produzido
+      ? `<div class="subcartao">
+           <p><strong>Lote produzido:</strong> <a href="#/lotes/${ordem.lote_produzido.id}" class="mono">${escapeHtml(ordem.lote_produzido.codigo_lote)}</a> ${seloLote(ordem.lote_produzido.status)}</p>
+           <p class="texto-suave">${ordem.lote_produzido.quantidade} ${escapeHtml(ordem.lote_produzido.unidade)} — entrou em quarentena automaticamente, precisa do fluxo de qualidade para ser liberado.</p>
+         </div>`
+      : "";
+
+    // Fase 13 — Custeio de Produção: duas abas — "Custo de Produção" (custo
+    // real de tudo que foi consumido nesta ordem, insumo a insumo, incluindo
+    // embalagem como rótulo/tampa/sílica quando fazem parte da fórmula) e
+    // "Custo com Perdas" (só existe depois da ordem concluída — a fatia
+    // desse custo atribuível à perda/refugo já calculada pela Fase 9).
+    let custoHtml = "";
+    if (custoData) {
+      const itensProducaoHtml = custoData.itens.length
+        ? custoData.itens.map((i) => `<tr>
+            <td>${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</td>
+            <td>${i.quantidade_consumida} ${escapeHtml(i.unidade)}</td>
+            <td>R$ ${Number(i.custo_total).toFixed(2)}</td>
+            <td class="texto-suave">${escapeHtml(origemCustoLabel(i.origem_custo))}</td>
+          </tr>`).join("")
+        : '<tr><td colspan="4" class="texto-suave">Nenhum consumo registrado ainda.</td></tr>';
+
+      const perdasHtml = custoData.perdas
+        ? `<div class="grade-kpi" style="margin-bottom:12px;">
+             ${kpi("Percentual de perda", fmtPct(custoData.perdas.percentual_perda))}
+             ${kpi("Custo total da perda", `R$ ${Number(custoData.perdas.custo_total_perda).toFixed(2)}`)}
+             ${kpi("Custo da produção boa", `R$ ${Number(custoData.perdas.custo_total_producao_boa).toFixed(2)}`)}
+           </div>
+           <table><thead><tr><th>Item</th><th>Custo total</th><th>Custo da perda</th><th>Custo da produção boa</th></tr></thead>
+             <tbody>${custoData.perdas.itens.map((i) => `<tr>
+               <td>${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</td>
+               <td>R$ ${Number(i.custo_total_item).toFixed(2)}</td>
+               <td>R$ ${Number(i.custo_perda).toFixed(2)}</td>
+               <td>R$ ${Number(i.custo_producao_boa).toFixed(2)}</td>
+             </tr>`).join("")}</tbody>
+           </table>
+           <p class="texto-suave" style="margin-top:8px;">Alocação proporcional ao percentual de perda já calculado na conclusão da ordem — dentro de cada etapa (se houver), o custo ainda vem desse mesmo rateio entre insumos; não tenta adivinhar em que etapa do processo cada INSUMO específico foi perdido (ex.: rótulo perdido antes ou depois de embalar).</p>
+           ${
+             (custoData.perdas.por_etapa || []).length
+               ? `<h4 style="margin-bottom:0;margin-top:16px;">Fatia do custo da perda por etapa (Fase 50)</h4>
+                  <table><thead><tr><th>#</th><th>Etapa</th><th>Perda</th><th>% da perda total</th><th>Custo estimado</th></tr></thead>
+                    <tbody>${custoData.perdas.por_etapa.map((e) => `<tr>
+                      <td>${e.sequencia}</td>
+                      <td>${escapeHtml(e.nome)}</td>
+                      <td>${e.quantidade_perda} ${escapeHtml(ordem.unidade)}</td>
+                      <td>${fmtPct(e.percentual_da_perda_total)}</td>
+                      <td>R$ ${Number(e.custo_perda_estimado).toFixed(2)}</td>
+                    </tr>`).join("")}</tbody>
+                  </table>
+                  <p class="dica" style="margin-top:8px;">Reparte o MESMO custo total da perda acima entre as etapas, proporcionalmente à quantidade que cada uma apontou — não é o custo real de cada insumo perdido naquele ponto específico do processo (a composição/BOM não sabe em que etapa cada insumo entra).</p>`
+               : ""
+           }`
+        : '<p class="texto-suave">Esta aba só existe depois que a ordem for concluída — a Fase 9 calcula o percentual de perda na conclusão.</p>';
+
+      // Fase 30 — Mão de Obra e Overhead: bloco à parte dentro da mesma
+      // aba "Custo de Produção", nunca mistura com o custo de material
+      // acima (custo_total_producao continua só material, ver comentário
+      // em app/routes/custeio.py). Mostra o que faltou quando não está
+      // disponível, na mesma filosofia de transparência já usada para
+      // custo de material sem preço informado.
+      const mdo = custoData.mao_de_obra_overhead;
+      const maoDeObraHtml = mdo.disponivel
+        ? `<div class="grade-kpi" style="margin:12px 0;">
+             ${kpi("Centro de trabalho", escapeHtml(mdo.centro_trabalho_nome))}
+             ${kpi("Horas apontadas", mdo.horas_apontadas)}
+             ${kpi("Custo de mão de obra", mdo.custo_mao_de_obra === null ? "—" : `R$ ${Number(mdo.custo_mao_de_obra).toFixed(2)}`)}
+             ${kpi("Custo de overhead", mdo.custo_overhead === null ? "—" : `R$ ${Number(mdo.custo_overhead).toFixed(2)}`)}
+           </div>`
+        : `<p class="texto-suave" style="margin:12px 0;">Mão de obra/overhead indisponível: ${escapeHtml(mdo.motivo_indisponivel)}</p>`;
+
+      custoHtml = `
+       <div class="cartao">
+         <h3 style="margin-top:0;">Custo de Produção</h3>
+         ${custoData.custo_incompleto ? `<p class="mensagem-erro">Custo incompleto: ${custoData.itens_sem_custo_disponivel.map(escapeHtml).join(", ")} não ${custoData.itens_sem_custo_disponivel.length > 1 ? "têm" : "tem"} custo de compra informado ainda — os números abaixo estão subestimados.</p>` : ""}
+         <div class="barra-acoes" style="margin-bottom:12px;">
+           <div style="display:flex;gap:8px;">
+             <button type="button" class="botao secundario pequeno aba-custo-botao ativo" data-acao="mostrar-aba-custo" data-alvo="producao">Custo de Produção</button>
+             <button type="button" class="botao secundario pequeno aba-custo-botao" data-acao="mostrar-aba-custo" data-alvo="perdas">Custo com Perdas</button>
+           </div>
+           <span></span>
+         </div>
+         <div class="aba-custo-conteudo" data-aba="producao">
+           <table><thead><tr><th>Item</th><th>Quantidade consumida</th><th>Custo total</th><th>Origem do custo</th></tr></thead>
+             <tbody>${itensProducaoHtml}</tbody>
+           </table>
+           <p style="text-align:right;margin-top:8px;"><strong>Custo de material: R$ ${Number(custoData.custo_total_producao).toFixed(2)}</strong></p>
+           <h4 style="margin-bottom:0;">Mão de obra e overhead (Fase 30)</h4>
+           ${maoDeObraHtml}
+           <p style="text-align:right;margin-top:8px;border-top:1px solid var(--borda);padding-top:8px;"><strong>Custo total (material + mão de obra + overhead): R$ ${Number(custoData.custo_total_producao_com_mao_de_obra).toFixed(2)}</strong></p>
+         </div>
+         <div class="aba-custo-conteudo" data-aba="perdas" style="display:none;">
+           ${perdasHtml}
+         </div>
+       </div>`;
+    }
+
+    // Fase 25 — APS: cartão de agendamento. Só ordens planejada/liberada/
+    // em_producao podem ser agendadas (mesma regra do backend, replicada
+    // aqui só para decidir o que mostrar — o backend sempre valida de
+    // novo, então não há risco de burlar a regra escondendo o botão).
+    const ordemAgendavel = ["planejada", "liberada", "em_producao"].includes(ordem.status);
+    const agendamentoHtml = (agendamento || podeAgendar)
+      ? `<div class="cartao">
+           <h3 style="margin-top:0;">Agendamento (APS)</h3>
+           ${
+             agendamento
+               ? `<div class="linha-detalhe">
+                    <div><span class="rotulo">Centro de trabalho</span><br>${escapeHtml(agendamento.centro_trabalho_nome)}</div>
+                    <div><span class="rotulo">Início planejado</span><br>${fmtData(agendamento.inicio_planejado)}</div>
+                    <div><span class="rotulo">Fim planejado</span><br>${fmtData(agendamento.fim_planejado)}</div>
+                  </div>`
+               : `<p class="texto-suave">Esta ordem ainda não tem centro de trabalho nem janela de tempo agendados.</p>`
+           }
+           ${
+             podeAgendar && podeVerCentros && ordemAgendavel
+               ? `<div class="barra-acoes" style="margin-top:${agendamento ? "12px" : "0"};">
+                    <span></span>
+                    <div style="display:flex;gap:8px;">
+                      <button class="botao secundario pequeno" data-acao="abrir-agendar-ordem" data-id="${ordem.id}">${agendamento ? "Reagendar" : "Agendar"}</button>
+                      ${agendamento ? `<button class="botao perigo pequeno" data-acao="desagendar-ordem" data-id="${ordem.id}">Desagendar</button>` : ""}
+                    </div>
+                  </div>`
+               : podeAgendar && !podeVerCentros
+               ? `<p class="dica" style="margin-top:12px;">Você tem permissão para agendar, mas não para ver centros de trabalho (\`centros_trabalho.visualizar\`) — fale com um administrador.</p>`
+               : ""
+           }
+         </div>`
+      : "";
+
+    // Fase 9 — Apontamento de perdas/refugo: só faz sentido mostrar depois
+    // que a ordem foi concluída (percentual_perda vem null antes disso).
+    const perdaHtml = ordem.percentual_perda !== null
+      ? `<div class="cartao">
+           <h3 style="margin-top:0;">Perda/refugo e rendimento</h3>
+           <div class="grade-kpi">
+             ${kpi("Quantidade produzida", `${ordem.quantidade_produzida} ${escapeHtml(ordem.unidade)}`)}
+             ${kpi("Quantidade de perda/refugo", `${ordem.quantidade_perda} ${escapeHtml(ordem.unidade)}`)}
+             ${kpi("Rendimento sobre o planejado", fmtPct(ordem.percentual_rendimento_planejado))}
+             ${kpi("Percentual de perda", fmtPct(ordem.percentual_perda))}
+           </div>
+           ${ordem.motivo_perda ? `<p class="texto-suave" style="margin-top:12px;"><strong>Motivo da perda:</strong> ${escapeHtml(ordem.motivo_perda)}</p>` : ""}
+           ${(ordem.etapas || []).length ? `<p class="dica" style="margin-top:12px;">Fase 50: esta perda foi apurada por etapa — ver o detalhe de cada uma em "Etapas do processo" acima.</p>` : ""}
+         </div>`
+      : "";
+
+    renderShell(
+      `<a class="link-voltar" href="#/producao">← Voltar para Ordens de Produção</a>
+       <h2>${escapeHtml(ordem.numero)}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><span class="rotulo">Status</span><br>${seloOrdem(ordem.status)}</div>
+           <div><span class="rotulo">Produto</span><br>${escapeHtml(ordem.item_produzido_codigo)} — ${escapeHtml(ordem.item_produzido_descricao)}</div>
+           <div><span class="rotulo">Quantidade planejada</span><br>${ordem.quantidade_planejada} ${escapeHtml(ordem.unidade)}</div>
+         </div>
+         ${ordem.motivo_cancelamento ? `<p class="mensagem-erro">Cancelada: ${escapeHtml(ordem.motivo_cancelamento)}</p>` : ""}
+         <div class="barra-acoes">
+           <span></span>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             ${ordem.status === "planejada" && podeLiberar ? `<button class="botao" data-acao="liberar-ordem" data-id="${ordem.id}">Liberar</button>` : ""}
+             ${(ordem.status === "liberada" || ordem.status === "em_producao") && podeApontar ? `<button class="botao" data-acao="registrar-consumo" data-id="${ordem.id}">Registrar consumo</button>` : ""}
+             ${ordem.status === "em_producao" && podeApontar ? `<button class="botao" data-acao="concluir-ordem" data-id="${ordem.id}">Concluir ordem</button>` : ""}
+             ${ordem.status === "planejada" && podeCancelar ? `<button class="botao secundario" data-acao="cancelar-ordem" data-id="${ordem.id}">Cancelar</button>` : ""}
+           </div>
+         </div>
+       </div>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Composição planejada</h3>
+         <table><thead><tr><th>Item</th><th>Quantidade</th></tr></thead><tbody>${composicaoHtml}</tbody></table>
+       </div>
+       ${reservasSecaoHtml}
+       <div class="cartao">
+         <h3 style="margin-top:0;">Consumo registrado (genealogia)</h3>
+         <table><thead><tr><th>Lote</th><th>Item</th><th>Quantidade</th><th>Quando</th></tr></thead><tbody>${consumosHtml}</tbody></table>
+         ${loteProduzidoHtml}
+       </div>
+       ${agendamentoHtml}
+       ${etapasHtml}
+       ${perdaHtml}
+       ${custoHtml}`,
+      "producao"
+    );
+  }
+
+  // =======================================================================
+  // APS — Sequenciamento e Capacidade Finita — Fase 25
+  // =======================================================================
+  // Duas partes: cadastro de Centros de Trabalho (tela própria, com seu
+  // próprio item de menu) e o agendamento em si, que vive dentro da tela
+  // de detalhe de uma Ordem de Produção (acima) — não é uma tela separada,
+  // porque agendar só faz sentido no contexto de uma ordem específica.
+
+  function seloCentroTrabalho(status) {
+    return `<span class="selo ${status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(status)}</span>`;
+  }
+
+  async function renderCentrosTrabalho() {
+    app.innerHTML = '<div class="carregando">Carregando centros de trabalho…</div>';
+    const centros = await chamarApi("/aps/centros-trabalho");
+    const podeCadastrar = temPermissao("centros_trabalho", "cadastrar");
+    const podeEditar = temPermissao("centros_trabalho", "editar");
+
+    const linhas = centros
+      .map(
+        (c) => `<tr>
+          <td>${escapeHtml(c.nome)}</td>
+          <td>${escapeHtml(c.descricao || "—")}</td>
+          <td>${c.capacidade_paralela}</td>
+          <td>${
+            c.custo_hora_mao_de_obra === null && c.custo_hora_overhead === null
+              ? '<span class="texto-suave">não cadastrado</span>'
+              : `MdO: ${c.custo_hora_mao_de_obra === null ? "—" : fmtMoeda(c.custo_hora_mao_de_obra)}<br>OH: ${c.custo_hora_overhead === null ? "—" : fmtMoeda(c.custo_hora_overhead)}`
+          }</td>
+          <td>${seloCentroTrabalho(c.status)}</td>
+          <td>${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-centro-trabalho" data-id="${c.id}">Editar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Centros de Trabalho (APS)</h2>
+       <div class="cartao">
+         <p class="texto-suave">Recursos produtivos (linhas, máquinas, salas) contra os quais ordens de
+         produção podem ser agendadas numa janela de tempo. A "capacidade paralela" é quantas ordens esse
+         centro consegue rodar ao mesmo tempo — o sistema recusa um agendamento que estouraria esse limite
+         no período pedido. O custo/hora (mão de obra "MdO" e overhead "OH", Fase 30) é opcional e alimenta
+         o Custo de Produção quando uma ordem é agendada aqui e tem horas apontadas na conclusão.</p>
+         <div class="barra-acoes">
+           <span class="texto-suave">${centros.length} centro(s) de trabalho</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-centro-trabalho">+ Novo centro de trabalho</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>Descrição</th><th>Capacidade paralela</th><th>Custo/hora</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum centro de trabalho cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "centros-trabalho"
+    );
+  }
+
+  function modalNovoCentroTrabalho() {
+    abrirModal(`
+      <h3>Novo centro de trabalho</h3>
+      <form data-form="criar-centro-trabalho">
+        <div class="campo"><label>Nome</label><input name="nome" required placeholder="ex.: Linha de Encapsulamento 1"></div>
+        <div class="campo"><label>Descrição</label><textarea name="descricao"></textarea></div>
+        <div class="campo">
+          <label>Capacidade paralela</label>
+          <input name="capacidade_paralela" type="number" min="1" step="1" value="1" required>
+          <p class="dica">Quantas ordens de produção esse centro consegue rodar ao mesmo tempo, sem conflito.</p>
+        </div>
+        <div class="linha-detalhe">
+          <div class="campo" style="flex:1;">
+            <label>Custo/hora de mão de obra (opcional)</label>
+            <input name="custo_hora_mao_de_obra" type="number" min="0" step="0.01" placeholder="ex.: 45.00">
+          </div>
+          <div class="campo" style="flex:1;">
+            <label>Custo/hora de overhead (opcional)</label>
+            <input name="custo_hora_overhead" type="number" min="0" step="0.01" placeholder="ex.: 12.50">
+          </div>
+        </div>
+        <p class="dica">Fase 30: se as duas ficarem em branco, este centro continua funcionando normalmente para agendamento — só não vai contribuir com custo de mão de obra/overhead no Custo de Produção.</p>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarCentroTrabalho(c) {
+    abrirModal(`
+      <h3>Editar ${escapeHtml(c.nome)}</h3>
+      <form data-form="editar-centro-trabalho" data-id="${c.id}">
+        <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(c.nome)}" required></div>
+        <div class="campo"><label>Descrição</label><textarea name="descricao">${escapeHtml(c.descricao || "")}</textarea></div>
+        <div class="campo">
+          <label>Capacidade paralela</label>
+          <input name="capacidade_paralela" type="number" min="1" step="1" value="${c.capacidade_paralela}" required>
+        </div>
+        <div class="linha-detalhe">
+          <div class="campo" style="flex:1;">
+            <label>Custo/hora de mão de obra (opcional)</label>
+            <input name="custo_hora_mao_de_obra" type="number" min="0" step="0.01" value="${c.custo_hora_mao_de_obra === null || c.custo_hora_mao_de_obra === undefined ? "" : c.custo_hora_mao_de_obra}">
+          </div>
+          <div class="campo" style="flex:1;">
+            <label>Custo/hora de overhead (opcional)</label>
+            <input name="custo_hora_overhead" type="number" min="0" step="0.01" value="${c.custo_hora_overhead === null || c.custo_hora_overhead === undefined ? "" : c.custo_hora_overhead}">
+          </div>
+        </div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${c.status === "ativo" ? "selected" : ""}>Ativo</option>
+            <option value="inativo" ${c.status === "inativo" ? "selected" : ""}>Inativo (não aceita novos agendamentos)</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalAgendarOrdem(ordem, centros, agendamentoAtual) {
+    if (!centros.length) {
+      definirFlash("erro", "Cadastre pelo menos um centro de trabalho ativo antes de agendar uma ordem.");
+      fecharModais();
+      return renderOrdemDetalhe(ordem.id);
+    }
+    const opcoesCentro = centros
+      .map(
+        (c) =>
+          `<option value="${c.id}" ${agendamentoAtual && agendamentoAtual.centro_trabalho_id === c.id ? "selected" : ""} ${c.status !== "ativo" ? "disabled" : ""}>
+             ${escapeHtml(c.nome)} (capacidade ${c.capacidade_paralela})${c.status !== "ativo" ? " — inativo" : ""}
+           </option>`
+      )
+      .join("");
+    abrirModal(`
+      <h3>${agendamentoAtual ? "Reagendar" : "Agendar"} ${escapeHtml(ordem.numero)}</h3>
+      <form data-form="agendar-ordem" data-id="${ordem.id}">
+        <div class="campo"><label>Centro de trabalho</label><select name="centro_trabalho_id" required>${opcoesCentro}</select></div>
+        <div class="linha-detalhe">
+          <div class="campo" style="flex:1;"><label>Início planejado</label>
+            <input name="inicio_planejado" type="datetime-local" value="${agendamentoAtual ? escapeHtml(agendamentoAtual.inicio_planejado.slice(0, 16)) : ""}" required>
+          </div>
+          <div class="campo" style="flex:1;"><label>Fim planejado</label>
+            <input name="fim_planejado" type="datetime-local" value="${agendamentoAtual ? escapeHtml(agendamentoAtual.fim_planejado.slice(0, 16)) : ""}" required>
+          </div>
+        </div>
+        <p class="dica">Se o centro escolhido já estiver com a capacidade paralela esgotada nesse período, o
+        sistema recusa o agendamento e mostra com quais outras ordens ele conflita.</p>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">${agendamentoAtual ? "Salvar reagendamento" : "Agendar"}</button>
+        </div>
+      </form>`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Agenda visual (calendário/Gantt) — Fase 28
+  // -----------------------------------------------------------------------
+  // A Fase 25 entregou agendar uma ordem por vez, dentro do detalhe da
+  // própria ordem — útil para AGIR, mas ruim para ENXERGAR: para saber o
+  // que um centro de trabalho tem programado numa semana, era preciso
+  // abrir ordem por ordem. Esta tela cobre essa lacuna com uma visão
+  // consolidada tipo calendário — uma linha por centro de trabalho, uma
+  // coluna por dia da semana, e uma barra por agendamento que toca aquele
+  // dia. 100% em cima do endpoint `GET /aps/agenda` que a Fase 25 já
+  // deixou pronto (filtra por centro e por período) — nenhuma rota nova,
+  // nenhuma tabela nova, só a tela que faltava.
+  //
+  // Simplificação deliberada: um agendamento que atravessa mais de um dia
+  // aparece REPETIDO em cada dia que ele toca (em vez de uma única barra
+  // "esticada" ocupando várias colunas) — mais simples de implementar
+  // com uma grade CSS comum, sem precisar calcular a largura de uma barra
+  // que varia conforme o texto de cada dia. Já mostra o horário de
+  // início/fim completo dentro da barra, então a informação não se perde,
+  // só a barra em si não é "contínua" visualmente entre os dias.
+
+  function _inicioDaSemana(data) {
+    // Segunda-feira como primeiro dia da semana (convenção usada no
+    // resto do sistema — ver Fase 15/20, que também trabalham por
+    // período). `data` já deve estar zerada em horas/minutos/segundos.
+    const diaSemana = data.getDay(); // 0 = domingo
+    const deslocamento = diaSemana === 0 ? -6 : 1 - diaSemana;
+    const inicio = new Date(data);
+    inicio.setDate(data.getDate() + deslocamento);
+    return inicio;
+  }
+
+  function _formatarDataYMD(data) {
+    return `${data.getFullYear()}-${String(data.getMonth() + 1).padStart(2, "0")}-${String(data.getDate()).padStart(2, "0")}`;
+  }
+
+  function _formatarHora(isoOuNulo) {
+    if (!isoOuNulo) return "";
+    return isoOuNulo.slice(11, 16);
+  }
+
+  const CORES_AGENDA_POR_STATUS = {
+    planejada: "inativo", liberada: "amarelo", em_producao: "azul", concluida: "ativo", cancelada: "bloqueado",
+  };
+
+  async function renderApsAgenda(opcoes) {
+    opcoes = opcoes || {};
+    app.innerHTML = '<div class="carregando">Carregando agenda…</div>';
+
+    const hoje = new Date();
+    hoje.setHours(0, 0, 0, 0);
+    const dataBase = opcoes.dataBase ? new Date(opcoes.dataBase + "T00:00:00") : hoje;
+    const inicioSemana = _inicioDaSemana(dataBase);
+    const diasDaSemana = Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(inicioSemana);
+      d.setDate(inicioSemana.getDate() + i);
+      return d;
+    });
+    const inicioIso = `${_formatarDataYMD(diasDaSemana[0])}T00:00:00`;
+    const fimIso = `${_formatarDataYMD(diasDaSemana[6])}T23:59:59`;
+
+    const centroFiltroId = opcoes.centroId || "";
+
+    const [centros, agenda] = await Promise.all([
+      chamarApi("/aps/centros-trabalho"),
+      chamarApi(
+        `/aps/agenda?inicio=${encodeURIComponent(inicioIso)}&fim=${encodeURIComponent(fimIso)}` +
+          (centroFiltroId ? `&centro_trabalho_id=${centroFiltroId}` : "")
+      ),
+    ]);
+
+    const centrosParaMostrar = centroFiltroId
+      ? centros.filter((c) => String(c.id) === String(centroFiltroId))
+      : centros;
+
+    const DIAS_LABEL = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"];
+    const cabecalhoDias = diasDaSemana
+      .map((d, i) => {
+        const ehHoje = _formatarDataYMD(d) === _formatarDataYMD(hoje);
+        return `<div class="aps-agenda-dia-cabecalho ${ehHoje ? "aps-agenda-hoje" : ""}">
+          <strong>${DIAS_LABEL[i]}</strong><span class="texto-suave">${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}</span>
+        </div>`;
+      })
+      .join("");
+
+    const linhasCentros = centrosParaMostrar
+      .map((centro) => {
+        const colunasDias = diasDaSemana
+          .map((dia) => {
+            const diaYMD = _formatarDataYMD(dia);
+            const doDia = agenda.filter(
+              (a) =>
+                a.centro_trabalho_id === centro.id &&
+                a.inicio_planejado.slice(0, 10) <= diaYMD &&
+                a.fim_planejado.slice(0, 10) >= diaYMD
+            );
+            const barras = doDia
+              .map(
+                (a) => `<a href="#/producao/${a.ordem_producao_id}" class="aps-agenda-barra selo ${CORES_AGENDA_POR_STATUS[a.ordem_status] || "inativo"}"
+                  title="${escapeHtml(a.ordem_numero)} — ${escapeHtml(a.item_codigo)} — ${escapeHtml(a.item_descricao)} (${_formatarHora(a.inicio_planejado)}–${_formatarHora(a.fim_planejado)})">
+                  <strong>${escapeHtml(a.ordem_numero)}</strong><br>${escapeHtml(a.item_codigo)}<br>${_formatarHora(a.inicio_planejado)}–${_formatarHora(a.fim_planejado)}
+                </a>`
+              )
+              .join("");
+            return `<div class="aps-agenda-dia-celula">${barras}</div>`;
+          })
+          .join("");
+        return `<div class="aps-agenda-linha">
+          <div class="aps-agenda-nome-centro">
+            ${escapeHtml(centro.nome)}
+            ${centro.status !== "ativo" ? '<span class="selo inativo">inativo</span>' : ""}
+            <span class="texto-suave">capacidade ${centro.capacidade_paralela}</span>
+          </div>
+          <div class="aps-agenda-dias-grade">${colunasDias}</div>
+        </div>`;
+      })
+      .join("");
+
+    const opcoesCentro = centros
+      .map((c) => `<option value="${c.id}" ${String(c.id) === String(centroFiltroId) ? "selected" : ""}>${escapeHtml(c.nome)}</option>`)
+      .join("");
+
+    renderShell(
+      `<h2>Agenda (APS)</h2>
+       <div class="cartao">
+         <p class="texto-suave">Visão consolidada de tudo que está agendado, por centro de trabalho, ao longo
+         da semana — cada barra é uma ordem de produção agendada (Fase 25); clique numa barra para abrir a
+         ordem. Um agendamento que atravessa mais de um dia aparece em cada dia que ele toca.</p>
+         <div class="barra-acoes">
+           <div class="linha-detalhe">
+             <button class="botao secundario pequeno" data-acao="aps-agenda-semana-anterior" data-data="${_formatarDataYMD(inicioSemana)}" data-centro="${centroFiltroId}">◀ Semana anterior</button>
+             <button class="botao secundario pequeno" data-acao="aps-agenda-hoje" data-centro="${centroFiltroId}">Hoje</button>
+             <button class="botao secundario pequeno" data-acao="aps-agenda-proxima-semana" data-data="${_formatarDataYMD(inicioSemana)}" data-centro="${centroFiltroId}">Próxima semana ▶</button>
+           </div>
+           <span class="texto-suave">${_formatarDataYMD(diasDaSemana[0])} a ${_formatarDataYMD(diasDaSemana[6])}</span>
+           <form data-form="filtrar-agenda-aps" data-data="${_formatarDataYMD(inicioSemana)}" style="display:flex;gap:8px;">
+             <select name="centro_id">
+               <option value="">Todos os centros de trabalho</option>
+               ${opcoesCentro}
+             </select>
+             <button class="botao secundario pequeno" type="submit">Filtrar</button>
+           </form>
+         </div>
+         <div class="aps-agenda">
+           <div class="aps-agenda-linha aps-agenda-cabecalho">
+             <div class="aps-agenda-nome-centro"></div>
+             <div class="aps-agenda-dias-grade">${cabecalhoDias}</div>
+           </div>
+           ${linhasCentros || '<p class="texto-suave">Nenhum centro de trabalho para mostrar.</p>'}
+         </div>
+       </div>`,
+      "aps-agenda"
+    );
+  }
+
+  // =======================================================================
+  // Fase 75 — Etapas de Processo Configuráveis (catálogo de tipos) +
+  // Painel de Chão de Fábrica em Tempo Real
+  // =======================================================================
+  // Catálogo reaproveitável de tipos de etapa (Pesagem, Mistura, etc.),
+  // usado ao cadastrar uma etapa concreta dentro de uma Ordem de Produção
+  // (ver `modalNovaEtapaOrdem` acima, já atualizada nesta fase para
+  // oferecer um `<select>` com este catálogo em vez de só um campo de
+  // texto livre) e exibido pelo Painel de Chão de Fábrica em Tempo Real
+  // logo abaixo. Mesmo padrão de tela de cadastro simples já usado por
+  // Centros de Trabalho (Fase 25) acima — lista + modal de novo/editar.
+
+  function seloTipoEtapa(status) {
+    return `<span class="selo ${status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(status)}</span>`;
+  }
+
+  async function renderTiposEtapaProducao() {
+    app.innerHTML = '<div class="carregando">Carregando tipos de etapa…</div>';
+    const tipos = await chamarApi("/producao/tipos-etapa");
+    const podeConfigurar = temPermissao("producao", "configurar_etapas");
+
+    const linhas = tipos
+      .map(
+        (t) => `<tr>
+          <td>${t.ordem_padrao}</td>
+          <td>${escapeHtml(t.nome)}</td>
+          <td>${t.unidade_valor ? escapeHtml(t.unidade_valor) : '<span class="texto-suave">— (só tempo, sem valor numérico)</span>'}</td>
+          <td>${seloTipoEtapa(t.status)}</td>
+          <td>${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="editar-tipo-etapa" data-id="${t.id}">Editar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Tipos de Etapa do Processo Produtivo</h2>
+       <div class="cartao">
+         <p class="texto-suave">Catálogo reaproveitável usado ao cadastrar uma etapa dentro de uma Ordem de
+         Produção (ex.: Pesagem, Mistura, Granulação) — pensando numa fábrica "4.0", cada tipo pode ter uma
+         <strong>unidade de valor</strong> (ex.: "kg" para Pesagem), usada para registrar o valor apontado ao
+         concluir a etapa; tipos sem unidade (ex.: Mistura) só têm o TEMPO calculado automaticamente entre
+         iniciar e concluir. Um tipo nunca é excluído de verdade (etapas antigas continuam referenciando o
+         nome) — só marcado como inativo, o que some das opções ao cadastrar uma etapa NOVA.</p>
+         <div class="barra-acoes">
+           <span class="texto-suave">${tipos.length} tipo(s) de etapa</span>
+           ${podeConfigurar ? `<button class="botao" data-acao="novo-tipo-etapa">+ Novo tipo de etapa</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Ordem</th><th>Nome</th><th>Unidade de valor</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhum tipo de etapa cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "tipos-etapa-producao"
+    );
+  }
+
+  function modalNovoTipoEtapa() {
+    abrirModal(`
+      <h3>Novo tipo de etapa</h3>
+      <form data-form="criar-tipo-etapa">
+        <div class="campo"><label>Nome</label><input name="nome" required placeholder="ex.: Peneiração"></div>
+        <div class="campo"><label>Unidade de valor (opcional)</label>
+          <input name="unidade_valor" placeholder="ex.: kg, litros, unidades">
+          <p class="dica">Deixe em branco se este tipo de etapa só precisa medir TEMPO (ex.: Mistura) — o
+          tempo é sempre calculado automaticamente (concluir menos iniciar), nunca precisa de unidade.</p>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarTipoEtapa(t) {
+    abrirModal(`
+      <h3>Editar ${escapeHtml(t.nome)}</h3>
+      <form data-form="editar-tipo-etapa" data-id="${t.id}">
+        <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(t.nome)}" required></div>
+        <div class="campo"><label>Unidade de valor (opcional)</label>
+          <input name="unidade_valor" value="${escapeHtml(t.unidade_valor || "")}" placeholder="ex.: kg, litros, unidades">
+        </div>
+        <div class="campo"><label>Ordem padrão</label>
+          <input name="ordem_padrao" type="number" step="1" value="${t.ordem_padrao}">
+        </div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${t.status === "ativo" ? "selected" : ""}>Ativo</option>
+            <option value="inativo" ${t.status === "inativo" ? "selected" : ""}>Inativo (some das opções ao cadastrar etapa nova)</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  // -----------------------------------------------------------------------
+  // Painel de Chão de Fábrica em Tempo Real
+  // -----------------------------------------------------------------------
+  // Pedido do cliente: um painel que atualiza sozinho, mostrando o que
+  // está acontecendo AGORA em cada setor — inclusive Pedidos (venda e
+  // compra) — e que cada tablet do chão de fábrica usa para apontar
+  // início/fim de cada etapa ao vivo, sem precisar entrar na ordem
+  // inteira. Por isso os botões "Iniciar"/"Concluir" aparecem direto
+  // aqui, com alvo de toque grande (`.botao-tablet`, ver styles.css),
+  // além de continuarem disponíveis na tela de detalhe da ordem (Fase 50).
+  //
+  // Atualização automática por polling (mesmo padrão já usado pelo App de
+  // Vendas na Fase 51 — `iniciarSincronizacaoAppVendas` — este stack não
+  // tem websocket): a cada 8 segundos, silenciosamente, sem mostrar
+  // "Carregando…" de novo. Para sozinho assim que o usuário sai da tela.
+  let timerPainelTempoReal = null;
+  function pararPollingPainelTempoReal() {
+    if (timerPainelTempoReal) {
+      clearInterval(timerPainelTempoReal);
+      timerPainelTempoReal = null;
+    }
+  }
+  function iniciarPollingPainelTempoReal() {
+    pararPollingPainelTempoReal();
+    timerPainelTempoReal = setInterval(() => {
+      if (location.hash !== "#/painel-tempo-real") {
+        pararPollingPainelTempoReal();
+        return;
+      }
+      renderPainelTempoReal(true).catch(() => { /* próximo ciclo tenta de novo */ });
+    }, 8000);
+  }
+
+  function seloSituacaoEtapaPainel(situacao) {
+    if (situacao === "concluida") return '<span class="selo ativo">Concluída</span>';
+    if (situacao === "em_andamento") return '<span class="selo amarelo">Em andamento</span>';
+    return '<span class="selo inativo">Pendente</span>';
+  }
+
+  function cardOrdemPainel(ordem, podeApontar) {
+    const etapasHtml = ordem.etapas.length
+      ? ordem.etapas
+          .map(
+            (e) => `<div class="painel-etapa-linha">
+              <span class="painel-etapa-nome">${escapeHtml(e.nome)}${e.tipo_unidade_valor ? ` <span class="texto-suave">(${escapeHtml(e.tipo_unidade_valor)})</span>` : ""}</span>
+              ${seloSituacaoEtapaPainel(e.situacao)}
+              ${
+                podeApontar && e.situacao === "pendente"
+                  ? `<button class="botao botao-tablet" data-acao="painel-iniciar-etapa" data-ordem-id="${ordem.id}" data-etapa-id="${e.id}">Iniciar</button>`
+                  : ""
+              }
+              ${
+                podeApontar && e.situacao === "em_andamento"
+                  ? `<button class="botao botao-tablet secundario" data-acao="painel-concluir-etapa" data-ordem-id="${ordem.id}" data-etapa-id="${e.id}" data-nome="${escapeHtml(e.nome)}" data-unidade="${escapeHtml(e.tipo_unidade_valor || "")}">Concluir</button>`
+                  : ""
+              }
+              ${e.situacao === "concluida" && e.valor_registrado !== null && e.valor_registrado !== undefined ? `<span class="texto-suave">${e.valor_registrado} ${escapeHtml(e.tipo_unidade_valor || "")}</span>` : ""}
+            </div>`
+          )
+          .join("")
+      : '<p class="texto-suave" style="margin:4px 0 0 0;">Nenhuma etapa cadastrada para esta ordem ainda.</p>';
+
+    return `<div class="painel-card-ordem">
+      <div class="painel-card-ordem-cabecalho">
+        <a href="#/producao/${ordem.id}"><strong>${escapeHtml(ordem.item_codigo)}</strong> — ${escapeHtml(ordem.item_descricao)}</a>
+        <span class="selo ${ordem.status === "em_producao" ? "amarelo" : "ativo"}">${escapeHtml(ordem.status)}</span>
+      </div>
+      <p class="texto-suave" style="margin:2px 0 8px 0;">Planejado: ${ordem.quantidade_planejada} ${escapeHtml(ordem.unidade)}</p>
+      ${etapasHtml}
+    </div>`;
+  }
+
+  function modalConcluirEtapaPainel(ordemId, etapaId, nomeEtapa, unidadeValor) {
+    abrirModal(`
+      <h3>Concluir "${escapeHtml(nomeEtapa)}"</h3>
+      <form data-form="painel-concluir-etapa" data-ordem-id="${ordemId}" data-etapa-id="${etapaId}">
+        ${
+          unidadeValor
+            ? `<div class="campo"><label>Valor registrado (${escapeHtml(unidadeValor)})</label>
+                 <input name="valor_registrado" type="number" step="any" min="0" autofocus>
+               </div>`
+            : `<p class="texto-suave">Esta etapa só mede tempo — calculado automaticamente entre iniciar e concluir.</p>`
+        }
+        <div class="campo"><label>Quantidade de perda/refugo nesta etapa (opcional)</label>
+          <input name="quantidade_perda" type="number" step="any" min="0" value="0">
+        </div>
+        <div class="campo"><label>Motivo da perda</label>
+          <textarea name="motivo_perda" placeholder="Obrigatório apenas se houver quantidade de perda maior que zero."></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao botao-tablet">Concluir etapa</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderPainelTempoReal(silencioso) {
+    if (!silencioso) app.innerHTML = '<div class="carregando">Carregando painel em tempo real…</div>';
+    let painel;
+    try {
+      painel = await chamarApi("/painel-tempo-real");
+    } catch (erro) {
+      if (silencioso) return;
+      throw erro;
+    }
+
+    const podeApontar = temPermissao("producao", "apontar");
+    const secaoHtml = (secao) => {
+      if (secao.chave === "producao") {
+        return `<div class="cartao">
+          <h3 style="margin-top:0;">${escapeHtml(secao.titulo)}</h3>
+          ${
+            secao.ordens.length
+              ? `<div class="painel-grade-ordens">${secao.ordens.map((o) => cardOrdemPainel(o, podeApontar)).join("")}</div>`
+              : '<p class="texto-suave">Nenhuma ordem liberada ou em produção agora.</p>'
+          }
+        </div>`;
+      }
+      // comercial / compras — lista simples de pedidos em movimento.
+      const rotulo = secao.chave === "comercial" ? "cliente_nome" : "fornecedor_nome";
+      return `<div class="cartao">
+        <h3 style="margin-top:0;">${escapeHtml(secao.titulo)}</h3>
+        ${
+          secao.pedidos.length
+            ? `<table><thead><tr><th>Número</th><th>${secao.chave === "comercial" ? "Cliente" : "Fornecedor"}</th><th>Status</th><th>Criado em</th></tr></thead>
+               <tbody>${secao.pedidos.map((p) => `<tr><td>${escapeHtml(p.numero)}</td><td>${escapeHtml(p[rotulo])}</td><td><span class="selo amarelo">${escapeHtml(p.status)}</span></td><td>${fmtData(p.criado_em)}</td></tr>`).join("")}</tbody></table>`
+            : `<p class="texto-suave">Nenhum pedido em movimento agora.</p>`
+        }
+      </div>`;
+    };
+
+    renderShell(
+      `<h2>Painel Tempo Real — Chão de Fábrica</h2>
+       <p class="texto-suave">Atualiza sozinho a cada poucos segundos — o que aparece aqui depende do que você
+       tem permissão de ver em cada módulo, o mesmo critério já usado no resto do sistema.</p>
+       ${
+         painel.secoes.length
+           ? painel.secoes.map(secaoHtml).join("")
+           : '<div class="cartao"><p class="texto-suave">Seu perfil não tem permissão de visualizar nenhuma seção deste painel (Produção, Comercial ou Compras) — fale com um administrador se acha que deveria.</p></div>'
+       }`,
+      "painel-tempo-real"
+    );
+    if (!silencioso) iniciarPollingPainelTempoReal();
+  }
+
+  // =======================================================================
+  // APS — MRP: Cálculo de Necessidade de Materiais — Fase 39
+  // =======================================================================
+  // Responde "somando TODAS as ordens de produção ainda planejadas (não
+  // liberadas), o que vai faltar comprar?" — a Fase 25 já garantia, ao
+  // LIBERAR uma ordem, que havia saldo real para reservar a BOM inteira
+  // (senão recusa), mas isso só aparecia ordem por ordem, no momento de
+  // liberar. Esta tela mostra o problema ANTES disso, já somado por
+  // insumo, com quem homologado pode fornecer cada um em falta.
+  function _fmtQtd(n) {
+    // Evita mostrar dízimas de ponto flutuante tipo "9.999999999" — o
+    // backend já arredonda em 6 casas, isto aqui é só cosmético para a
+    // tela (remove zeros à direita depois de arredondar em até 3 casas).
+    return Number(n.toFixed(3)).toString();
+  }
+
+  async function renderApsMrp() {
+    app.innerHTML = '<div class="carregando">Carregando MRP…</div>';
+    const resultado = await chamarApi("/aps/mrp");
+
+    const linhas = resultado.itens
+      .map((i) => {
+        const ordensHtml = i.ordens
+          .map((o) => `<a href="#/producao/${o.ordem_producao_id}">${escapeHtml(o.numero)}</a> (${_fmtQtd(o.quantidade_necessaria)} ${escapeHtml(i.unidade)})`)
+          .join(", ");
+        const fornecedoresHtml = i.fornecedores_homologados.length
+          ? i.fornecedores_homologados.map((f) => escapeHtml(f.nome)).join(", ")
+          : '<span class="texto-suave">nenhum fornecedor homologado para este item</span>';
+        // Fase 57 — só mostra uma data-limite quando ela foi de fato
+        // calculada (ordem agendada no APS + fornecedor sugerido com
+        // lead time configurado); nos outros casos mostra o motivo em
+        // texto suave, nunca uma data inventada.
+        let dataLimiteHtml = '<span class="texto-suave">—</span>';
+        if (i.falta > 0) {
+          if (i.data_limite_compra) {
+            dataLimiteHtml = `<span class="selo azul">até ${fmtDataCurta(i.data_limite_compra)}</span>`;
+          } else if (!i.data_necessidade_mais_proxima) {
+            dataLimiteHtml = '<span class="texto-suave">nenhuma ordem agendada ainda</span>';
+          } else {
+            dataLimiteHtml = '<span class="texto-suave">fornecedor sugerido sem lead time configurado</span>';
+          }
+        }
+        return `<tr class="${i.falta > 0 ? "linha-alerta" : ""}">
+          <td>${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</td>
+          <td>${_fmtQtd(i.necessidade_total)} ${escapeHtml(i.unidade)}</td>
+          <td>${_fmtQtd(i.disponivel)} ${escapeHtml(i.unidade)}</td>
+          <td>${i.falta > 0 ? `<span class="selo bloqueado">falta ${_fmtQtd(i.falta)} ${escapeHtml(i.unidade)}</span>` : '<span class="selo ativo">OK</span>'}</td>
+          <td class="texto-suave">${ordensHtml}</td>
+          <td>${fornecedoresHtml}</td>
+          <td>${dataLimiteHtml}</td>
+        </tr>`;
+      })
+      .join("");
+
+    const podeGerarSugestao = temPermissao("producao", "gerar_sugestao_compra");
+
+    renderShell(
+      `<h2>MRP (Necessidade de Materiais)</h2>
+       <div class="cartao">
+         <p class="texto-suave">Soma a necessidade de insumos de TODAS as ordens de produção ainda
+         <strong>planejadas</strong> (que ainda não reservaram material ao serem liberadas — Fase 12/25) e
+         compara contra o saldo real hoje disponível, já descontando o que outras ordens liberadas, vendas
+         confirmadas e ajustes de estoque já comprometeram. Ordens já liberadas/em produção não entram na
+         soma da necessidade — elas já garantiram seu material ao serem liberadas; o que elas reservaram já
+         está descontado do "disponível" abaixo. A coluna <strong>Comprar até</strong> (Fase 57) usa a data de
+         início planejado (Agenda Visual do APS) da ordem mais próxima que precisa do insumo, menos o lead time
+         cadastrado do fornecedor sugerido — sem uma ordem agendada ou sem lead time configurado, ela fica em
+         branco em vez de mostrar uma data inventada.</p>
+         <div class="barra-acoes">
+           <p style="margin:0;">${resultado.total_itens_em_falta > 0
+             ? `<span class="selo bloqueado">${resultado.total_itens_em_falta} de ${resultado.total_itens} insumo(s) em falta</span>`
+             : `<span class="selo ativo">Nenhuma falta — todos os ${resultado.total_itens} insumo(s) necessários têm saldo suficiente</span>`}</p>
+           <div style="display:flex;gap:8px;">
+             ${podeGerarSugestao && resultado.total_itens_em_falta > 0
+               ? `<button class="botao primario" data-acao="gerar-sugestoes-compra">Gerar sugestões de compra</button>` : ""}
+             <a class="botao secundario" href="#/aps-sugestoes-compra">Ver sugestões de compra</a>
+           </div>
+         </div>
+         <table>
+           <thead><tr>
+             <th>Insumo</th><th>Necessidade total</th><th>Disponível</th><th>Situação</th>
+             <th>Ordens planejadas que precisam dele</th><th>Fornecedores homologados</th><th>Comprar até</th>
+           </tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhuma ordem de produção planejada no momento — nada para calcular.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "aps-mrp"
+    );
+  }
+
+  // =======================================================================
+  // FASE 54 — MRP: Sugestão Automática de Compra
+  // =======================================================================
+  // Deliberadamente uma tela separada da Fase 39 (MRP): a sugestão de
+  // compra é um item de trabalho com ciclo de vida próprio
+  // (pendente/atendida/descartada), não um recálculo em tempo real como o
+  // relatório de MRP — ver nota em migrations/schema_fase54.sql.
+  const ROTULOS_STATUS_SUGESTAO_COMPRA = { pendente: "Pendente", atendida: "Atendida", descartada: "Descartada" };
+
+  async function renderApsSugestoesCompra(filtroStatus) {
+    app.innerHTML = '<div class="carregando">Carregando sugestões de compra…</div>';
+    const status = filtroStatus !== undefined ? filtroStatus : (state.cache.sugestoesCompraFiltro || "pendente");
+    state.cache.sugestoesCompraFiltro = status;
+    const podeDecidir = temPermissao("producao", "decidir_sugestao_compra");
+    const podeGerar = temPermissao("producao", "gerar_sugestao_compra");
+    // Fase 58 — permissão PRÓPRIA de Compras, verificada além (não em vez)
+    // de `decidir_sugestao_compra`: gerar o pedido formal é uma decisão de
+    // Compras sobre a sugestão, mas o documento em si (Pedido de Compra)
+    // tem seu próprio dono de permissão desde a Fase 58.
+    const podeGerarPedido = temPermissao("compras", "criar_pedido");
+
+    const [lista, fornecedores] = await Promise.all([
+      chamarApi(`/aps/sugestoes-compra${status ? `?status=${status}` : ""}`),
+      chamarApi("/fornecedores"),
+    ]);
+    state.cache.fornecedores = fornecedores;
+
+    const linhas = lista.map((s) => {
+      const ordensHtml = s.ordens_relacionadas
+        .map((o) => `<a href="#/producao/${o.ordem_producao_id}">${escapeHtml(o.numero)}</a>`).join(", ");
+      const acoesHtml = s.status === "pendente"
+        ? `${podeDecidir ? `<button class="botao secundario pequeno" data-acao="atender-sugestao-compra" data-id="${s.id}" data-item="${escapeHtml(s.item_codigo)}">Atender</button>` : ""}
+           ${podeGerarPedido ? `<button class="botao pequeno" data-acao="gerar-pedido-de-sugestao" data-id="${s.id}"
+               data-item-codigo="${escapeHtml(s.item_codigo)}" data-item-unidade="${escapeHtml(s.item_unidade || "")}"
+               data-quantidade="${s.quantidade_sugerida}" data-fornecedor-sugerido-id="${s.fornecedor_sugerido_id || ""}">Gerar pedido de compra</button>` : ""}
+           ${podeDecidir ? `<button class="botao perigo pequeno" data-acao="descartar-sugestao-compra" data-id="${s.id}" data-item="${escapeHtml(s.item_codigo)}">Descartar</button>` : ""}`
+        : "";
+      const detalheDecisao = s.status === "atendida"
+        ? `<span class="texto-suave">${s.pedido_compra_id
+            ? `<a href="#/compras-pedidos/${s.pedido_compra_id}">Pedido de compra vinculado</a>`
+            : s.conta_pagar_id ? `Conta a pagar #${s.conta_pagar_id}` : "sem conta a pagar ou pedido linkado"}</span>`
+        : s.status === "descartada" ? `<span class="texto-suave">${escapeHtml(s.motivo_descarte || "")}</span>` : "";
+      return `<tr>
+        <td>${escapeHtml(s.item_codigo)} — ${escapeHtml(s.item_descricao)}</td>
+        <td>${_fmtQtd(s.quantidade_sugerida)} ${escapeHtml(s.item_unidade || "")}</td>
+        <td>${s.fornecedor_sugerido_nome ? escapeHtml(s.fornecedor_sugerido_nome) : '<span class="texto-suave">nenhum homologado</span>'}</td>
+        <td class="texto-suave">${ordensHtml}</td>
+        <td>${s.data_limite_compra ? `<span class="selo azul">até ${fmtDataCurta(s.data_limite_compra)}</span>` : '<span class="texto-suave">—</span>'}</td>
+        <td><span class="selo ${s.status === "pendente" ? "azul" : s.status === "atendida" ? "ativo" : "bloqueado"}">${ROTULOS_STATUS_SUGESTAO_COMPRA[s.status]}</span>${detalheDecisao ? `<br>${detalheDecisao}` : ""}</td>
+        <td>${fmtData(s.gerada_em)}</td>
+        <td>${acoesHtml}</td>
+      </tr>`;
+    }).join("");
+
+    const abaBotao = (valor, rotulo) => `<button class="botao ${status === valor ? "primario" : "secundario"} pequeno" data-acao="filtrar-sugestoes-compra" data-status="${valor}">${rotulo}</button>`;
+
+    renderShell(
+      `<h2>Sugestões de Compra (MRP)</h2>
+       <div class="cartao">
+         <p class="texto-suave">Cada sugestão é gerada a partir da necessidade calculada pelo MRP na tela anterior —
+         ela NÃO cria uma conta a pagar de verdade (não há preço nem vencimento reais ainda). Quando Compras de fato
+         compra o item, marque como <strong>Atendida</strong> (linkando opcionalmente o ID da conta a pagar lançada
+         pela tela de Financeiro) ou <strong>Descartada</strong>, com o motivo, se decidir não comprar por ora.</p>
+         <div class="barra-acoes">
+           <div style="display:flex;gap:8px;">
+             ${abaBotao("pendente", "Pendentes")}${abaBotao("atendida", "Atendidas")}${abaBotao("descartada", "Descartadas")}${abaBotao("", "Todas")}
+           </div>
+           ${podeGerar ? `<a class="botao secundario" href="#/aps-mrp">Ir para o MRP / Gerar mais sugestões</a>` : ""}
+         </div>
+         <table>
+           <thead><tr>
+             <th>Insumo</th><th>Quantidade sugerida</th><th>Fornecedor sugerido</th>
+             <th>Ordens relacionadas</th><th>Comprar até</th><th>Status</th><th>Gerada em</th><th></th>
+           </tr></thead>
+           <tbody>${linhas || `<tr><td colspan="8" class="texto-suave">Nenhuma sugestão ${status ? `com status "${ROTULOS_STATUS_SUGESTAO_COMPRA[status] || status}"` : ""}.</td></tr>`}</tbody>
+         </table>
+       </div>`,
+      "aps-sugestoes-compra"
+    );
+  }
+
+  function modalAtenderSugestaoCompra(sugestaoId, itemCodigo) {
+    abrirModal(`
+      <h3>Atender sugestão — ${escapeHtml(itemCodigo)}</h3>
+      <p class="texto-suave">Marca esta sugestão como atendida (compra já providenciada). Se já lançou a conta a
+      pagar correspondente pela tela de Financeiro, informe o ID dela abaixo para manter o link — isso é opcional.</p>
+      <form data-form="atender-sugestao-compra" data-id="${sugestaoId}">
+        <div class="campo"><label>ID da conta a pagar já lançada (opcional)</label>
+          <input type="number" name="conta_pagar_id" min="1" placeholder="Ex.: 42">
+          <div class="dica">Confira o ID na tela Financeiro → Contas a Pagar → detalhe da conta.</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao primario">Marcar como atendida</button>
+        </div>
+      </form>`);
+  }
+
+  function modalDescartarSugestaoCompra(sugestaoId, itemCodigo) {
+    abrirModal(`
+      <h3>Descartar sugestão — ${escapeHtml(itemCodigo)}</h3>
+      <p class="texto-suave">Marca esta sugestão como descartada — nenhuma compra será feita por ora a partir dela.</p>
+      <form data-form="descartar-sugestao-compra" data-id="${sugestaoId}">
+        <div class="campo"><label>Motivo</label>
+          <textarea name="motivo" required placeholder="Ex.: a ordem de produção que motivou será cancelada..."></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Descartar sugestão</button>
+        </div>
+      </form>`);
+  }
+
+  function modalGerarPedidoDeSugestao(sugestao) {
+    const fornecedores = state.cache.fornecedores || [];
+    const opcoesFornecedor = fornecedores
+      .map((f) => `<option value="${f.id}" ${f.id === sugestao.fornecedor_sugerido_id ? "selected" : ""}>${escapeHtml(f.nome)}</option>`)
+      .join("");
+    abrirModal(`
+      <h3>Gerar pedido de compra — ${escapeHtml(sugestao.item_codigo)}</h3>
+      <p class="texto-suave">Cria um Pedido de Compra formal (Fase 58) com este item, em <strong>rascunho</strong>,
+      e já marca esta sugestão como atendida linkada a ele. Quantidade sugerida: ${_fmtQtd(sugestao.quantidade_sugerida)}
+      ${escapeHtml(sugestao.item_unidade || "")}.</p>
+      <form data-form="gerar-pedido-de-sugestao" data-id="${sugestao.id}">
+        <div class="campo"><label>Fornecedor</label>
+          <select name="fornecedor_id" ${fornecedores.length ? "required" : ""}>${opcoesFornecedor || '<option value="">nenhum fornecedor homologado</option>'}</select>
+        </div>
+        <div class="campo">
+          <label>Preço unitário negociado (opcional)</label>
+          <input name="preco_unitario" type="number" step="any" min="0" placeholder="ex.: 12.50">
+        </div>
+        <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Gerar pedido</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // FASE 58 — Pedido de Compra formal
+  // =======================================================================
+  // Ver a nota de escopo completa em migrations/schema_fase58.sql. Um
+  // pedido é criado em `rascunho` (manualmente aqui, ou a partir de uma
+  // sugestão pendente do MRP — botão "Gerar pedido de compra" na tela
+  // anterior), enviado ao fornecedor (`enviado` — a partir daí aceita
+  // recebimento vinculado pela tela de Lotes/Qualidade, Fase 2), e
+  // caminha sozinho para `parcialmente_recebido`/`recebido` conforme o
+  // recebimento acontece. Cancelamento só é possível antes de qualquer
+  // recebimento.
+  const ROTULOS_STATUS_PEDIDO_COMPRA = {
+    rascunho: "Rascunho", enviado: "Enviado", parcialmente_recebido: "Parcialmente recebido",
+    recebido: "Recebido", cancelado: "Cancelado",
+  };
+  const SELO_STATUS_PEDIDO_COMPRA = {
+    rascunho: "inativo", enviado: "azul", parcialmente_recebido: "amarelo", recebido: "ativo", cancelado: "bloqueado",
+  };
+
+  function parseItensPedidoCompraTexto(texto, itensPorCodigo) {
+    return (texto || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((linha) => {
+        const [codigo, quantidade, unidade, preco] = linha.split(";").map((p) => (p || "").trim());
+        const item = itensPorCodigo[codigo];
+        if (!item) throw new Error(`Item de código "${codigo}" não encontrado. Confira o código na tela de Itens.`);
+        if (!quantidade || !unidade) {
+          throw new Error(`Linha "${linha}" precisa de quantidade e unidade (formato: codigo;quantidade;unidade;preco_opcional).`);
+        }
+        return {
+          item_id: item.id, quantidade_pedida: Number(quantidade), unidade,
+          preco_unitario: preco ? Number(preco) : null,
+        };
+      });
+  }
+
+  async function renderPedidosCompra(filtroStatus) {
+    app.innerHTML = '<div class="carregando">Carregando pedidos de compra…</div>';
+    const status = filtroStatus !== undefined ? filtroStatus : (state.cache.pedidosCompraFiltro || "");
+    state.cache.pedidosCompraFiltro = status;
+    const podeCriar = temPermissao("compras", "criar_pedido");
+    // Fase 61 — só quem tem essa permissão (Administrador, por padrão) vê
+    // o botão de alterar o limiar de alçada; mesma filosofia de
+    // "podeConfigurarAlcada" já usada em Estoque desde a Fase 32.
+    const podeConfigurarAlcadaPedido = temPermissao("compras", "configurar_alcada_pedido");
+
+    const [pedidos, fornecedores, itens, configuracaoCompras] = await Promise.all([
+      chamarApi(`/compras/pedidos${status ? `?status=${status}` : ""}`),
+      chamarApi("/fornecedores"),
+      chamarApi("/itens"),
+      podeConfigurarAlcadaPedido ? chamarApi("/compras/configuracao") : Promise.resolve(null),
+    ]);
+    state.cache.itens = itens;
+    state.cache.fornecedores = fornecedores;
+
+    const linhas = pedidos.map((p) => {
+      const resumoItens = p.itens.map((li) => escapeHtml(li.item_codigo)).join(", ");
+      // Fase 60 — mesmo padrão visual já usado por contas_pagar/contas_receber
+      // vencidas desde a Fase 6: linha destacada + selo, sem coluna nova.
+      // Fase 61 — um pedido com solicitação de envio pendente continua
+      // 'rascunho' (ver a nota de escopo em migrations/schema_fase61.sql),
+      // então precisa de um selo próprio para não parecer um rascunho comum.
+      return `<tr class="${p.atrasado ? "linha-alerta" : ""}">
+        <td><a href="#/compras-pedidos/${p.id}">${escapeHtml(p.numero)}</a></td>
+        <td>${escapeHtml(p.fornecedor_nome || "")}</td>
+        <td class="texto-suave">${resumoItens}</td>
+        <td><span class="selo ${SELO_STATUS_PEDIDO_COMPRA[p.status]}">${ROTULOS_STATUS_PEDIDO_COMPRA[p.status]}</span>${p.atrasado ? ' <span class="selo bloqueado">Atrasado</span>' : ""}${p.envio_pendente ? ' <span class="selo amarelo">Aguardando aprovação</span>' : ""}</td>
+        <td>${fmtData(p.criado_em)}</td>
+      </tr>`;
+    }).join("");
+
+    const abaBotao = (valor, rotulo) => `<button class="botao ${status === valor ? "primario" : "secundario"} pequeno" data-acao="filtrar-pedidos-compra" data-status="${valor}">${rotulo}</button>`;
+
+    renderShell(
+      `<h2>Pedidos de Compra</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <p class="texto-suave" style="margin:0;">O compromisso formal com o fornecedor — itens, quantidade e fornecedor. Ainda não é
+           uma obrigação financeira (isso continua sendo lançado em Financeiro → Contas a Pagar quando a nota fiscal
+           chegar) nem um lote de estoque (isso acontece no recebimento, em Lotes/Qualidade). Pode nascer manualmente
+           aqui ou a partir de uma sugestão do MRP (tela "Sugestões de Compra").</p>
+           ${podeConfigurarAlcadaPedido ? `<button class="botao secundario pequeno" data-acao="abrir-configurar-alcada-pedido">Configurar alçada</button>` : ""}
+         </div>
+         ${configuracaoCompras && configuracaoCompras.limiar_valor_pedido_grande > 0
+           ? `<p class="dica">Enviar um pedido acima de ${fmtMoeda(configuracaoCompras.limiar_valor_pedido_grande)} não acontece na hora: fica pendente até um segundo usuário aprovar (Fase 61).</p>`
+           : (podeConfigurarAlcadaPedido ? `<p class="dica">Alçada por valor desligada — qualquer pedido é enviado direto ao fornecedor, sem segunda aprovação (botão "Configurar alçada" acima, Fase 61).</p>` : "")}
+         <div class="barra-acoes">
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             ${abaBotao("", "Todas")}${abaBotao("rascunho", "Rascunho")}${abaBotao("enviado", "Enviado")}${abaBotao("parcialmente_recebido", "Parcial")}${abaBotao("recebido", "Recebido")}${abaBotao("cancelado", "Cancelado")}
+           </div>
+           ${podeCriar ? `<button class="botao" data-acao="novo-pedido-compra">+ Novo pedido de compra</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Número</th><th>Fornecedor</th><th>Itens</th><th>Status</th><th>Criado em</th></tr></thead>
+           <tbody>${linhas || `<tr><td colspan="5" class="texto-suave">Nenhum pedido ${status ? `com status "${ROTULOS_STATUS_PEDIDO_COMPRA[status] || status}"` : "de compra ainda"}.</td></tr>`}</tbody>
+         </table>
+       </div>`,
+      "compras-pedidos"
+    );
+  }
+
+  function modalNovoPedidoCompra() {
+    const fornecedores = state.cache.fornecedores || [];
+    const opcoesFornecedor = fornecedores.map((f) => `<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Novo pedido de compra</h3>
+      <form data-form="novo-pedido-compra">
+        <div class="campo"><label>Fornecedor</label><select name="fornecedor_id" required>${opcoesFornecedor}</select></div>
+        <div class="campo">
+          <label>Itens (um por linha: <span class="mono">codigo;quantidade;unidade;preco_opcional</span>)</label>
+          <textarea name="itens" required placeholder="MP001;100;kg;5.50&#10;MP002;20;un"></textarea>
+          <div class="dica">O código é o mesmo cadastrado na tela de Itens. Preço unitário é opcional (deixe em branco se ainda não negociou).</div>
+        </div>
+        <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar (rascunho)</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderPedidoCompraDetalhe(pedidoId) {
+    app.innerHTML = '<div class="carregando">Carregando pedido de compra…</div>';
+    const pedido = await chamarApi(`/compras/pedidos/${pedidoId}`);
+    const podeEnviar = temPermissao("compras", "enviar_pedido");
+    const podeCancelar = temPermissao("compras", "cancelar_pedido");
+    const podeReceber = temPermissao("lotes", "receber");
+    const aceitaRecebimento = pedido.status === "enviado" || pedido.status === "parcialmente_recebido";
+    // Fase 59 — mesma permissão exigida pela criação direta em Financeiro
+    // (ver a nota de escopo em migrations/schema_fase59.sql): só aparece
+    // depois de algo recebido, e só uma vez por pedido (trava no backend;
+    // aqui só evita mostrar o botão à toa).
+    const podeGerarContaPagar = temPermissao("financeiro", "criar_conta_pagar");
+    const jaTemAlgoRecebido = pedido.status === "parcialmente_recebido" || pedido.status === "recebido";
+    // Fase 61 — só quem tem essa permissão pode decidir sobre a
+    // solicitação de envio pendente, e mesmo quem tem não pode decidir
+    // sobre a que ELE MESMO solicitou (segregação de função — a mesma
+    // trava existe no servidor; aqui só evita mostrar os botões à toa).
+    const podeAprovarPedidoGrande = temPermissao("compras", "aprovar_pedido_grande");
+    const envioPendente = pedido.envio_pendente;
+    const solicitanteSouEu = envioPendente && state.usuarioAtual && envioPendente.solicitado_por === state.usuarioAtual.id;
+
+    const linhasItens = pedido.itens.map((li) => `<tr>
+      <td>${escapeHtml(li.item_codigo)} — ${escapeHtml(li.item_descricao)}</td>
+      <td>${_fmtQtd(li.quantidade_pedida)} ${escapeHtml(li.unidade)}</td>
+      <td>${_fmtQtd(li.quantidade_recebida)} ${escapeHtml(li.unidade)}</td>
+      <td>${li.quantidade_pendente > 0 ? `<span class="selo amarelo">${_fmtQtd(li.quantidade_pendente)} ${escapeHtml(li.unidade)}</span>` : '<span class="selo ativo">completo</span>'}</td>
+      <td>${li.preco_unitario != null ? `R$ ${Number(li.preco_unitario).toFixed(2)}` : '<span class="texto-suave">—</span>'}</td>
+      <td>${li.sugestao_compra_mrp_id ? `<span class="texto-suave">sugestão #${li.sugestao_compra_mrp_id}</span>` : ""}</td>
+      <td>${podeReceber && aceitaRecebimento && li.quantidade_pendente > 0
+        ? `<button class="botao secundario pequeno" data-acao="receber-contra-pedido" data-pedido-id="${pedido.id}" data-item-id="${li.item_id}" data-item-codigo="${escapeHtml(li.item_codigo)}" data-unidade="${escapeHtml(li.unidade)}">Registrar recebimento</button>`
+        : ""}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<a class="link-voltar" href="#/compras-pedidos">&larr; Voltar para Pedidos de Compra</a>
+       <h2>Pedido ${escapeHtml(pedido.numero)}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><div class="rotulo">Fornecedor</div>${escapeHtml(pedido.fornecedor_nome)}</div>
+           <div><div class="rotulo">Status</div><span class="selo ${SELO_STATUS_PEDIDO_COMPRA[pedido.status]}">${ROTULOS_STATUS_PEDIDO_COMPRA[pedido.status]}</span>${pedido.atrasado ? ' <span class="selo bloqueado">Atrasado</span>' : ""}</div>
+           <div><div class="rotulo">Criado em</div>${fmtData(pedido.criado_em)}</div>
+           ${pedido.enviado_em ? `<div><div class="rotulo">Enviado em</div>${fmtData(pedido.enviado_em)}</div>` : ""}
+           ${pedido.data_prevista_entrega ? `<div><div class="rotulo">Entrega prevista</div>${escapeHtml(pedido.data_prevista_entrega)}</div>` : ""}
+           ${pedido.concluido_em ? `<div><div class="rotulo">Recebido em</div>${fmtData(pedido.concluido_em)}</div>` : ""}
+           ${pedido.cancelado_em ? `<div><div class="rotulo">Cancelado em</div>${fmtData(pedido.cancelado_em)}</div>` : ""}
+           ${pedido.conta_pagar_numero ? `<div><div class="rotulo">Conta a pagar</div>${escapeHtml(pedido.conta_pagar_numero)} <a href="#/financeiro">(ver em Financeiro)</a></div>` : ""}
+         </div>
+         ${pedido.observacoes ? `<p class="texto-suave">${escapeHtml(pedido.observacoes)}</p>` : ""}
+         ${pedido.motivo_cancelamento ? `<p class="mensagem-erro">Motivo do cancelamento: ${escapeHtml(pedido.motivo_cancelamento)}</p>` : ""}
+         ${envioPendente ? `
+         <div class="subcartao">
+           <p class="mensagem-erro" style="margin-top:0;">Envio ao fornecedor aguardando aprovação (Fase 61) —
+           valor de ${fmtMoeda(envioPendente.valor_total)} acima da alçada configurada, solicitado em ${fmtData(envioPendente.solicitado_em)}.</p>
+           ${podeAprovarPedidoGrande
+             ? (solicitanteSouEu
+                 ? `<p class="texto-suave">Você solicitou este envio — a aprovação precisa ser feita por outro usuário (segregação de função).</p>`
+                 : `<div style="display:flex;gap:8px;">
+                      <button class="botao secundario" data-acao="aprovar-envio-pedido" data-pendente-id="${envioPendente.id}" data-pedido-id="${pedido.id}">Aprovar envio</button>
+                      <button class="botao perigo" data-acao="abrir-rejeitar-envio-pedido" data-pendente-id="${envioPendente.id}" data-pedido-id="${pedido.id}">Rejeitar</button>
+                    </div>`)
+             : `<p class="texto-suave">Aguardando outro usuário com permissão de aprovar decidir sobre este envio.</p>`}
+         </div>` : ""}
+         <div class="barra-acoes">
+           <span></span>
+           <div style="display:flex;gap:8px;">
+             ${podeEnviar && pedido.status === "rascunho" && !envioPendente ? `<button class="botao" data-acao="enviar-pedido-compra" data-id="${pedido.id}">Enviar ao fornecedor</button>` : ""}
+             ${podeCancelar && (pedido.status === "rascunho" || pedido.status === "enviado") ? `<button class="botao perigo" data-acao="cancelar-pedido-compra" data-id="${pedido.id}">Cancelar pedido</button>` : ""}
+             ${podeGerarContaPagar && jaTemAlgoRecebido && !pedido.conta_pagar_id ? `<button class="botao" data-acao="gerar-conta-pagar-de-pedido" data-id="${pedido.id}" data-numero="${escapeHtml(pedido.numero)}">Gerar conta a pagar</button>` : ""}
+           </div>
+         </div>
+         <table>
+           <thead><tr><th>Item</th><th>Pedido</th><th>Recebido</th><th>Pendente</th><th>Preço unit.</th><th>Origem</th><th></th></tr></thead>
+           <tbody>${linhasItens}</tbody>
+         </table>
+       </div>`,
+      "compras-pedidos"
+    );
+  }
+
+  // ---- Fase 61: Alçada por Valor no Envio do Pedido de Compra ----
+  function modalConfigurarAlcadaPedido(configuracao) {
+    abrirModal(`
+      <h3>Configurar alçada de envio de Pedido de Compra</h3>
+      <p class="texto-suave">Acima deste valor, enviar um pedido de compra ao fornecedor não acontece na hora:
+      fica pendente até um segundo usuário (diferente de quem solicitou) aprovar ou rejeitar. "0" desliga esse
+      controle por completo — todo pedido é sempre enviado direto, como antes desta fase.</p>
+      <form data-form="configurar-alcada-pedido">
+        <div class="campo"><label>Limiar de valor do pedido (R$, 0 = desligado)</label>
+          <input name="limiar_valor_pedido_grande" type="number" step="0.01" min="0"
+                 value="${configuracao.limiar_valor_pedido_grande}" required>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalRejeitarEnvioPedido(pendenteId, pedidoId) {
+    abrirModal(`
+      <h3>Rejeitar solicitação de envio</h3>
+      <p class="texto-suave">Rejeitar NÃO cancela o pedido — ele continua em rascunho, podendo ser reenviado
+      (nova solicitação, se ainda estiver acima da alçada) depois de ajustado.</p>
+      <form data-form="rejeitar-envio-pedido" data-pendente-id="${pendenteId}" data-pedido-id="${pedidoId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="Ex.: valor fora do orçamento, aguardar nova cotação..."></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar rejeição</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarPedidoCompra(pedidoId) {
+    abrirModal(`
+      <h3>Cancelar pedido de compra</h3>
+      <p class="texto-suave">Só é possível cancelar enquanto nenhum recebimento tiver sido registrado contra este pedido.</p>
+      <form data-form="cancelar-pedido-compra" data-id="${pedidoId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Confirmar cancelamento</button>
+        </div>
+      </form>`);
+  }
+
+  function modalReceberContraPedido(pedidoId, itemId, itemCodigo, unidade) {
+    abrirModal(`
+      <h3>Registrar recebimento — ${escapeHtml(itemCodigo)}</h3>
+      <p class="texto-suave">O fornecedor e o item já vêm do pedido — só informe o que chegou. O lote entra em
+      quarentena normalmente (mesmo fluxo da Fase 2), já vinculado a este pedido de compra.</p>
+      <form data-form="receber-contra-pedido" data-pedido-id="${pedidoId}" data-item-id="${itemId}" data-unidade="${escapeHtml(unidade)}">
+        <div class="campo"><label>Quantidade recebida (${escapeHtml(unidade)})</label><input name="quantidade" type="number" step="any" required></div>
+        <div class="campo"><label>Lote do fornecedor</label><input name="lote_fornecedor"></div>
+        <div class="campo"><label>Nota fiscal</label><input name="nota_fiscal"></div>
+        <div class="campo"><label>Fabricação</label><input name="fabricacao" type="date"></div>
+        <div class="campo"><label>Validade</label><input name="validade" type="date"></div>
+        <div class="campo">
+          <label>Custo unitário pago (R$, opcional)</label>
+          <input name="custo_unitario" type="number" step="any" min="0">
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Registrar (entra em quarentena)</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // FASE 59 — Conta a Pagar gerada a partir do Pedido de Compra
+  // =======================================================================
+  // Ver a nota de escopo completa em migrations/schema_fase59.sql. O botão
+  // só aparece depois que algo foi recebido contra o pedido (Fase 58) e
+  // enquanto ele ainda não gerou nenhuma conta por este caminho — o valor
+  // é calculado no backend a partir do que foi efetivamente RECEBIDO, não
+  // do que foi pedido, então aqui só é preciso pedir o vencimento (e,
+  // opcionalmente, uma descrição customizada e a empresa).
+  async function modalGerarContaPagarDePedido(pedidoId, numeroPedido) {
+    const empresas = await carregarEmpresasParaSeletor();
+    abrirModal(`
+      <h3>Gerar conta a pagar — ${escapeHtml(numeroPedido)}</h3>
+      <p class="texto-suave">O valor é calculado automaticamente a partir do que já foi recebido contra este
+      pedido (quantidade recebida x preço unitário de cada item) — não do total pedido, caso o recebimento
+      ainda esteja parcial. Continua sendo um lançamento explícito: informe o vencimento da nota fiscal.</p>
+      <form data-form="gerar-conta-pagar-de-pedido" data-id="${pedidoId}">
+        <div class="campo"><label>Vencimento</label><input name="vencimento" type="date" required></div>
+        <div class="campo">
+          <label>Descrição (opcional)</label>
+          <input name="descricao" placeholder="Padrão: referência ao número deste pedido">
+        </div>
+        ${campoSeletorEmpresa(empresas)}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Gerar conta a pagar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // FASE 66 — Cotação Comparativa de Fornecedores (RFQ) antes do Pedido de
+  // Compra
+  // =======================================================================
+  // Ver a nota de escopo completa em migrations/schema_fase66.sql. Resumo:
+  // uma cotação lista itens a comprar + fornecedores convidados; cada
+  // fornecedor convidado recebe uma resposta (preço + prazo por item),
+  // digitada por Compras a partir do que veio por telefone/e-mail (não há
+  // portal externo — mesmo espírito do resto do sistema). Fechar a
+  // cotação escolhe UM vencedor para a cotação inteira e gera
+  // automaticamente o Pedido de Compra formal (Fase 58).
+  const ROTULOS_STATUS_COTACAO = { aberta: "Aberta", fechada: "Fechada", cancelada: "Cancelada" };
+  const SELO_STATUS_COTACAO = { aberta: "azul", fechada: "ativo", cancelada: "bloqueado" };
+
+  function parseItensCotacaoTexto(texto, itensPorCodigo) {
+    return (texto || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((linha) => {
+        const [codigo, quantidade, unidade] = linha.split(";").map((p) => (p || "").trim());
+        const item = itensPorCodigo[codigo];
+        if (!item) throw new Error(`Item de código "${codigo}" não encontrado. Confira o código na tela de Itens.`);
+        if (!quantidade || !unidade) {
+          throw new Error(`Linha "${linha}" precisa de quantidade e unidade (formato: codigo;quantidade;unidade).`);
+        }
+        return { item_id: item.id, quantidade: Number(quantidade), unidade };
+      });
+  }
+
+  async function renderCotacoes(filtroStatus) {
+    app.innerHTML = '<div class="carregando">Carregando cotações…</div>';
+    const status = filtroStatus !== undefined ? filtroStatus : (state.cache.cotacoesFiltro || "");
+    state.cache.cotacoesFiltro = status;
+    const podeCriar = temPermissao("compras", "criar_cotacao");
+
+    const [cotacoes, fornecedores, itens] = await Promise.all([
+      chamarApi(`/compras/cotacoes${status ? `?status=${status}` : ""}`),
+      chamarApi("/fornecedores"),
+      chamarApi("/itens"),
+    ]);
+    state.cache.itens = itens;
+    state.cache.fornecedores = fornecedores;
+
+    const linhas = cotacoes.map((c) => `<tr>
+        <td><a href="#/compras-cotacoes/${c.id}">${escapeHtml(c.numero)}</a></td>
+        <td class="texto-suave">${c.total_itens} item(ns)</td>
+        <td class="texto-suave">${c.total_fornecedores_convidados} fornecedor(es)</td>
+        <td><span class="selo ${SELO_STATUS_COTACAO[c.status]}">${ROTULOS_STATUS_COTACAO[c.status]}</span></td>
+        <td>${fmtData(c.criado_em)}</td>
+      </tr>`).join("");
+
+    const abaBotao = (valor, rotulo) => `<button class="botao ${status === valor ? "primario" : "secundario"} pequeno" data-acao="filtrar-cotacoes" data-status="${valor}">${rotulo}</button>`;
+
+    renderShell(
+      `<h2>Cotações de Fornecedores (RFQ)</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <p class="texto-suave" style="margin:0;">Compare preço e prazo de vários fornecedores para os mesmos itens
+           antes de comprar. Fechar a cotação com um vencedor gera automaticamente o Pedido de Compra (Fase 58) com
+           os preços que ele respondeu.</p>
+         </div>
+         <div class="barra-acoes">
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             ${abaBotao("", "Todas")}${abaBotao("aberta", "Aberta")}${abaBotao("fechada", "Fechada")}${abaBotao("cancelada", "Cancelada")}
+           </div>
+           ${podeCriar ? `<button class="botao" data-acao="nova-cotacao">+ Nova cotação</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Número</th><th>Itens</th><th>Fornecedores</th><th>Status</th><th>Criada em</th></tr></thead>
+           <tbody>${linhas || `<tr><td colspan="5" class="texto-suave">Nenhuma cotação ${status ? `com status "${ROTULOS_STATUS_COTACAO[status] || status}"` : "ainda"}.</td></tr>`}</tbody>
+         </table>
+       </div>`,
+      "compras-cotacoes"
+    );
+  }
+
+  function modalNovaCotacao() {
+    const fornecedores = state.cache.fornecedores || [];
+    const opcoesFornecedor = fornecedores.map((f) => `<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Nova cotação (RFQ)</h3>
+      <form data-form="nova-cotacao">
+        <div class="campo">
+          <label>Itens a cotar (um por linha: <span class="mono">codigo;quantidade;unidade</span>)</label>
+          <textarea name="itens" required placeholder="MP001;100;kg&#10;MP002;20;un"></textarea>
+          <div class="dica">O código é o mesmo cadastrado na tela de Itens. O preço vem depois, na resposta de cada fornecedor.</div>
+        </div>
+        <div class="campo">
+          <label>Fornecedores convidados a cotar (segure Ctrl/Cmd para escolher mais de um)</label>
+          <select name="fornecedores_convidados" multiple required size="6">${opcoesFornecedor}</select>
+        </div>
+        <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar cotação</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderCotacaoDetalhe(cotacaoId) {
+    app.innerHTML = '<div class="carregando">Carregando cotação…</div>';
+    const cotacao = await chamarApi(`/compras/cotacoes/${cotacaoId}`);
+    // Guardado para o modal de "registrar resposta" reaproveitar a lista
+    // de itens/respostas já carregada, sem precisar de uma chamada extra.
+    state.cache.cotacaoAtual = cotacao;
+    const podeRegistrarResposta = temPermissao("compras", "registrar_resposta_cotacao") && cotacao.status === "aberta";
+    const podeFechar = temPermissao("compras", "fechar_cotacao") && cotacao.status === "aberta";
+    const podeCancelar = temPermissao("compras", "cancelar_cotacao") && cotacao.status === "aberta";
+
+    // Tabela comparativa: uma linha por item, uma coluna por fornecedor
+    // convidado — destaca o menor preço de cada linha (o próprio ponto de
+    // ser uma cotação COMPARATIVA).
+    const linhasComparativo = cotacao.itens.map((it) => {
+      const respostasDoItem = cotacao.fornecedores.map((f) => f.respostas.find((r) => r.item_id === it.item_id) || null);
+      const precosValidos = respostasDoItem.filter(Boolean).map((r) => r.preco_unitario);
+      const menorPreco = precosValidos.length ? Math.min(...precosValidos) : null;
+      const celulas = respostasDoItem.map((r) => {
+        if (!r) return `<td class="texto-suave">—</td>`;
+        const ehMelhor = r.preco_unitario === menorPreco;
+        return `<td>${ehMelhor ? "<strong>" : ""}${fmtMoeda(r.preco_unitario)}${ehMelhor ? "</strong>" : ""}${r.prazo_entrega_dias != null ? ` <span class="texto-suave">(${r.prazo_entrega_dias}d)</span>` : ""}${ehMelhor ? ' <span class="selo ativo">menor preço</span>' : ""}</td>`;
+      }).join("");
+      return `<tr>
+        <td>${escapeHtml(it.item_codigo)} — ${escapeHtml(it.item_descricao)}</td>
+        <td class="texto-suave">${_fmtQtd(it.quantidade)} ${escapeHtml(it.unidade)}</td>
+        ${celulas}
+      </tr>`;
+    }).join("");
+
+    const cabecalhoFornecedores = cotacao.fornecedores.map((f) => `<th>${escapeHtml(f.fornecedor_nome)}</th>`).join("");
+
+    const cartoesFornecedores = cotacao.fornecedores.map((f) => `
+      <div class="subcartao">
+        <div class="linha-detalhe">
+          <div><div class="rotulo">Fornecedor</div>${escapeHtml(f.fornecedor_nome)}${cotacao.fornecedor_vencedor_id === f.fornecedor_id ? ' <span class="selo ativo">Vencedor</span>' : ""}</div>
+          <div><div class="rotulo">Respondeu</div>${f.total_itens_respondidos} de ${cotacao.itens.length} item(ns)${f.respondeu_todos_itens ? ' <span class="selo ativo">completo</span>' : ' <span class="selo amarelo">incompleto</span>'}</div>
+          <div><div class="rotulo">Valor total estimado</div>${fmtMoeda(f.valor_total_estimado)}</div>
+        </div>
+        <div class="barra-acoes">
+          <span></span>
+          <div style="display:flex;gap:8px;">
+            ${podeRegistrarResposta ? `<button class="botao secundario pequeno" data-acao="registrar-resposta-cotacao" data-cotacao-id="${cotacao.id}" data-fornecedor-id="${f.fornecedor_id}" data-fornecedor-nome="${escapeHtml(f.fornecedor_nome)}">Registrar resposta</button>` : ""}
+            ${podeFechar && f.respondeu_todos_itens ? `<button class="botao pequeno" data-acao="fechar-cotacao" data-id="${cotacao.id}" data-fornecedor-id="${f.fornecedor_id}" data-fornecedor-nome="${escapeHtml(f.fornecedor_nome)}">Fechar cotação com este fornecedor</button>` : ""}
+          </div>
+        </div>
+      </div>`).join("");
+
+    renderShell(
+      `<a class="link-voltar" href="#/compras-cotacoes">&larr; Voltar para Cotações</a>
+       <h2>Cotação ${escapeHtml(cotacao.numero)}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><div class="rotulo">Status</div><span class="selo ${SELO_STATUS_COTACAO[cotacao.status]}">${ROTULOS_STATUS_COTACAO[cotacao.status]}</span></div>
+           <div><div class="rotulo">Criada em</div>${fmtData(cotacao.criado_em)}</div>
+           ${cotacao.fechado_em ? `<div><div class="rotulo">Fechada em</div>${fmtData(cotacao.fechado_em)}</div>` : ""}
+           ${cotacao.cancelado_em ? `<div><div class="rotulo">Cancelada em</div>${fmtData(cotacao.cancelado_em)}</div>` : ""}
+           ${cotacao.fornecedor_vencedor_nome ? `<div><div class="rotulo">Fornecedor vencedor</div>${escapeHtml(cotacao.fornecedor_vencedor_nome)}</div>` : ""}
+           ${cotacao.pedido_compra_gerado_numero ? `<div><div class="rotulo">Pedido de compra gerado</div><a href="#/compras-pedidos/${cotacao.pedido_compra_gerado_id}">${escapeHtml(cotacao.pedido_compra_gerado_numero)}</a></div>` : ""}
+         </div>
+         ${cotacao.observacoes ? `<p class="texto-suave">${escapeHtml(cotacao.observacoes)}</p>` : ""}
+         ${cotacao.motivo_cancelamento ? `<p class="mensagem-erro">Motivo do cancelamento: ${escapeHtml(cotacao.motivo_cancelamento)}</p>` : ""}
+         ${podeCancelar ? `<div class="barra-acoes"><span></span><button class="botao perigo" data-acao="cancelar-cotacao" data-id="${cotacao.id}">Cancelar cotação</button></div>` : ""}
+         <h3>Comparativo de preços</h3>
+         <div style="overflow-x:auto;">
+           <table>
+             <thead><tr><th>Item</th><th>Quantidade</th>${cabecalhoFornecedores}</tr></thead>
+             <tbody>${linhasComparativo}</tbody>
+           </table>
+         </div>
+         <h3>Fornecedores convidados</h3>
+         ${cartoesFornecedores}
+       </div>`,
+      "compras-cotacoes"
+    );
+  }
+
+  function modalRegistrarRespostaCotacao(cotacaoId, fornecedorId, fornecedorNome, itens, respostasExistentes) {
+    const respostaPorItem = {};
+    for (const r of respostasExistentes || []) respostaPorItem[r.item_id] = r;
+    const linhasItens = itens.map((it) => {
+      const existente = respostaPorItem[it.item_id];
+      return `<div class="campo">
+        <label>${escapeHtml(it.item_codigo)} — ${escapeHtml(it.item_descricao)} (${_fmtQtd(it.quantidade)} ${escapeHtml(it.unidade)})</label>
+        <div style="display:flex;gap:8px;">
+          <input name="preco_${it.item_id}" type="number" step="any" min="0" placeholder="Preço unitário (R$)"
+                 value="${existente ? existente.preco_unitario : ""}" required>
+          <input name="prazo_${it.item_id}" type="number" step="1" min="0" placeholder="Prazo (dias, opcional)"
+                 value="${existente && existente.prazo_entrega_dias != null ? existente.prazo_entrega_dias : ""}">
+        </div>
+      </div>`;
+    }).join("");
+
+    abrirModal(`
+      <h3>Registrar resposta — ${escapeHtml(fornecedorNome)}</h3>
+      <p class="texto-suave">Digite o preço unitário e o prazo de entrega (opcional) que este fornecedor informou
+      para cada item, conforme recebido por telefone/e-mail. Reenviar substitui a resposta anterior por completo.</p>
+      <form data-form="registrar-resposta-cotacao" data-cotacao-id="${cotacaoId}" data-fornecedor-id="${fornecedorId}">
+        ${linhasItens}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar resposta</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarCotacao(cotacaoId) {
+    abrirModal(`
+      <h3>Cancelar cotação</h3>
+      <p class="texto-suave">Cancelar não gera nenhum Pedido de Compra — só é possível enquanto a cotação estiver aberta.</p>
+      <form data-form="cancelar-cotacao" data-id="${cotacaoId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Confirmar cancelamento</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // CUSTEIO DE PRODUÇÃO — Fase 13
+  // =======================================================================
+  // Tela agregada "Custo do Produto", independente de qualquer ordem
+  // específica: aba 1 mostra o custo padrão PROJETADO de cada fórmula
+  // ativa (a partir do custo médio de compra atual dos insumos da BOM —
+  // útil para precificar antes mesmo de produzir); aba 2 (no detalhe de
+  // cada produto) mostra o histórico real de custo de perda das últimas
+  // ordens já concluídas daquela fórmula. Gated pela permissão nova
+  // `custeio.visualizar` (ver ITENS_MENU acima) — dado financeiro
+  // sensível, independente de producao.visualizar.
+  async function renderCustoProdutos() {
+    app.innerHTML = '<div class="carregando">Carregando custo dos produtos…</div>';
+    const lista = await chamarApi("/custeio/produtos");
+
+    const linhas = lista
+      .map((p) => `<tr>
+        <td class="mono"><a href="#/custeio/${p.formula_id}">${escapeHtml(p.item_produzido_codigo)}</a></td>
+        <td>${escapeHtml(p.item_produzido_descricao)}</td>
+        <td>v${p.versao}</td>
+        <td>${p.custo_projetado.custo_total_por_unidade != null ? `R$ ${Number(p.custo_projetado.custo_total_por_unidade).toFixed(2)} / ${escapeHtml(p.custo_projetado.unidade_rendimento)}` : "—"}</td>
+        <td>${p.custo_projetado.custo_incompleto ? '<span class="selo bloqueado">Incompleto</span>' : '<span class="selo ativo">Completo</span>'}</td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Custo do Produto</h2>
+       <div class="cartao">
+         <p class="texto-suave">Custo padrão projetado de cada fórmula ativa, calculado a partir do custo médio real de
+         compra dos insumos (matéria-prima, embalagem — rótulo, tampa, sílica etc. — desde que estejam na composição da
+         fórmula). "Incompleto" significa que pelo menos um insumo ainda não teve custo informado em nenhum lote recebido
+         (o número mostrado está subestimado até isso ser corrigido). Clique num produto para ver o detalhe e o histórico
+         real de custo das perdas nas últimas ordens concluídas.</p>
+         <table>
+           <thead><tr><th>Produto</th><th>Descrição</th><th>Versão</th><th>Custo projetado</th><th>Dados de custo</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhuma fórmula ativa ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "custeio"
+    );
+  }
+
+  async function renderCustoProdutoDetalhe(formulaId) {
+    app.innerHTML = '<div class="carregando">Carregando custo do produto…</div>';
+    const detalhe = await chamarApi(`/custeio/produtos/${formulaId}`);
+
+    const itensProjetadoHtml = detalhe.custo_projetado.itens
+      .map((i) => `<tr>
+        <td>${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</td>
+        <td>${i.quantidade_por_unidade} ${escapeHtml(i.unidade)}</td>
+        <td>${i.custo_medio_unitario != null ? `R$ ${Number(i.custo_medio_unitario).toFixed(4)}` : '<span class="texto-suave">sem custo informado</span>'}</td>
+        <td>${i.custo_por_unidade != null ? `R$ ${Number(i.custo_por_unidade).toFixed(4)}` : "—"}</td>
+      </tr>`)
+      .join("");
+
+    const historicoHtml = detalhe.historico_perdas.length
+      ? detalhe.historico_perdas.map((o) => `<tr>
+          <td class="mono"><a href="#/producao/${o.ordem_id}">${escapeHtml(o.ordem_numero)}</a></td>
+          <td>${o.quantidade_produzida ?? "—"}</td>
+          <td>${o.quantidade_perda ?? "—"}</td>
+          <td>${o.perdas ? fmtPct(o.perdas.percentual_perda) : "—"}</td>
+          <td>${o.custo_incompleto ? '<span class="selo bloqueado">Incompleto</span>' : `R$ ${Number(o.custo_total_producao).toFixed(2)}`}</td>
+          <td>${o.perdas ? `R$ ${Number(o.perdas.custo_total_perda).toFixed(2)}` : "—"}</td>
+        </tr>`).join("")
+      : '<tr><td colspan="6" class="texto-suave">Nenhuma ordem concluída ainda para este produto.</td></tr>';
+
+    renderShell(
+      `<a class="link-voltar" href="#/custeio">← Voltar para Custo do Produto</a>
+       <h2>${escapeHtml(detalhe.item_produzido_codigo)} — ${escapeHtml(detalhe.item_produzido_descricao)} <span class="texto-suave">(v${detalhe.versao})</span></h2>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Custo de Produção (projetado)</h3>
+         ${detalhe.custo_projetado.custo_incompleto ? '<p class="mensagem-erro">Custo incompleto: pelo menos um insumo ainda não tem custo de compra informado — o total abaixo está subestimado.</p>' : ""}
+         <table><thead><tr><th>Insumo</th><th>Qtd. por unidade</th><th>Custo médio de compra</th><th>Custo por unidade</th></tr></thead>
+           <tbody>${itensProjetadoHtml}</tbody>
+         </table>
+         <p style="text-align:right;margin-top:8px;"><strong>Custo total projetado: R$ ${Number(detalhe.custo_projetado.custo_total_por_unidade).toFixed(2)} por ${escapeHtml(detalhe.custo_projetado.unidade_rendimento)}</strong></p>
+       </div>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Custo com Perdas (histórico real das últimas ordens concluídas)</h3>
+         <p class="texto-suave" style="margin-top:-8px;">Cada ordem já concluída deste produto, com o percentual de perda calculado na conclusão (Fase 9) e o custo real atribuível a essa perda — não é uma média projetada, são os casos reais, para não sugerir uma precisão que os dados não têm.</p>
+         <table><thead><tr><th>Ordem</th><th>Produzido</th><th>Perda</th><th>% Perda</th><th>Custo total</th><th>Custo da perda</th></tr></thead>
+           <tbody>${historicoHtml}</tbody>
+         </table>
+       </div>`,
+      "custeio"
+    );
+  }
+
+  // =======================================================================
+  // DRE SIMPLIFICADO — Fase 20
+  // =======================================================================
+  // Demonstrativo de Resultado calculado ao vivo: receita bruta = soma dos
+  // itens de pedidos EXPEDIDOS (Comercial); CMV = custo real de produção
+  // (ou de compra, se o lote foi recebido pronto) de cada lote efetivamente
+  // reservado/vendido (Fase 13 + Fase 20). Nada aqui é armazenado — cada
+  // consulta recalcula tudo a partir das mesmas tabelas usadas pelas telas
+  // operacionais, o mesmo princípio já seguido no Painel Gerencial.
+  async function renderDre(filtros) {
+    filtros = filtros || {};
+    app.innerHTML = '<div class="carregando">Carregando DRE…</div>';
+    const params = new URLSearchParams();
+    if (filtros.data_inicio) params.set("data_inicio", filtros.data_inicio);
+    if (filtros.data_fim) params.set("data_fim", filtros.data_fim);
+    const qs = params.toString();
+    const dre = await chamarApi("/custeio/dre" + (qs ? "?" + qs : ""));
+
+    const linhasPedidos = dre.pedidos.length
+      ? dre.pedidos
+          .map(
+            (p) => `<tr class="${p.custo_incompleto ? "linha-alerta" : ""}">
+          <td class="mono"><a href="#/pedido/${p.pedido_id}">${escapeHtml(p.numero || String(p.pedido_id))}</a></td>
+          <td>${fmtDataCurta(p.expedido_em)}</td>
+          <td>${fmtMoeda(p.receita)}</td>
+          <td>${fmtMoeda(p.cmv)}${p.custo_incompleto ? ' <span class="selo bloqueado">incompleto</span>' : ""}</td>
+          <td>${fmtMoeda(p.lucro_bruto)}</td>
+        </tr>`
+          )
+          .join("")
+      : '<tr><td colspan="5" class="texto-suave">Nenhum pedido expedido no período selecionado.</td></tr>';
+
+    renderShell(
+      `<h2>DRE Simplificado</h2>
+       <div class="cartao">
+         <p class="dica">Demonstrativo de Resultado calculado ao vivo a partir dos pedidos expedidos (Comercial) e do
+         custo real de produção/compra dos lotes vendidos (Custeio) — nada aqui é um valor pré-calculado, tudo é
+         recalculado a cada consulta. Considera somente pedidos com status "expedido"; o filtro de período usa a
+         data/hora de expedição.</p>
+         <form data-form="filtrar-dre">
+           <div class="grade-filtros">
+             <div class="campo"><label>Expedido de</label><input name="data_inicio" type="date" value="${escapeHtml(filtros.data_inicio || "")}"></div>
+             <div class="campo"><label>Expedido até</label><input name="data_fim" type="date" value="${escapeHtml(filtros.data_fim || "")}"></div>
+             <button class="botao secundario" type="submit">Filtrar</button>
+           </div>
+         </form>
+       </div>
+
+       ${
+         dre.custo_incompleto
+           ? `<div class="cartao">
+                <p class="mensagem-erro">Custo incompleto: pelo menos um lote vendido não tem custo de produção/compra
+                disponível — o CMV e a margem abaixo estão subestimados. Lotes afetados:
+                ${dre.lotes_sem_custo_disponivel.map((c) => escapeHtml(c)).join(", ")}</p>
+              </div>`
+           : ""
+       }
+
+       <div class="cartao">
+         <div class="grade-kpi">
+           ${kpi("Receita Bruta", fmtMoeda(dre.receita_bruta))}
+           ${kpi("CMV (Custo da Mercadoria Vendida)", fmtMoeda(dre.cmv))}
+           ${kpi("Lucro Bruto", fmtMoeda(dre.lucro_bruto))}
+           ${kpi("Margem Bruta", dre.margem_bruta_pct != null ? fmtPct(dre.margem_bruta_pct) : "—")}
+           ${kpi("Pedidos considerados", dre.total_pedidos)}
+         </div>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Resultado do período (Fase 41)</h3>
+         <p class="dica">Despesas operacionais: contas a pagar lançadas com categoria "despesa operacional" (tela Financeiro)
+         dentro do período, pela data de lançamento — nunca inclui compra de insumo (essa já está embutida no CMV acima).
+         Imposto sobre vendas: soma de todas as alíquotas configuradas em Financeiro (genérica + PIS/COFINS/ICMS/ISS —
+         Fase 56), cada uma aplicada sobre a Receita Bruta — ver o detalhamento por tributo abaixo.</p>
+         <div class="grade-kpi">
+           ${kpi("Despesas Operacionais", fmtMoeda(dre.despesas_operacionais))}
+           ${kpi("Impostos sobre Vendas", fmtMoeda(dre.impostos_sobre_vendas))}
+           ${kpi("Lucro Líquido", fmtMoeda(dre.lucro_liquido))}
+           ${kpi("Margem Líquida", dre.margem_liquida_pct != null ? fmtPct(dre.margem_liquida_pct) : "—")}
+         </div>
+       </div>
+
+       ${(() => {
+         // Fase 56 — só mostra o detalhamento por tributo quando pelo
+         // menos uma alíquota está configurada (> 0); com tudo em 0 (o
+         // padrão), o card some por completo e a tela fica idêntica à de
+         // antes desta fase — nenhuma linha vazia poluindo o DRE.
+         const linhasImpostos = Object.entries({
+           "Imposto genérico": dre.impostos_detalhe.imposto_generico,
+           PIS: dre.impostos_detalhe.pis,
+           COFINS: dre.impostos_detalhe.cofins,
+           ICMS: dre.impostos_detalhe.icms,
+           ISS: dre.impostos_detalhe.iss,
+         }).filter(([, d]) => d.percentual > 0);
+         if (linhasImpostos.length === 0) return "";
+         return `<div class="cartao">
+           <h3 style="margin-top:0;">Impostos sobre Vendas — detalhamento por tributo (Fase 56)</h3>
+           <table>
+             <thead><tr><th>Tributo</th><th>Alíquota</th><th>Valor no período</th></tr></thead>
+             <tbody>${linhasImpostos
+               .map(([nome, d]) => `<tr><td>${escapeHtml(nome)}</td><td>${fmtPct(d.percentual)}</td><td>${fmtMoeda(d.valor)}</td></tr>`)
+               .join("")}</tbody>
+             <tfoot><tr><td colspan="2" style="text-align:right;font-weight:600;">Total</td><td style="font-weight:600;">${fmtMoeda(dre.impostos_sobre_vendas)}</td></tr></tfoot>
+           </table>
+         </div>`;
+       })()}
+
+       ${
+         dre.despesas_operacionais_detalhe.length > 0
+           ? `<div class="cartao">
+                <h3 style="margin-top:0;">Despesas operacionais no período</h3>
+                <table>
+                  <thead><tr><th>Número</th><th>Fornecedor</th><th>Descrição</th><th>Valor</th><th>Lançada em</th></tr></thead>
+                  <tbody>${dre.despesas_operacionais_detalhe
+                    .map(
+                      (d) => `<tr>
+                    <td class="mono">${escapeHtml(d.numero)}</td>
+                    <td>${escapeHtml(d.fornecedor_nome)}</td>
+                    <td class="texto-suave">${escapeHtml(d.descricao)}</td>
+                    <td>${fmtMoeda(d.valor)}</td>
+                    <td>${fmtDataCurta(d.criado_em)}</td>
+                  </tr>`
+                    )
+                    .join("")}</tbody>
+                </table>
+              </div>`
+           : ""
+       }
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Pedidos no período</h3>
+         <table>
+           <thead><tr><th>Pedido</th><th>Expedido em</th><th>Receita</th><th>CMV</th><th>Lucro Bruto</th></tr></thead>
+           <tbody>${linhasPedidos}</tbody>
+         </table>
+       </div>`,
+      "dre"
+    );
+  }
+
+  // =======================================================================
+  // MEMORIAL TÉCNICO ANVISA — Fase 24
+  // =======================================================================
+  // Módulo novo, reconstruído nesta mesma tecnologia (a pedido do cliente)
+  // a partir de um sistema separado que ele já usava para gerar o Memorial
+  // Técnico exigido pela ANVISA no registro/notificação de suplementos
+  // alimentares. Quatro telas atrás de um único item de menu da barra
+  // lateral principal ("Memorial Técnico" — ver a sub-rota dentro do
+  // "case \"memorial\"" em montarRota): Visão Geral, Empresas, Produtos e
+  // Memoriais. Ao entrar em qualquer uma delas aparece uma segunda barra de
+  // navegação (navMemorial(), escura, fixa à esquerda do conteúdo) — isso
+  // reproduz de propósito a navegação própria do sistema original (Replit),
+  // a pedido do cliente, em vez de abas simples como era antes.
+
+  const STATUS_MEMORIAL_LABEL = {
+    rascunho: "Rascunho", em_andamento: "Em Andamento", em_revisao: "Em Revisão",
+    concluido: "Concluído", aprovado: "Aprovado", reprovado: "Reprovado",
+  };
+  const STATUS_MEMORIAL_SELO = {
+    rascunho: "inativo", em_andamento: "amarelo", em_revisao: "amarelo",
+    concluido: "azul", aprovado: "ativo", reprovado: "bloqueado",
+  };
+
+  // Ícones simples, desenhados à mão no mesmo espírito dos ícones "lucide"
+  // usados no sistema original — sem depender de nenhuma biblioteca externa
+  // (o projeto não usa CDN). Os elementos filhos não têm "stroke" próprio de
+  // propósito: herdam a cor definida em CSS no elemento <svg> pai (ver
+  // ".memorial-nav a svg" e ".cartao-stat .stat-icone svg" em styles.css).
+  const ICONES_MEMORIAL = {
+    painel: '<path d="M3 3h7v9H3z"/><path d="M14 3h7v5h-7z"/><path d="M14 12h7v9h-7z"/><path d="M3 16h7v5H3z"/>',
+    empresa: '<path d="M6 22V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v18"/><path d="M14 9h4a1 1 0 0 1 1 1v12"/><path d="M2 22h20"/><path d="M9 7h.01M9 11h.01M9 15h.01M9 19h.01M17 13h.01M17 17h.01"/>',
+    produto: '<path d="M10 2v6.3a2 2 0 0 1-.5 1.3L4.2 15.5A2 2 0 0 0 6 19h12a2 2 0 0 0 1.8-3.5L14.5 9.6a2 2 0 0 1-.5-1.3V2"/><path d="M8.5 2h7"/><path d="M7 16h10"/>',
+    arquivo: '<path d="M20 7h-3a2 2 0 0 1-2-2V2"/><path d="M9 18a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9l4 4v10a2 2 0 0 1-2 2z"/><path d="M3 8v11a2 2 0 0 0 2 2h11"/>',
+    aprovado: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="m9 15 2 2 4-4"/>',
+    andamento: '<circle cx="12" cy="12" r="10"/><polygon points="10 8 16 12 10 16"/>',
+    revisao: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h4"/><path d="M14 2v6h6"/><path d="M10.4 12.6a2 2 0 1 1 3 3L8 21l-4 1 1-4z"/>',
+    reprovado: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    assinatura: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+    documento: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/>',
+    seta: '<path d="m9 18 6-6-6-6"/>',
+    catalogo: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/>',
+    // Fase 44 — "Usuários Online" (item de Administração).
+    usuarios: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    // Fase 46 — "Snapshots & Restauração" (item de Administração).
+    snapshot: '<ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14a9 3 0 0 0 18 0V5"/><path d="M3 12a9 3 0 0 0 18 0"/>',
+    // Fase 47 — "Backups do Sistema" (item de Administração).
+    backup: '<path d="M12 2v14"/><path d="m7 12 5 5 5-5"/><path d="M5 21h14"/>',
+    // Fase 49 — "Configurações" (item de Administração, último pedaço).
+    configuracao: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+  };
+  function iconeMemorial(nome, tamanho) {
+    tamanho = tamanho || 16;
+    return `<svg width="${tamanho}" height="${tamanho}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONES_MEMORIAL[nome] || ""}</svg>`;
+  }
+
+  // Cores usadas nos cartões do painel — vêm literalmente do tema do sistema
+  // original (paleta Tailwind + variáveis HSL do index.css, já convertidas
+  // para hex), para manter a mesma identidade visual que o cliente pediu.
+  const CORES_MEMORIAL = {
+    aprovado: "#10b981", // emerald-500
+    andamento: "#3b82f6", // blue-500
+    revisao: "#f59e0b", // amber-500
+    rascunho: "#566E8F", // --muted-foreground do tema original
+    reprovado: "#C32222", // --destructive do tema original
+    pendente: "#f97316", // orange-500
+  };
+
+  // ---- Catálogos (Fase 26) ----
+  // Os 10 cadastros de apoio do sistema original que alimentam seletores
+  // usados ao preencher um memorial (em vez de digitar "Vitamina C" ou uma
+  // alegação inteira toda vez, cadastra-se uma vez aqui e escolhe-se de
+  // uma lista depois). Um único config client-side (espelhando
+  // CATALOGOS_CONFIG em app/routes/memorial_catalogos.py) descreve os
+  // campos de cada um dos 10, e uma única tela genérica
+  // (renderMemorialCatalogo) é reaproveitada para todos — em vez de 10
+  // telas quase idênticas copiadas e coladas.
+  const CATALOGOS_MEMORIAL = [
+    ["metodologias", "Metodologias", [
+      { nome: "categoria", rotulo: "Categoria", tipo: "input", obrigatorio: true },
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+      { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
+      { nome: "norma", rotulo: "Norma", tipo: "input" },
+      { nome: "referencia", rotulo: "Referência", tipo: "input" },
+      { nome: "principio", rotulo: "Princípio", tipo: "textarea" },
+      { nome: "aplicacao", rotulo: "Aplicação", tipo: "textarea" },
+    ]],
+    ["nutrientes", "Nutrientes", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+      { nome: "unidade", rotulo: "Unidade", tipo: "input" },
+      { nome: "dose_minima", rotulo: "Dose Mínima", tipo: "input" },
+      { nome: "dose_maxima", rotulo: "Dose Máxima", tipo: "input" },
+      { nome: "unidade_dose", rotulo: "Unidade da Dose", tipo: "input" },
+      { nome: "categoria", rotulo: "Categoria", tipo: "input" },
+      { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
+    ]],
+    ["legislacoes", "Legislações", [
+      { nome: "codigo", rotulo: "Código", tipo: "input", obrigatorio: true },
+      { nome: "titulo", rotulo: "Título", tipo: "input", obrigatorio: true },
+      { nome: "categoria", rotulo: "Categoria", tipo: "input" },
+      { nome: "ano", rotulo: "Ano", tipo: "input" },
+      { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
+    ]],
+    ["alegacoes", "Alegações", [
+      { nome: "ativo_nutricional", rotulo: "Ativo Nutricional", tipo: "input", obrigatorio: true },
+      { nome: "alegacao", rotulo: "Alegação", tipo: "textarea", obrigatorio: true },
+      { nome: "referencia", rotulo: "Referência", tipo: "input" },
+      { nome: "categoria", rotulo: "Categoria", tipo: "input" },
+    ]],
+    ["tipos_produto", "Tipos de Produto", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+      { nome: "tem_capsula", rotulo: "Tem Cápsula", tipo: "checkbox" },
+    ]],
+    ["advertencias", "Advertências", [
+      { nome: "texto", rotulo: "Texto", tipo: "textarea", obrigatorio: true },
+    ]],
+    ["armazenamento", "Armazenamento", [
+      { nome: "texto", rotulo: "Texto", tipo: "textarea", obrigatorio: true },
+    ]],
+    ["modo_uso", "Modo de Uso", [
+      { nome: "descricao", rotulo: "Descrição", tipo: "textarea", obrigatorio: true },
+      { nome: "tipo", rotulo: "Tipo", tipo: "input" },
+    ]],
+    ["justificativas", "Justificativas", [
+      { nome: "titulo", rotulo: "Título", tipo: "input", obrigatorio: true },
+      { nome: "texto", rotulo: "Texto", tipo: "textarea", obrigatorio: true },
+    ]],
+    ["referencias", "Referências", [
+      { nome: "substancia", rotulo: "Substância", tipo: "input", obrigatorio: true },
+      { nome: "referencia", rotulo: "Referência", tipo: "input", obrigatorio: true },
+      { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
+      { nome: "tipo", rotulo: "Tipo", tipo: "input" },
+      { nome: "auto_incluir", rotulo: "Incluir Automaticamente", tipo: "checkbox" },
+    ]],
+  ];
+
+  // ---- Catálogos como SELETORES dentro do memorial (Fase 29) ----
+  // A Fase 26 entregou os 10 cadastros; a Fase 27 reorganizou o formulário
+  // de edição do memorial nas 10 abas numeradas, mas os campos continuaram
+  // sendo texto livre (decisão documentada desde a Fase 24, citando os
+  // catálogos como o próximo passo). Esta fase conecta os dois: cada campo
+  // mapeado abaixo ganha um botão "+ Catálogo" que abre um modal para
+  // escolher um item já cadastrado e INSERIR o texto formatado dele no
+  // campo. O campo continua sendo texto livre no banco — nenhuma coluna
+  // nova, nenhuma mudança de schema — o catálogo só evita digitar de novo
+  // algo que já foi cadastrado uma vez (mesmo espírito do sistema
+  // original: "cadastra uma vez, escolhe de uma lista depois").
+  const CAMPO_MEMORIAL_PARA_CATALOGO = {
+    tipo_produto: "tipos_produto",
+    composicao_nutricional: "nutrientes",
+    metodologias_aplicadas: "metodologias",
+    alegacoes: "alegacoes",
+    justificativas_tecnicas: "justificativas",
+    legislacao_aplicavel: "legislacoes",
+    referencias_bibliograficas: "referencias",
+    advertencias: "advertencias",
+    armazenamento: "armazenamento",
+    modo_uso: "modo_uso",
+  };
+
+  // Monta a linha de texto inserida no campo a partir de um item do
+  // catálogo — mesmo estilo "- título: corpo1 — corpo2" já usado pelo
+  // script de importação do backup antigo (`scripts/importar_backup_replit.py`),
+  // para o texto inserido aqui ficar no mesmo formato do texto que já foi
+  // importado de lá.
+  function _linhaComTituloCatalogo(titulo, partes) {
+    const corpo = partes.filter((v) => v !== null && v !== undefined && String(v).trim() !== "" && v !== titulo);
+    return corpo.length ? `- ${titulo}: ${corpo.join(" — ")}` : `- ${titulo}`;
+  }
+
+  function formatarLinhaCatalogoParaMemorial(catalogoChave, item) {
+    switch (catalogoChave) {
+      case "metodologias":
+        return _linhaComTituloCatalogo(item.nome, [item.categoria, item.descricao]);
+      case "nutrientes": {
+        const faixaDose = [item.dose_minima, item.dose_maxima]
+          .filter((v) => v !== null && v !== undefined && v !== "")
+          .join(" a ");
+        const unidade = item.unidade_dose || item.unidade || "";
+        return _linhaComTituloCatalogo(item.nome, [faixaDose ? `${faixaDose} ${unidade}`.trim() : "", item.categoria, item.descricao]);
+      }
+      case "legislacoes":
+        return _linhaComTituloCatalogo(item.codigo, [item.titulo, item.categoria]);
+      case "alegacoes":
+        return _linhaComTituloCatalogo(item.ativo_nutricional, [item.alegacao, item.referencia, item.categoria]);
+      case "tipos_produto":
+        // Campo de destino (tipo_produto) é um <input> de valor único, não
+        // uma lista — sem o prefixo "- " usado nos demais.
+        return item.nome + (item.tem_capsula ? " (com cápsula)" : "");
+      case "advertencias":
+      case "armazenamento":
+        return `- ${item.texto}`;
+      case "modo_uso":
+        return `- ${item.descricao}`;
+      case "justificativas":
+        return _linhaComTituloCatalogo(item.titulo, [item.texto]);
+      case "referencias":
+        return _linhaComTituloCatalogo(item.substancia, [item.referencia, item.tipo]);
+      default:
+        return item.nome || item.texto || item.titulo || "";
+    }
+  }
+
+  // Insere o texto no campo do FORMULÁRIO do memorial que já está aberto
+  // (não recarrega nem re-renderiza a tela — perderia o que o usuário
+  // ainda não salvou nas outras abas). Campos tipo <input> (hoje só
+  // tipo_produto) substituem o valor; <textarea> acrescentam uma linha,
+  // preservando o que já estava escrito.
+  function inserirTextoCatalogoNoCampo(campo, catalogoChave, item) {
+    const form = document.querySelector('form[data-form="editar-memorial"]');
+    const el = form && form.querySelector(`[name="${campo}"]`);
+    if (!el) return;
+    const texto = formatarLinhaCatalogoParaMemorial(catalogoChave, item);
+    if (el.tagName === "TEXTAREA") {
+      el.value = el.value && el.value.trim() ? `${el.value}\n${texto}` : texto;
+    } else {
+      el.value = texto;
+    }
+    el.focus();
+  }
+
+  async function modalCatalogoParaCampo(campo, catalogoChave) {
+    const config = configCatalogoMemorial(catalogoChave);
+    if (!config) return;
+    const itens = await chamarApi(`/memorial/catalogos/${catalogoChave}`);
+    const colunas = config.campos.slice(0, 3);
+    const linhas = itens.length
+      ? itens
+          .map(
+            (item) => `<tr>
+              ${colunas.map((c) => `<td>${formatarValorCampoCatalogo(item[c.nome], c)}</td>`).join("")}
+              <td><button type="button" class="botao secundario pequeno" data-acao="usar-item-catalogo-memorial" data-campo="${campo}" data-catalogo="${catalogoChave}" data-id="${item.id}">Usar</button></td>
+            </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="${colunas.length + 1}" class="texto-suave">Nenhum item ativo cadastrado em ${escapeHtml(config.label)} ainda — cadastre em Memorial Técnico → Catálogos.</td></tr>`;
+    abrirModal(
+      `<h3>Escolher de ${escapeHtml(config.label)}</h3>
+       <p class="texto-suave">Escolha um item já cadastrado para inserir no campo — o texto entra formatado, sem precisar digitar de novo.</p>
+       <table>
+         <thead><tr>${colunas.map((c) => `<th>${escapeHtml(c.rotulo)}</th>`).join("")}<th></th></tr></thead>
+         <tbody>${linhas}</tbody>
+       </table>
+       <div class="rodape-modal">
+         <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+       </div>`,
+      { largo: true }
+    );
+  }
+
+  function configCatalogoMemorial(chave) {
+    const encontrado = CATALOGOS_MEMORIAL.find(([c]) => c === chave);
+    if (!encontrado) return null;
+    return { chave: encontrado[0], label: encontrado[1], campos: encontrado[2] };
+  }
+
+  function navMemorial(ativa) {
+    const itens = [
+      ["visao-geral", "#/memorial/visao-geral", "Visão Geral", "painel"],
+      ["empresas", "#/memorial/empresas", "Empresas", "empresa"],
+      ["produtos", "#/memorial/produtos", "Produtos", "produto"],
+      ["memoriais", "#/memorial/memoriais", "Memoriais Técnicos", "arquivo"],
+    ];
+    // "ativa" vem como "catalogo:<chave>" quando dentro de uma tela de
+    // catálogo, e como "administracao:<pagina>" dentro de uma tela de
+    // Administração — em ambos os casos para distinguir de "memoriais"
+    // etc. acima, que usam o nome simples.
+    const catalogoAtiva = typeof ativa === "string" && ativa.indexOf("catalogo:") === 0 ? ativa.slice(9) : null;
+    const administracaoAtiva = typeof ativa === "string" && ativa.indexOf("administracao:") === 0 ? ativa.slice(14) : null;
+    const catalogosHtml = CATALOGOS_MEMORIAL
+      .map(
+        ([chave, label]) =>
+          `<a class="${chave === catalogoAtiva ? "ativo" : ""}" href="#/memorial/catalogo/${chave}">${iconeMemorial("catalogo")}<span>${label}</span></a>`
+      )
+      .join("");
+    // Fase 44/46/47/48/49 — "Administração": os cinco pedaços já entregues
+    // (Usuários Online e Snapshots & Restauração reaproveitam permissões
+    // que já existem no resto do sistema; Backups do Sistema usa uma
+    // permissão nova, `sistema.backup_completo`, de propósito — ver
+    // `app/routes/sistema.py`; Gerenciar Usuários — Fase 48 — não é uma
+    // segunda tela de usuários, é a MESMA tela central (`renderUsuarios`),
+    // só desenhada com a nav do Memorial ao redor quando acessada por
+    // aqui — ver comentário na própria função; Configurações — Fase 49 —
+    // fecha a seção com a mesma permissão de visualizar do módulo, e uma
+    // nova `memoriais.configurar` só para quem pode ALTERAR) — cada um só
+    // aparece para quem já tem a permissão correspondente, e o grupo
+    // inteiro só aparece se pelo menos um deles estiver visível.
+    const itensAdministracao = [];
+    if (temPermissao("usuarios", "visualizar")) {
+      itensAdministracao.push(["usuarios", "#/memorial/administracao/usuarios", "Gerenciar Usuários", "usuarios"]);
+      itensAdministracao.push(["usuarios-online", "#/memorial/administracao/usuarios-online", "Usuários Online", "usuarios"]);
+    }
+    if (temPermissao("memoriais", "visualizar")) {
+      itensAdministracao.push(["snapshots", "#/memorial/administracao/snapshots", "Snapshots & Restauração", "snapshot"]);
+    }
+    if (temPermissao("sistema", "backup_completo")) {
+      itensAdministracao.push(["backups", "#/memorial/administracao/backups", "Backups do Sistema", "backup"]);
+    }
+    if (temPermissao("memoriais", "visualizar")) {
+      itensAdministracao.push(["configuracao", "#/memorial/administracao/configuracao", "Configurações", "configuracao"]);
+    }
+    const administracaoHtml = itensAdministracao
+      .map(
+        ([chave, rota, label, icone]) =>
+          `<a class="${chave === administracaoAtiva ? "ativo" : ""}" href="${rota}">${iconeMemorial(icone)}<span>${label}</span></a>`
+      )
+      .join("");
+    return `<nav class="memorial-nav">
+      ${itens
+        .map(
+          ([chave, rota, label, icone]) =>
+            `<a class="${chave === ativa ? "ativo" : ""}" href="${rota}">${iconeMemorial(icone)}<span>${label}</span></a>`
+        )
+        .join("")}
+      ${
+        itensAdministracao.length
+          ? `<details class="memorial-nav-grupo"${administracaoAtiva ? " open" : ""}>
+               <summary>${iconeMemorial("usuarios")}<span>Administração</span></summary>
+               <div class="memorial-nav-subitens">${administracaoHtml}</div>
+             </details>`
+          : ""
+      }
+      <details class="memorial-nav-grupo"${catalogoAtiva ? " open" : ""}>
+        <summary>${iconeMemorial("catalogo")}<span>Catálogos</span></summary>
+        <div class="memorial-nav-subitens">${catalogosHtml}</div>
+      </details>
+    </nav>`;
+  }
+
+  // ---- Administração — Usuários Online (Fase 44) ----
+  // Único pedaço da "Administração" do sistema original que foi replicado
+  // até agora (ver comentário em migrations/schema_fase44.sql sobre por que
+  // o restante — Gerenciar Usuários/Configurações/Snapshots/Backups — não
+  // faz sentido duplicar, já que o Alphafitus tem seu próprio módulo de
+  // Usuários desde a Fase 1). "Online" aqui é calculado no backend a partir
+  // de `ultimo_acesso_em`, atualizado a cada requisição autenticada — não é
+  // uma conexão em tempo real (não há WebSocket nesta versão), então a lista
+  // reflete quem esteve ativo nos últimos minutos, não quem está com a tela
+  // aberta neste exato instante.
+  async function renderMemorialUsuariosOnline() {
+    app.innerHTML = '<div class="carregando">Carregando usuários online…</div>';
+    const dados = await chamarApi("/usuarios/online");
+    const usuarios = dados.usuarios || [];
+    const totalOnline = usuarios.filter((u) => u.online).length;
+
+    const linhas = usuarios
+      .map((u) => {
+        const seloOnline = u.online
+          ? `<span class="selo ativo">Online</span>`
+          : `<span class="selo inativo">Offline</span>`;
+        return `<tr>
+          <td>${escapeHtml(u.nome)}</td>
+          <td>${escapeHtml(u.email)}</td>
+          <td>${u.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "—"}</td>
+          <td>${seloOnline}</td>
+          <td>${fmtData(u.ultimo_acesso_em)}</td>
+        </tr>`;
+      })
+      .join("");
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("administracao:usuarios-online")}
+         <div class="memorial-content">
+           <div class="barra-acoes">
+             <div><h2 style="margin-bottom:2px;">Usuários Online</h2><p class="texto-suave" style="margin:0;">${totalOnline} de ${usuarios.length} usuário(s) online agora (janela de ${dados.janela_minutos} minuto(s) de inatividade).</p></div>
+           </div>
+           <div class="cartao">
+             <p class="texto-suave" style="margin-top:0;font-size:12px;">
+               "Online" considera qualquer requisição feita ao sistema nos últimos ${dados.janela_minutos} minuto(s) — não é uma conexão em tempo real, então pode levar até esse tempo para um usuário aparecer como offline após sair.
+             </p>
+             <table>
+               <thead><tr><th>Nome</th><th>Email</th><th>Perfis</th><th>Status</th><th>Último acesso</th></tr></thead>
+               <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhum usuário ativo cadastrado.</td></tr>'}</tbody>
+             </table>
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  // ---- Administração — Snapshots & Restauração (Fase 46) ----
+  // Segundo pedaço da "Administração" do sistema original — o "backup" do
+  // módulo Memorial Técnico. Exportar é uma leitura pura (nunca altera
+  // nada); restaurar SUBSTITUI por completo o conteúdo atual das tabelas
+  // do módulo pelo conteúdo do arquivo escolhido, por isso exige a
+  // permissão mais destrutiva do módulo (`memoriais.excluir`) e pede
+  // confirmação explícita — com o resumo de quantos registros de cada
+  // tabela o arquivo contém — antes de chamar a API.
+  async function renderMemorialSnapshots() {
+    const podeRestaurar = temPermissao("memoriais", "excluir");
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("administracao:snapshots")}
+         <div class="memorial-content">
+           <div class="barra-acoes">
+             <h2 style="margin:0;">Snapshots & Restauração</h2>
+           </div>
+           <p class="dica">
+             Um snapshot é um arquivo .json com o conteúdo INTEIRO das tabelas do Memorial Técnico
+             (empresas, produtos, memoriais, assinaturas, histórico, anexos, padronizações e os 10 catálogos) —
+             o "backup" deste módulo. Guarde os arquivos baixados em local seguro fora do sistema.
+           </p>
+
+           <div class="cartao">
+             <h3 style="margin-top:0;">Exportar snapshot</h3>
+             <p class="texto-suave">Baixa um arquivo .json com a situação atual — nunca altera nenhum dado.</p>
+             <button class="botao" data-acao="baixar-snapshot-memorial">Baixar Snapshot (.json)</button>
+           </div>
+
+           <div class="cartao">
+             <h3 style="margin-top:0;">Restaurar snapshot</h3>
+             ${
+               podeRestaurar
+                 ? `<p class="texto-suave">
+                      Escolha um arquivo .json baixado anteriormente por "Exportar snapshot". A restauração
+                      <strong>substitui por completo</strong> o conteúdo atual das tabelas do módulo — qualquer
+                      empresa, produto, memorial, anexo ou item de catálogo cadastrado DEPOIS do snapshot é perdido.
+                      Se a restauração falhar no meio (arquivo de uma versão diferente, referência inválida etc.),
+                      nada é alterado — ou restaura tudo, ou nada.
+                    </p>
+                    <form data-form="restaurar-snapshot-memorial">
+                      <div class="campo"><label>Arquivo de snapshot (.json)</label>
+                        <input type="file" name="arquivo" accept=".json,application/json" required>
+                      </div>
+                      <button type="submit" class="botao perigo">Restaurar</button>
+                    </form>`
+                 : `<p class="texto-suave">
+                      Você não tem a permissão necessária (<em>memoriais.excluir</em>) para restaurar um snapshot —
+                      fale com um administrador se precisar desta ação.
+                    </p>`
+             }
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  // ---- Administração — Backups do Sistema (Fase 47 + Fase 67) ----
+  // Terceiro pedaço da "Administração" — mas, diferente de Usuários
+  // Online (Fase 44) e Snapshots (Fase 46), este backup é do BANCO DE
+  // DADOS INTEIRO (todos os módulos, não só o Memorial Técnico), por isso
+  // usa uma permissão nova e separada (`sistema.backup_completo`, em vez
+  // de reaproveitar `memoriais.*`) — ver `app/routes/sistema.py`.
+  //
+  // Fase 67 acrescentou três blocos a esta mesma tela: agendamento
+  // automático (horários + envio para nuvem/e-mail em paralelo, atrás de
+  // `sistema.configurar_backup`), histórico das execuções, e restauração
+  // (atrás da permissão mais sensível do sistema, `sistema.restaurar_backup`)
+  // — que faz upload do arquivo e o deixa PENDENTE para o PRÓXIMO início
+  // do sistema (nunca troca o banco com o servidor já respondendo
+  // requisições — ver a nota de escopo completa em
+  // migrations/schema_fase67.sql). O "baixar agora" manual da Fase 47
+  // continua existindo exatamente como estava.
+  const ROTULOS_STATUS_ENVIO_BACKUP = { true: "enviado", false: "falhou" };
+
+  async function renderMemorialBackups() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const podeConfigurarBackup = temPermissao("sistema", "configurar_backup");
+    const podeRestaurar = temPermissao("sistema", "restaurar_backup");
+
+    const [configuracao, horarios, historico, restauracaoPendente] = await Promise.all([
+      podeConfigurarBackup ? chamarApi("/sistema/backup/configuracao") : Promise.resolve(null),
+      podeConfigurarBackup ? chamarApi("/sistema/backup/horarios") : Promise.resolve([]),
+      chamarApi("/sistema/backup/historico"),
+      podeRestaurar ? chamarApi("/sistema/backup/restauracao-pendente") : Promise.resolve({ restauracao_pendente: false }),
+    ]);
+
+    const linhasHistorico = historico.map((h) => {
+      const seloDestino = (tentado, sucesso, erro) => {
+        if (!tentado) return '<span class="texto-suave">—</span>';
+        return sucesso
+          ? '<span class="selo ativo">enviado</span>'
+          : `<span class="selo bloqueado" title="${escapeHtml(erro || "")}">falhou</span>`;
+      };
+      return `<tr>
+        <td>${fmtData(h.executado_em)}</td>
+        <td class="texto-suave">${h.origem === "agendado" ? "Agendado" : "Manual"}</td>
+        <td class="texto-suave">${(h.tamanho_bytes / 1024).toFixed(0)} KB</td>
+        <td>${seloDestino(h.nuvem_tentado, h.nuvem_sucesso, h.nuvem_erro)}</td>
+        <td>${seloDestino(h.email_tentado, h.email_sucesso, h.email_erro)}</td>
+      </tr>`;
+    }).join("");
+
+    const linhasHorarios = (horarios || []).map((h) => `
+      <div class="selo azul" style="display:inline-flex;align-items:center;gap:6px;margin:0 6px 6px 0;padding:6px 10px;">
+        ${escapeHtml(h.hora)}
+        ${podeConfigurarBackup ? `<button class="botao-remover-horario" data-acao="excluir-horario-backup" data-id="${h.id}" title="Remover" style="border:none;background:none;cursor:pointer;font-weight:bold;">&times;</button>` : ""}
+      </div>`).join("");
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("administracao:backups")}
+         <div class="memorial-content">
+           <div class="barra-acoes">
+             <h2 style="margin:0;">Backups do Sistema</h2>
+           </div>
+           <p class="dica">
+             Diferente do Snapshot (que é só as tabelas do Memorial Técnico), este backup é uma cópia do banco de
+             dados INTEIRO — todos os módulos do Alphafitus OS (usuários, produção, estoque, financeiro etc.), não só
+             o Memorial Técnico.
+           </p>
+
+           <div class="cartao">
+             <h3 style="margin-top:0;">Baixar backup completo agora</h3>
+             <p class="texto-suave">
+               Baixa um arquivo <code>.db</code> (SQLite) com uma cópia consistente do banco no momento do download
+               — gerada sem precisar parar o servidor, e sem alterar nenhum dado.
+             </p>
+             <div style="display:flex;gap:8px;flex-wrap:wrap;">
+               <button class="botao secundario" data-acao="baixar-backup-sistema">Baixar Backup Completo (.db)</button>
+               <button class="botao" data-acao="executar-backup-agora">Executar backup agora (nuvem + e-mail configurados)</button>
+             </div>
+           </div>
+
+           ${podeConfigurarBackup ? cartaoConfiguracaoBackup(configuracao, linhasHorarios) : ""}
+
+           <div class="cartao">
+             <h3 style="margin-top:0;">Histórico de execuções</h3>
+             <table>
+               <thead><tr><th>Quando</th><th>Origem</th><th>Tamanho</th><th>Nuvem</th><th>E-mail</th></tr></thead>
+               <tbody>${linhasHistorico || '<tr><td colspan="5" class="texto-suave">Nenhum backup executado ainda.</td></tr>'}</tbody>
+             </table>
+           </div>
+
+           ${podeRestaurar ? cartaoRestauracaoBackup(restauracaoPendente.restauracao_pendente) : ""}
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  function cartaoConfiguracaoBackup(config, linhasHorariosHtml) {
+    return `<div class="cartao">
+      <h3 style="margin-top:0;">Backup automático agendado (Fase 67)</h3>
+      <p class="texto-suave">Rode o backup sozinho, quantas vezes por dia forem necessárias, e envie automaticamente
+      para nuvem e e-mail ao mesmo tempo — sem precisar lembrar de clicar em nada.</p>
+
+      <form data-form="salvar-configuracao-backup">
+        <div class="campo"><label><input type="checkbox" name="ativo" ${config.ativo ? "checked" : ""}>
+          Ativo (ligar o backup automático — precisa de ao menos um horário e um destino abaixo)</label></div>
+
+        <h4>Destino: Nuvem (padrão S3-compatível)</h4>
+        <div class="campo"><label><input type="checkbox" name="nuvem_ativo" ${config.nuvem_ativo ? "checked" : ""}> Ativo</label></div>
+        <div class="campo"><label>Endpoint URL</label>
+          <input name="nuvem_endpoint_url" value="${escapeHtml(config.nuvem_endpoint_url || "")}" placeholder="https://s3.us-east-1.amazonaws.com"></div>
+        <div class="campo"><label>Região (opcional)</label><input name="nuvem_regiao" value="${escapeHtml(config.nuvem_regiao || "")}" placeholder="us-east-1"></div>
+        <div class="campo"><label>Bucket</label><input name="nuvem_bucket" value="${escapeHtml(config.nuvem_bucket || "")}"></div>
+        <div class="campo"><label>Prefixo/pasta (opcional)</label><input name="nuvem_prefixo" value="${escapeHtml(config.nuvem_prefixo || "")}" placeholder="alphafitus-backups"></div>
+        <div class="campo"><label>Access Key</label><input name="nuvem_access_key" value="${escapeHtml(config.nuvem_access_key || "")}"></div>
+        <div class="campo"><label>Secret Key</label><input name="nuvem_secret_key" type="password" autocomplete="new-password"
+          placeholder="${config.nuvem_chave_configurada ? "deixe em branco para manter a chave atual" : "nenhuma chave configurada ainda"}"></div>
+
+        <h4>Destino: E-mail</h4>
+        <div class="campo"><label><input type="checkbox" name="email_ativo" ${config.email_ativo ? "checked" : ""}> Ativo</label></div>
+        <div class="campo"><label>Destinatários (separados por vírgula)</label>
+          <input name="email_destinatarios" value="${escapeHtml(config.email_destinatarios || "")}" placeholder="ti@empresa.com, backup@empresa.com"></div>
+        <p class="dica">Usa o mesmo servidor SMTP já configurado em Notificações — configure-o lá antes de ativar este destino.</p>
+
+        ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
+        <div class="rodape-modal" style="padding:0;">
+          <button type="submit" class="botao">Salvar configuração</button>
+        </div>
+      </form>
+
+      <h4>Horários (quantos por dia forem necessários)</h4>
+      <div style="margin-bottom:8px;">${linhasHorariosHtml || '<p class="texto-suave">Nenhum horário cadastrado ainda.</p>'}</div>
+      <form data-form="novo-horario-backup" style="display:flex;gap:8px;align-items:end;">
+        <div class="campo" style="margin:0;"><label>Novo horário (HH:MM)</label><input name="hora" type="time" required></div>
+        <button type="submit" class="botao secundario">Adicionar horário</button>
+      </form>
+    </div>`;
+  }
+
+  function cartaoRestauracaoBackup(restauracaoPendente) {
+    return `<div class="cartao">
+      <h3 style="margin-top:0;">Restaurar backup</h3>
+      ${restauracaoPendente ? `
+        <p class="mensagem-erro">
+          Um backup já foi enviado e está PENDENTE de restauração — a troca só acontece na PRÓXIMA VEZ que o
+          Alphafitus OS for iniciado (feche e abra o sistema de novo para concluir). Se enviou por engano, cancele abaixo.
+        </p>
+        <button class="botao perigo" data-acao="cancelar-restauracao-pendente">Cancelar restauração pendente</button>
+      ` : `
+        <p class="texto-suave">
+          Envie um arquivo de backup (baixado anteriormente, pelo e-mail ou pela nuvem) para restaurar TODO o
+          sistema a partir dele — pensado para o cenário "perdi a máquina" ou "fui hackeado". A restauração NÃO
+          acontece na hora: o sistema fica pronto e a troca de verdade só acontece na PRÓXIMA VEZ que o
+          Alphafitus OS for iniciado (nunca com o servidor já rodando, para nunca correr o risco de corromper o
+          banco). Antes de trocar, uma cópia de segurança do banco atual é guardada automaticamente.
+        </p>
+        <form data-form="restaurar-backup">
+          <div class="campo"><label>Arquivo de backup (.db)</label>
+            <input type="file" name="arquivo" accept=".db,application/octet-stream" required></div>
+          <button type="submit" class="botao perigo">Enviar e agendar restauração</button>
+        </form>
+      `}
+    </div>`;
+  }
+
+  // ---- Administração — Configurações (Fase 49) ----
+  // Último pedaço da "Administração" — as duas únicas regras hoje fixas
+  // no Python, específicas do módulo Memorial Técnico (número de
+  // assinaturas para aprovação automática, tamanho máximo de anexo),
+  // agora editáveis por aqui. Ver o valor atual é liberado a quem só
+  // visualiza o módulo (`memoriais.visualizar`); só ALTERAR exige a
+  // permissão nova `memoriais.configurar` — mesmo padrão GET-mais-fraco/
+  // PUT-mais-forte já usado em "Limiar de Divergência" (Fase 32/34).
+  async function renderMemorialConfiguracoes() {
+    const configuracao = await chamarApi("/memorial/administracao/configuracao");
+    const podeConfigurar = temPermissao("memoriais", "configurar");
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("administracao:configuracao")}
+         <div class="memorial-content">
+           <div class="barra-acoes">
+             <h2 style="margin:0;">Configurações</h2>
+           </div>
+           <p class="dica">
+             As duas únicas regras do Memorial Técnico que podem ser ajustadas pela tela — o restante do
+             comportamento do módulo não é configurável, de propósito.
+           </p>
+
+           <div class="cartao">
+             <h3 style="margin-top:0;">Aprovação automática de memoriais</h3>
+             <p class="texto-suave">
+               Quantas assinaturas um memorial com status "Concluído" precisa acumular para ser promovido
+               automaticamente a "Aprovado". Padrão do sistema: 2.
+             </p>
+             <h3 style="margin-top:0;">Tamanho máximo de anexo</h3>
+             <p class="texto-suave">
+               Tamanho máximo (em MB) de um único arquivo anexado a um memorial (laudo, especificação,
+               rótulo). Padrão do sistema: 40 MB.
+             </p>
+             ${
+               podeConfigurar
+                 ? `<form data-form="configurar-memorial">
+                      <div class="campo"><label>Nº de assinaturas para aprovação automática</label>
+                        <input name="numero_assinaturas_aprovacao" type="number" step="1" min="1"
+                               value="${configuracao.numero_assinaturas_aprovacao}" required>
+                      </div>
+                      <div class="campo"><label>Tamanho máximo de anexo (MB)</label>
+                        <input name="tamanho_maximo_anexo_mb" type="number" step="1" min="1"
+                               value="${configuracao.tamanho_maximo_anexo_mb}" required>
+                      </div>
+                      ${configuracao.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(configuracao.atualizado_em)}.</p>` : ""}
+                      <button type="submit" class="botao">Salvar</button>
+                    </form>`
+                 : `<p class="texto-suave">
+                      Nº de assinaturas atual: <strong>${configuracao.numero_assinaturas_aprovacao}</strong> —
+                      Tamanho máximo de anexo atual: <strong>${configuracao.tamanho_maximo_anexo_mb} MB</strong>.
+                      Você não tem a permissão necessária (<em>memoriais.configurar</em>) para alterar estes
+                      valores — fale com um administrador se precisar desta ação.
+                    </p>`
+             }
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  function cartaoStat(rotulo, valor, icone, cor, largo) {
+    return `<a class="cartao-stat${largo ? " stat-larga" : ""}" href="#/memorial/memoriais" style="${cor ? `--stat-cor:${cor};` : ""}">
+      <div><p class="stat-rotulo">${escapeHtml(rotulo)}</p><h2 class="stat-valor">${valor}</h2></div>
+      <div class="stat-icone">${iconeMemorial(icone, 22)}</div>
+    </a>`;
+  }
+
+  // ---- Visão Geral (painel — igual ao "/" do sistema original) ----
+  async function renderMemorialDashboard() {
+    app.innerHTML = '<div class="carregando">Carregando painel…</div>';
+    const stats = await chamarApi("/memorial/dashboard");
+
+    const cartoes = [
+      cartaoStat("Total de Memoriais", stats.total_memoriais, "arquivo", null),
+      cartaoStat("Aprovados", stats.memoriais_aprovados, "aprovado", CORES_MEMORIAL.aprovado),
+      cartaoStat("Em Andamento", stats.memoriais_em_andamento, "andamento", CORES_MEMORIAL.andamento),
+      cartaoStat("Em Revisão", stats.memoriais_em_revisao, "revisao", CORES_MEMORIAL.revisao),
+      cartaoStat("Rascunhos", stats.memoriais_rascunho, "arquivo", CORES_MEMORIAL.rascunho),
+      cartaoStat("Reprovados", stats.memoriais_reprovados, "reprovado", CORES_MEMORIAL.reprovado),
+    ].join("");
+
+    const cartaoResumo = `<div class="cartao-stat stat-larga cartao-resumo-links" style="display:block;">
+      <a href="#/memorial/empresas">
+        <span style="display:flex;align-items:center;gap:10px;">${iconeMemorial("empresa", 18)} Empresas Registradas</span>
+        <strong>${stats.total_empresas}</strong>
+      </a>
+      <a href="#/memorial/produtos">
+        <span style="display:flex;align-items:center;gap:10px;">${iconeMemorial("produto", 18)} Produtos Ativos</span>
+        <strong>${stats.total_produtos}</strong>
+      </a>
+    </div>`;
+
+    // Nota: o sistema original tinha um pequeno bug de pluralização aqui
+    // ("memorial" + "is" = "memorialis"); corrigido para o português correto
+    // ("memorial" / "memoriais") — o resto do cartão segue fiel ao original.
+    const cartaoPendentes =
+      stats.memoriais_assinaturas_pendentes > 0
+        ? `<a class="cartao-stat stat-larga" href="#/memorial/memoriais?status=pendente" style="--stat-cor:${CORES_MEMORIAL.pendente};">
+             <div style="display:flex;align-items:center;gap:14px;">
+               <div class="stat-icone">${iconeMemorial("assinatura", 22)}</div>
+               <div>
+                 <p class="stat-rotulo" style="color:${CORES_MEMORIAL.pendente};font-weight:700;margin-bottom:2px;">
+                   Assinaturas pendentes em ${stats.memoriais_assinaturas_pendentes} ${stats.memoriais_assinaturas_pendentes !== 1 ? "memoriais" : "memorial"}
+                 </p>
+                 <p class="texto-suave" style="margin:0;font-size:12px;">Um ou mais memoriais ainda não têm as 2 assinaturas necessárias. Clique para visualizar a lista.</p>
+               </div>
+             </div>
+           </a>`
+        : "";
+
+    const progresso = stats.documentos_progresso || [];
+    const linhasProgresso = progresso
+      .map((m) => {
+        const cor = corProgressoMemorial(m.progresso.pct);
+        const faltando = m.progresso.faltando || [];
+        const titulo = faltando.length ? `Falta preencher: ${faltando.join(", ")}` : "Memorial completo";
+        return `<a class="linha-progresso" href="#/memorial/memoriais/${m.id}" title="${escapeHtml(titulo)}">
+          <div class="stat-icone" style="width:34px;height:34px;--stat-cor:${cor};">${iconeMemorial("documento", 16)}</div>
+          <div class="progresso-info">
+            <p class="progresso-titulo">${escapeHtml(m.produto_nome)}</p>
+            <p class="progresso-codigo">${escapeHtml(m.numero_certificado || m.codigo)}</p>
+          </div>
+          <div class="barra-progresso"><div style="width:${m.progresso.pct}%;background:${cor};"></div></div>
+          <span class="progresso-pct" style="color:${cor};">${m.progresso.pct}%</span>
+          <span class="selo ${STATUS_MEMORIAL_SELO[m.status] || ""}">${STATUS_MEMORIAL_LABEL[m.status] || m.status}</span>
+        </a>`;
+      })
+      .join("");
+
+    const secaoProgresso = progresso.length
+      ? `<div class="cartao">
+           <h3 style="margin-top:0;">Progresso dos Documentos</h3>
+           <p class="texto-suave" style="margin-top:-8px;">Memoriais ainda não finalizados — ordenados pelos que precisam de mais atenção.</p>
+           <div class="lista-progresso">${linhasProgresso}</div>
+           <div class="legenda-progresso">
+             <span><i style="background:#ef4444;"></i>&lt; 40% — Atenção urgente</span>
+             <span><i style="background:#f59e0b;"></i>40–69% — Em desenvolvimento</span>
+             <span><i style="background:#3b82f6;"></i>70–99% — Quase pronto</span>
+             <span><i style="background:#10b981;"></i>100% — Completo</span>
+           </div>
+         </div>`
+      : "";
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("visao-geral")}
+         <div class="memorial-content">
+           <div class="barra-acoes">
+             <div><h2 style="margin-bottom:2px;">Visão Geral</h2><p class="texto-suave" style="margin:0;">Status atual das submissões e registros.</p></div>
+             ${temPermissao("memoriais", "cadastrar") ? `<button class="botao" data-acao="novo-memorial">+ Novo Memorial Técnico</button>` : ""}
+           </div>
+           <div class="grade-stat">${cartoes}${cartaoResumo}${cartaoPendentes}</div>
+           ${secaoProgresso}
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  // Mesmo algoritmo de "corProgresso()" do sistema original
+  // (src/lib/memorial-progresso.ts): a cor muda conforme a faixa do
+  // percentual de preenchimento, não é uma escolha arbitrária.
+  function corProgressoMemorial(pct) {
+    if (pct >= 100) return "#10b981";
+    if (pct >= 70) return "#3b82f6";
+    if (pct >= 40) return "#f59e0b";
+    return "#ef4444";
+  }
+
+  // ---- Empresas (do Memorial Técnico) ----
+  async function renderMemorialEmpresas() {
+    app.innerHTML = '<div class="carregando">Carregando empresas…</div>';
+    const empresas = await chamarApi("/memorial/empresas");
+    const podeCadastrar = temPermissao("memorial_empresas", "cadastrar");
+    const podeEditar = temPermissao("memorial_empresas", "editar");
+
+    const linhas = empresas
+      .map(
+        (e) => `<tr>
+          <td>${escapeHtml(e.nome_fantasia)}</td>
+          <td>${escapeHtml(e.razao_social)}</td>
+          <td class="mono">${escapeHtml(e.cnpj)}</td>
+          <td>${escapeHtml(e.responsavel_tecnico || "—")}</td>
+          <td><span class="selo ${e.status === "ativo" ? "ativo" : "inativo"}">${e.status}</span></td>
+          <td>${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-memorial-empresa" data-id="${e.id}">Editar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("empresas")}
+         <div class="memorial-content">
+           <h2>Empresas</h2>
+           <div class="cartao">
+             <p class="texto-suave">Empresas/marcas para quem um Memorial Técnico é elaborado (não confundir com a tela
+             "Empresas" do menu principal, que são as unidades/CNPJs da própria Alphafitus).</p>
+             <div class="barra-acoes">
+               <span class="texto-suave">${empresas.length} empresa(s)</span>
+               ${podeCadastrar ? `<button class="botao" data-acao="nova-memorial-empresa">+ Nova empresa</button>` : ""}
+             </div>
+             <table>
+               <thead><tr><th>Nome Fantasia</th><th>Razão Social</th><th>CNPJ</th><th>Resp. Técnico</th><th>Status</th><th>Ações</th></tr></thead>
+               <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhuma empresa cadastrada.</td></tr>'}</tbody>
+             </table>
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  function camposEnderecoEmpresaHtml(e) {
+    e = e || {};
+    return `
+      <div class="campo"><label>Inscrição Estadual</label><input name="ie" value="${escapeHtml(e.ie || "")}"></div>
+      <div class="campo"><label>Responsável Técnico</label><input name="responsavel_tecnico" value="${escapeHtml(e.responsavel_tecnico || "")}"></div>
+      <div class="campo"><label>CRF do Responsável Técnico</label><input name="crf" value="${escapeHtml(e.crf || "")}"></div>
+      <div class="campo"><label>Endereço</label><input name="endereco" value="${escapeHtml(e.endereco || "")}"></div>
+      <div class="linha-detalhe">
+        <div class="campo" style="flex:1;"><label>Cidade</label><input name="cidade" value="${escapeHtml(e.cidade || "")}"></div>
+        <div class="campo"><label>Estado</label><input name="estado" maxlength="2" value="${escapeHtml(e.estado || "")}"></div>
+        <div class="campo"><label>CEP</label><input name="cep" value="${escapeHtml(e.cep || "")}"></div>
+      </div>
+      <div class="linha-detalhe">
+        <div class="campo" style="flex:1;"><label>Telefone</label><input name="telefone" value="${escapeHtml(e.telefone || "")}"></div>
+        <div class="campo" style="flex:1;"><label>Email</label><input name="email" type="email" value="${escapeHtml(e.email || "")}"></div>
+      </div>`;
+  }
+
+  function modalNovaMemorialEmpresa() {
+    abrirModal(
+      `<h3>Nova empresa</h3>
+       <form data-form="criar-memorial-empresa">
+         <div class="campo"><label>Nome Fantasia</label><input name="nome_fantasia" required></div>
+         <div class="campo"><label>Razão Social</label><input name="razao_social" required></div>
+         <div class="campo"><label>CNPJ</label><input name="cnpj" required></div>
+         ${camposEnderecoEmpresaHtml()}
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Criar</button>
+         </div>
+       </form>`,
+      { largo: true }
+    );
+  }
+
+  function modalEditarMemorialEmpresa(e) {
+    abrirModal(
+      `<h3>Editar ${escapeHtml(e.nome_fantasia)}</h3>
+       <form data-form="editar-memorial-empresa" data-id="${e.id}">
+         <div class="campo"><label>Nome Fantasia</label><input name="nome_fantasia" value="${escapeHtml(e.nome_fantasia)}" required></div>
+         <div class="campo"><label>Razão Social</label><input name="razao_social" value="${escapeHtml(e.razao_social)}" required></div>
+         <p class="dica">CNPJ: <span class="mono">${escapeHtml(e.cnpj)}</span> (não pode ser alterado depois de cadastrado)</p>
+         ${camposEnderecoEmpresaHtml(e)}
+         <div class="campo"><label>Status</label>
+           <select name="status">
+             <option value="ativo" ${e.status === "ativo" ? "selected" : ""}>Ativo</option>
+             <option value="inativo" ${e.status === "inativo" ? "selected" : ""}>Inativo</option>
+           </select>
+         </div>
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Salvar</button>
+         </div>
+       </form>`,
+      { largo: true }
+    );
+  }
+
+  // ---- Catálogos (Fase 26) — tela genérica reaproveitada pelos 10 ----
+  function formatarValorCampoCatalogo(valor, campo) {
+    if (campo.tipo === "checkbox") return valor ? "Sim" : "Não";
+    if (valor === null || valor === undefined || valor === "") return "—";
+    const texto = String(valor);
+    return escapeHtml(texto.length > 60 ? texto.slice(0, 57) + "…" : texto);
+  }
+
+  function campoFormularioCatalogo(campo, valorAtual) {
+    const valor = valorAtual === undefined || valorAtual === null ? "" : valorAtual;
+    if (campo.tipo === "checkbox") {
+      return `<div class="campo campo-checkbox"><label><input type="checkbox" name="${campo.nome}" ${valor ? "checked" : ""}> ${escapeHtml(campo.rotulo)}</label></div>`;
+    }
+    if (campo.tipo === "textarea") {
+      return `<div class="campo"><label>${escapeHtml(campo.rotulo)}</label><textarea name="${campo.nome}" ${campo.obrigatorio ? "required" : ""}>${escapeHtml(String(valor))}</textarea></div>`;
+    }
+    return `<div class="campo"><label>${escapeHtml(campo.rotulo)}</label><input name="${campo.nome}" value="${escapeHtml(String(valor))}" ${campo.obrigatorio ? "required" : ""}></div>`;
+  }
+
+  function modalNovoCatalogoMemorial(chave) {
+    const config = configCatalogoMemorial(chave);
+    abrirModal(
+      `<h3>Novo item — ${escapeHtml(config.label)}</h3>
+       <form data-form="criar-catalogo-memorial" data-catalogo="${chave}">
+         ${config.campos.map((c) => campoFormularioCatalogo(c, "")).join("")}
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Criar</button>
+         </div>
+       </form>`
+    );
+  }
+
+  function modalEditarCatalogoMemorial(chave, item) {
+    const config = configCatalogoMemorial(chave);
+    abrirModal(
+      `<h3>Editar item — ${escapeHtml(config.label)}</h3>
+       <form data-form="editar-catalogo-memorial" data-catalogo="${chave}" data-id="${item.id}">
+         ${config.campos.map((c) => campoFormularioCatalogo(c, item[c.nome])).join("")}
+         <div class="campo campo-checkbox"><label><input type="checkbox" name="ativo" ${item.ativo ? "checked" : ""}> Ativo</label></div>
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Salvar</button>
+         </div>
+       </form>`
+    );
+  }
+
+  async function renderMemorialCatalogo(chave) {
+    const config = configCatalogoMemorial(chave);
+    if (!config) {
+      return renderShell(`<div class="cartao"><p class="mensagem-erro">Catálogo "${escapeHtml(chave)}" não existe.</p></div>`, "memorial");
+    }
+    app.innerHTML = `<div class="carregando">Carregando ${escapeHtml(config.label)}…</div>`;
+    const itens = await chamarApi(`/memorial/catalogos/${chave}?incluir_inativos=1`);
+    const podeCadastrar = temPermissao("memorial_catalogos", "cadastrar");
+    const podeEditar = temPermissao("memorial_catalogos", "editar");
+    const podeExcluir = temPermissao("memorial_catalogos", "excluir");
+
+    // Mostra só os 3 primeiros campos na tabela (pra não ficar gigante) —
+    // os demais aparecem completos no modal de edição.
+    const colunas = config.campos.slice(0, 3);
+
+    const linhas = itens
+      .map(
+        (item) => `<tr${item.ativo ? "" : ' style="opacity:.55;"'}>
+          ${colunas.map((c) => `<td>${formatarValorCampoCatalogo(item[c.nome], c)}</td>`).join("")}
+          <td><span class="selo ${item.ativo ? "ativo" : "inativo"}">${item.ativo ? "Ativo" : "Inativo"}</span></td>
+          <td>
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-catalogo-memorial" data-catalogo="${chave}" data-id="${item.id}">Editar</button>` : ""}
+            ${podeExcluir ? `<button class="botao perigo pequeno" data-acao="excluir-catalogo-memorial" data-catalogo="${chave}" data-id="${item.id}">Excluir</button>` : ""}
+          </td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("catalogo:" + chave)}
+         <div class="memorial-content">
+           <h2>Catálogos — ${escapeHtml(config.label)}</h2>
+           <div class="cartao">
+             <p class="texto-suave">Cadastro de apoio usado para preencher memoriais técnicos mais rápido: cadastre aqui uma vez e escolha numa lista depois, em vez de digitar toda vez.</p>
+             <div class="barra-acoes">
+               <span class="texto-suave">${itens.length} item(ns)</span>
+               ${podeCadastrar ? `<button class="botao" data-acao="novo-catalogo-memorial" data-catalogo="${chave}">+ Novo item</button>` : ""}
+             </div>
+             <table>
+               <thead><tr>${colunas.map((c) => `<th>${escapeHtml(c.rotulo)}</th>`).join("")}<th>Status</th><th>Ações</th></tr></thead>
+               <tbody>${linhas || `<tr><td colspan="${colunas.length + 2}" class="texto-suave">Nenhum item cadastrado.</td></tr>`}</tbody>
+             </table>
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  // ---- Produtos (do Memorial Técnico) ----
+  const CAMPOS_MEMORIAL_PRODUTO_EXTRA = [
+    ["ingredientes_ativos", "Ingredientes Ativos", "textarea"],
+    ["excipientes", "Excipientes", "textarea"],
+    ["embalagem", "Embalagem", "input"],
+    ["advertencias", "Advertências", "textarea"],
+    ["modo_de_uso", "Modo de Uso", "textarea"],
+    ["armazenamento", "Armazenamento", "textarea"],
+    ["numero_protocolo_anvisa", "Número de Protocolo ANVISA", "input"],
+    ["quantidade_capsulas_totais", "Quantidade de Cápsulas Totais", "input"],
+    ["peso_liquido", "Peso Líquido", "input"],
+    ["tamanho_capsulas", "Tamanho das Cápsulas", "input"],
+    ["tipo_capsulas", "Tipo de Cápsulas", "input"],
+    ["tamanho_pote", "Tamanho do Pote", "input"],
+    ["referencias_comerciais", "Referências Comerciais", "input"],
+    ["comprimento_rotulo", "Comprimento do Rótulo", "input"],
+    ["largura_rotulo", "Largura do Rótulo", "input"],
+  ];
+
+  function camposProdutoExtraHtml(p) {
+    p = p || {};
+    return CAMPOS_MEMORIAL_PRODUTO_EXTRA.map(
+      ([campo, rotulo, tipo]) =>
+        `<div class="campo"><label>${rotulo}</label>${
+          tipo === "textarea"
+            ? `<textarea name="${campo}">${escapeHtml(p[campo] || "")}</textarea>`
+            : `<input name="${campo}" value="${escapeHtml(p[campo] || "")}">`
+        }</div>`
+    ).join("");
+  }
+
+  async function renderMemorialProdutos() {
+    app.innerHTML = '<div class="carregando">Carregando produtos…</div>';
+    const [produtos, empresas] = await Promise.all([chamarApi("/memorial/produtos"), chamarApi("/memorial/empresas")]);
+    const podeCadastrar = temPermissao("memorial_produtos", "cadastrar");
+    const podeEditar = temPermissao("memorial_produtos", "editar");
+    const nomeEmpresa = (id) => empresas.find((e) => e.id === id)?.nome_fantasia || `empresa #${id}`;
+
+    const linhas = produtos
+      .map(
+        (p) => `<tr>
+          <td>${escapeHtml(p.nome)}</td>
+          <td>${escapeHtml(nomeEmpresa(p.empresa_id))}</td>
+          <td>${escapeHtml(p.categoria)}</td>
+          <td>${escapeHtml(p.forma_farmaceutica)}</td>
+          <td><span class="selo ${p.status === "ativo" ? "ativo" : "inativo"}">${p.status}</span></td>
+          <td>${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-memorial-produto" data-id="${p.id}">Editar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("produtos")}
+         <div class="memorial-content">
+           <h2>Produtos</h2>
+           <div class="cartao">
+             <div class="barra-acoes">
+               <span class="texto-suave">${produtos.length} produto(s)</span>
+               ${
+                 podeCadastrar
+                   ? empresas.length
+                     ? `<button class="botao" data-acao="novo-memorial-produto">+ Novo produto</button>`
+                     : `<span class="texto-suave">Cadastre uma empresa antes de cadastrar um produto.</span>`
+                   : ""
+               }
+             </div>
+             <table>
+               <thead><tr><th>Nome</th><th>Empresa</th><th>Categoria</th><th>Forma Farmacêutica</th><th>Status</th><th>Ações</th></tr></thead>
+               <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum produto cadastrado.</td></tr>'}</tbody>
+             </table>
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+
+    state.cache.memorialEmpresas = empresas;
+    state.cache.memorialProdutos = produtos;
+  }
+
+  function modalNovoMemorialProduto(empresas) {
+    const opcoesEmpresa = empresas.map((e) => `<option value="${e.id}">${escapeHtml(e.nome_fantasia)}</option>`).join("");
+    abrirModal(
+      `<h3>Novo produto</h3>
+       <form data-form="criar-memorial-produto">
+         <div class="campo"><label>Empresa</label><select name="empresa_id" required>${opcoesEmpresa}</select></div>
+         <div class="campo"><label>Nome do Produto</label><input name="nome" required></div>
+         <div class="campo"><label>Categoria</label><input name="categoria" required placeholder="ex.: Suplemento Vitamínico"></div>
+         <div class="campo"><label>Forma Farmacêutica</label><input name="forma_farmaceutica" required placeholder="ex.: cápsula"></div>
+         <div class="linha-detalhe">
+           <div class="campo" style="flex:1;"><label>Porção (gramas)</label><input name="porcao_gramas" type="number" step="any" required></div>
+           <div class="campo" style="flex:1;"><label>Quantidade de Porções</label><input name="quantidade_porcoes" type="number" step="1" required></div>
+         </div>
+         ${camposProdutoExtraHtml()}
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Criar</button>
+         </div>
+       </form>`,
+      { largo: true }
+    );
+  }
+
+  function modalEditarMemorialProduto(p) {
+    abrirModal(
+      `<h3>Editar ${escapeHtml(p.nome)}</h3>
+       <form data-form="editar-memorial-produto" data-id="${p.id}">
+         <div class="campo"><label>Nome do Produto</label><input name="nome" value="${escapeHtml(p.nome)}" required></div>
+         <div class="campo"><label>Categoria</label><input name="categoria" value="${escapeHtml(p.categoria)}" required></div>
+         <div class="campo"><label>Forma Farmacêutica</label><input name="forma_farmaceutica" value="${escapeHtml(p.forma_farmaceutica)}" required></div>
+         <div class="linha-detalhe">
+           <div class="campo" style="flex:1;"><label>Porção (gramas)</label><input name="porcao_gramas" type="number" step="any" value="${p.porcao_gramas}" required></div>
+           <div class="campo" style="flex:1;"><label>Quantidade de Porções</label><input name="quantidade_porcoes" type="number" step="1" value="${p.quantidade_porcoes}" required></div>
+         </div>
+         ${camposProdutoExtraHtml(p)}
+         <div class="campo"><label>Status</label>
+           <select name="status">
+             <option value="ativo" ${p.status === "ativo" ? "selected" : ""}>Ativo</option>
+             <option value="inativo" ${p.status === "inativo" ? "selected" : ""}>Inativo</option>
+           </select>
+         </div>
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Salvar</button>
+         </div>
+       </form>`,
+      { largo: true }
+    );
+  }
+
+  // ---- Memoriais (o documento) ----
+  async function renderMemoriais(filtroStatus) {
+    app.innerHTML = '<div class="carregando">Carregando memoriais…</div>';
+    const qs = filtroStatus ? `?status=${encodeURIComponent(filtroStatus)}` : "";
+    const [memoriais, stats] = await Promise.all([
+      chamarApi("/memorial/memoriais" + qs),
+      chamarApi("/memorial/dashboard"),
+    ]);
+    const podeCadastrar = temPermissao("memoriais", "cadastrar");
+
+    const linhas = memoriais
+      .map(
+        (m) => `<tr>
+          <td class="mono"><a href="#/memorial/memoriais/${m.id}">${escapeHtml(m.codigo)}</a></td>
+          <td>${escapeHtml(m.empresa_nome)}</td>
+          <td>${escapeHtml(m.produto_nome)}</td>
+          <td><span class="selo ${STATUS_MEMORIAL_SELO[m.status] || ""}">${STATUS_MEMORIAL_LABEL[m.status] || m.status}</span></td>
+          <td>${m.assinaturas_count}/2 ${m.assinaturas_pendentes ? '<span class="selo amarelo">pendente</span>' : '<span class="selo ativo">completo</span>'}</td>
+          <td>${fmtDataCurta((m.criado_em || "").slice(0, 10))}</td>
+          <td><a class="botao secundario pequeno" href="#/memorial/memoriais/${m.id}">Abrir</a></td>
+        </tr>`
+      )
+      .join("");
+
+    const opcoesStatusFiltro = ["", ...Object.keys(STATUS_MEMORIAL_LABEL)]
+      .map((s) => `<option value="${s}" ${filtroStatus === s ? "selected" : ""}>${s ? STATUS_MEMORIAL_LABEL[s] : "Todos os status"}</option>`)
+      .join("");
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("memoriais")}
+         <div class="memorial-content">
+           <h2>Memoriais Técnicos</h2>
+           <div class="cartao">
+             <p class="texto-suave">Memorial Técnico exigido pela ANVISA no registro/notificação de suplementos
+             alimentares: composição nutricional, alegações, justificativas técnicas, métodos analíticos, plano de
+             estudo de estabilidade acelerada, ensaios microbiológicos e conclusão, por produto. Duas assinaturas com
+             o memorial "Concluído" aprovam o documento automaticamente.</p>
+             <div class="grade-kpi">
+               ${kpi("Total de memoriais", stats.total_memoriais)}
+               ${kpi("Rascunho", stats.memoriais_rascunho)}
+               ${kpi("Em andamento / revisão", stats.memoriais_em_andamento + stats.memoriais_em_revisao)}
+               ${kpi("Concluídos (aguardando assinatura)", stats.memoriais_concluidos)}
+               ${kpi("Aprovados", stats.memoriais_aprovados)}
+               ${kpi("Reprovados", stats.memoriais_reprovados)}
+             </div>
+           </div>
+           <div class="cartao">
+             <form data-form="filtrar-memoriais" class="grade-filtros">
+               <div class="campo"><label>Status</label><select name="status">${opcoesStatusFiltro}</select></div>
+               <button class="botao secundario" type="submit">Filtrar</button>
+             </form>
+             <div class="barra-acoes">
+               <span class="texto-suave">${memoriais.length} memorial(is)</span>
+               ${podeCadastrar ? `<button class="botao" data-acao="novo-memorial">+ Novo memorial</button>` : ""}
+             </div>
+             <table>
+               <thead><tr><th>Código</th><th>Empresa</th><th>Produto</th><th>Status</th><th>Assinaturas</th><th>Criado em</th><th>Ações</th></tr></thead>
+               <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum memorial encontrado.</td></tr>'}</tbody>
+             </table>
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  async function modalNovoMemorial() {
+    const produtos = await chamarApi("/memorial/produtos");
+    if (!produtos.length) {
+      definirFlash("erro", "Cadastre um produto antes de criar um memorial.");
+      return renderMemoriais();
+    }
+    const opcoesProduto = produtos.map((p) => `<option value="${p.id}">${escapeHtml(p.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Novo memorial técnico</h3>
+      <form data-form="criar-memorial">
+        <div class="campo"><label>Produto</label><select name="produto_id" required>${opcoesProduto}</select></div>
+        <div class="linha-detalhe">
+          <div class="campo" style="flex:1;"><label>Início do estudo</label><input name="data_inicio" type="date" required></div>
+          <div class="campo" style="flex:1;"><label>Fim previsto do estudo</label><input name="data_fim" type="date" required></div>
+        </div>
+        <div class="campo">
+          <label>Número do Certificado (opcional)</label>
+          <input name="numero_certificado" placeholder="deixe em branco para gerar automaticamente">
+          <p class="dica">Se não informado, o sistema gera um número sequencial no formato CERT-AF-AAAAMMDD/NNN.</p>
+        </div>
+        <div class="campo"><label>Objetivo</label><textarea name="objetivo"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar (começa como Rascunho)</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Detalhe de um memorial ----
+  // Fase 27 — tela de edição do memorial reorganizada nas mesmas 10 abas
+  // numeradas do sistema original ("0. Identificação" a "9. Referências"),
+  // em vez do scroll único usado desde a Fase 24. Os MESMOS campos de
+  // sempre (nenhum foi removido nem renomeado no banco — só a organização
+  // visual mudou), só reagrupados para bater com o sistema original; ver
+  // `CAMPOS_MEMORIAL` em app/routes/memorial.py para a lista que o
+  // backend aceita, que continua sendo a fonte da verdade.
+  const ABAS_MEMORIAL = [
+    { numero: 0, titulo: "Identificação", campos: [
+        ["numero_certificado", "Número do Certificado", "input"],
+        ["data_emissao", "Data de Emissão", "input"],
+        ["tipo_produto", "Tipo de Produto", "input"],
+        ["tipo_pote", "Tipo de Pote", "input"],
+        ["ingredientes_ativos", "Ingredientes Ativos", "textarea"],
+        ["excipientes", "Excipientes", "textarea"],
+        ["composicao_capsula", "Composição da Cápsula", "textarea"],
+        ["advertencias", "Advertências", "textarea"],
+        ["armazenamento", "Armazenamento", "textarea"],
+        ["modo_uso", "Modo de Uso", "textarea"],
+        ["temperatura", "Temperatura do Estudo", "input"],
+        ["umidade_relativa", "Umidade Relativa do Estudo", "input"],
+        ["periodo_estudo", "Período do Estudo", "input"],
+        ["intervalos_teste", "Intervalos de Teste", "input"],
+        ["elaborado_por", "Elaborado por", "input"],
+        ["aprovado_por", "Aprovado por", "input"],
+        ["laudo_emitido_por", "Laudo emitido por", "input"],
+        ["analista_senior", "Analista Sênior", "input"],
+        ["email_rt", "Email do Responsável Técnico", "input"],
+        ["email_analista_senior", "Email do Analista Sênior", "input"],
+        ["observacao_analista", "Observação do Analista", "textarea"],
+    ]},
+    { numero: 1, titulo: "Objetivo", campos: [
+        ["objetivo", "Objetivo", "textarea"],
+    ]},
+    { numero: 2, titulo: "Comp. Nutricional", campos: [
+        ["composicao_nutricional", "Composição Nutricional", "textarea"],
+        ["lista_ingredientes", "Lista de Ingredientes", "textarea"],
+    ]},
+    { numero: 3, titulo: "Formulação", campos: [
+        ["composicao_centesimal", "Composição Centesimal", "textarea"],
+        ["calculo_quantidade", "Cálculo de Quantidade", "textarea"],
+    ]},
+    { numero: 4, titulo: "Metodologias", campos: [
+        ["metodologias_aplicadas", "Metodologias Aplicadas", "textarea"],
+    ]},
+    { numero: 5, titulo: "Cálculos", campos: [
+        ["calculos_nutricionais", "Cálculos Nutricionais", "textarea"],
+    ]},
+    { numero: 6, titulo: "Alegações", campos: [
+        ["alegacoes", "Alegações", "textarea"],
+    ]},
+    { numero: 7, titulo: "Estudos", campos: [
+        ["metodos_analiticos", "Métodos Analíticos", "textarea"],
+        ["estabilidade_acelerada", "Estabilidade Acelerada", "textarea"],
+        ["ensaios_microbiologicos", "Ensaios Microbiológicos", "textarea"],
+        ["justificativas_tecnicas", "Justificativas Técnicas", "textarea"],
+        ["conclusao", "Conclusão Técnica", "textarea"],
+    ]},
+    { numero: 8, titulo: "Legislação", campos: [
+        ["legislacao_aplicavel", "Legislação Aplicável", "textarea"],
+        ["observacoes", "Observações", "textarea"],
+    ]},
+    { numero: 9, titulo: "Referências", campos: [
+        ["referencias_bibliograficas", "Referências Bibliográficas", "textarea"],
+    ]},
+  ];
+
+  // As 4 sub-abas com nome (não numeradas), na mesma faixa de navegação
+  // das 10 acima — mesmo espírito do sistema original, onde "Assinaturas",
+  // "Anexos", "Padronização" e "Exportar" são abas irmãs das numeradas,
+  // só com nome em vez de número.
+  const SUBABAS_MEMORIAL = [
+    ["assinaturas", "Assinaturas"],
+    ["anexos", "Anexos"],
+    ["padronizacao", "Padronização"],
+    ["exportar", "Exportar"],
+  ];
+
+  function campoMemorialHtml(campo, rotulo, tipo, valorAtual, mostrarBotaoCatalogo) {
+    // Fase 29: campos mapeados em CAMPO_MEMORIAL_PARA_CATALOGO ganham um
+    // botão "+ Catálogo" ao lado do rótulo — só quando o chamador pedir
+    // (mostrarBotaoCatalogo), porque campoMemorialHtml também é usada para
+    // desenhar a Padronização de Rótulo, que tem campos de mesmo NOME
+    // (ex.: "advertencias") mas outro FORMULÁRIO e outro sentido; o botão
+    // só faz sentido nas 10 abas numeradas do memorial em si.
+    const catalogoChave = mostrarBotaoCatalogo ? CAMPO_MEMORIAL_PARA_CATALOGO[campo] : null;
+    const botaoCatalogoHtml = catalogoChave
+      ? ` <button type="button" class="botao secundario pequeno" style="margin-left:8px;" data-acao="abrir-catalogo-memorial-campo" data-campo="${campo}" data-catalogo="${catalogoChave}">+ Catálogo</button>`
+      : "";
+    return `<div class="campo"><label>${rotulo}${botaoCatalogoHtml}</label>${
+      tipo === "textarea"
+        ? `<textarea name="${campo}">${escapeHtml(valorAtual || "")}</textarea>`
+        : `<input name="${campo}" value="${escapeHtml(valorAtual || "")}">`
+    }</div>`;
+  }
+
+  function formatarTamanhoArquivo(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  async function renderMemorialDetalhe(id, abaInicial) {
+    abaInicial = abaInicial || "0";
+    app.innerHTML = '<div class="carregando">Carregando memorial…</div>';
+    const [memorial, assinaturas, historico, anexos, padronizacao] = await Promise.all([
+      chamarApi(`/memorial/memoriais/${id}`),
+      chamarApi(`/memorial/memoriais/${id}/assinaturas`),
+      chamarApi(`/memorial/memoriais/${id}/historico`),
+      chamarApi(`/memorial/memoriais/${id}/anexos`),
+      chamarApi(`/memorial/memoriais/${id}/padronizacao`),
+    ]);
+    const podeEditar = temPermissao("memoriais", "editar");
+    const podeConcluir = temPermissao("memoriais", "concluir");
+    const podeAssinar = temPermissao("memoriais", "assinar");
+    const podeExcluir = temPermissao("memoriais", "excluir");
+    const podePadronizar = temPermissao("memoriais", "padronizar");
+    const jaAssinei = assinaturas.some((a) => a.usuario_id === state.usuarioAtual.id);
+
+    const opcoesStatus = Object.keys(STATUS_MEMORIAL_LABEL)
+      .map((s) => `<option value="${s}" ${s === memorial.status ? "selected" : ""}>${STATUS_MEMORIAL_LABEL[s]}</option>`)
+      .join("");
+
+    // ---- Navegação das 14 abas (10 numeradas + 4 com nome) ----
+    const navAbasHtml = `<div class="memorial-abas-nav">
+      ${ABAS_MEMORIAL.map(
+        (a) =>
+          `<button type="button" class="memorial-aba-botao${String(a.numero) === abaInicial ? " ativa" : ""}" data-acao="trocar-aba-memorial" data-aba="${a.numero}">${a.numero}. ${escapeHtml(a.titulo)}</button>`
+      ).join("")}
+      <span class="memorial-abas-separador"></span>
+      ${SUBABAS_MEMORIAL.map(
+        ([chave, label]) =>
+          `<button type="button" class="memorial-aba-botao${chave === abaInicial ? " ativa" : ""}" data-acao="trocar-aba-memorial" data-aba="${chave}">${escapeHtml(label)}</button>`
+      ).join("")}
+    </div>`;
+
+    // ---- Conteúdo das 10 abas numeradas (dentro de UM único form, já
+    // que salvar qualquer campo salva o conteúdo inteiro do memorial de
+    // uma vez — trocar de aba não perde o que já foi digitado nas
+    // outras, porque todas continuam no DOM, só escondidas) ----
+    // Fase 29: botão "+ Catálogo" só aparece pra quem pode editar o
+    // memorial E ver os catálogos — sem as duas permissões, o botão
+    // insere texto num campo que a pessoa não vai conseguir salvar mesmo
+    // (sem `memoriais.editar` a tela nem tem `<form>`), ou não teria como
+    // ver a lista do catálogo (sem `memorial_catalogos.visualizar`, a API
+    // devolveria 403).
+    const podeUsarCatalogosNoMemorial = podeEditar && temPermissao("memorial_catalogos", "visualizar");
+    const conteudoAbaZero = ABAS_MEMORIAL[0].campos.map(([c, r, t]) => campoMemorialHtml(c, r, t, memorial[c], podeUsarCatalogosNoMemorial)).join("");
+    const abasNumeradasHtml = ABAS_MEMORIAL.map(
+      (a) => `<div class="memorial-aba-conteudo" data-aba-conteudo="${a.numero}" ${String(a.numero) === abaInicial ? "" : "hidden"}>
+        ${
+          a.numero === 1
+            ? `<div class="linha-detalhe">
+                 <div class="campo" style="flex:1;"><label>Início do estudo</label><input name="data_inicio" type="date" value="${escapeHtml(memorial.data_inicio)}" required></div>
+                 <div class="campo" style="flex:1;"><label>Fim previsto do estudo</label><input name="data_fim" type="date" value="${escapeHtml(memorial.data_fim)}" required></div>
+               </div>`
+            : ""
+        }
+        ${a.campos.map(([c, r, t]) => campoMemorialHtml(c, r, t, memorial[c], podeUsarCatalogosNoMemorial)).join("")}
+        ${podeEditar ? '<div class="cartao"><button class="botao" type="submit">Salvar conteúdo do memorial</button></div>' : ""}
+      </div>`
+    ).join("");
+
+    // ---- Assinaturas (+ Histórico, como no sistema original: as duas
+    // coisas vivem juntas nesta sub-aba) ----
+    const linhasAssinaturas = assinaturas.length
+      ? assinaturas
+          .map(
+            (a) => `<tr>
+              <td>${escapeHtml(a.nome)}</td><td>${escapeHtml(a.cargo)}</td><td>${escapeHtml(a.iniciais)}</td>
+              <td>${fmtDataCurta((a.assinado_em || "").slice(0, 10))}</td>
+            </tr>`
+          )
+          .join("")
+      : '<tr><td colspan="4" class="texto-suave">Nenhuma assinatura ainda.</td></tr>';
+    const linhasHistorico = historico.length
+      ? historico
+          .map(
+            (h) => `<li><strong>${escapeHtml(h.acao)}</strong>${h.descricao ? " — " + escapeHtml(h.descricao) : ""}
+              <br><span class="texto-suave">${escapeHtml(h.usuario_nome)} · ${fmtDataCurta((h.criado_em || "").slice(0, 10))}</span></li>`
+          )
+          .join("")
+      : '<li class="texto-suave">Sem eventos registrados.</li>';
+    const abaAssinaturasHtml = `<div class="memorial-aba-conteudo" data-aba-conteudo="assinaturas" ${abaInicial === "assinaturas" ? "" : "hidden"}>
+      <div class="cartao">
+        <h3 style="margin-top:0;">Assinaturas</h3>
+        <table>
+          <thead><tr><th>Nome</th><th>Cargo</th><th>Iniciais</th><th>Assinado em</th></tr></thead>
+          <tbody>${linhasAssinaturas}</tbody>
+        </table>
+        ${podeAssinar && !jaAssinei ? `<button class="botao secundario" style="margin-top:12px;" data-acao="abrir-assinar-memorial" data-id="${memorial.id}">Assinar este memorial</button>` : ""}
+        ${jaAssinei ? '<p class="dica">Você já assinou este memorial.</p>' : ""}
+      </div>
+      <div class="cartao">
+        <h3 style="margin-top:0;">Histórico</h3>
+        <ul class="arvore-genealogia">${linhasHistorico}</ul>
+      </div>
+    </div>`;
+
+    // ---- Anexos ----
+    const linhasAnexos = anexos.length
+      ? anexos
+          .map(
+            (a) => `<tr>
+              <td>${escapeHtml(a.nome)}</td>
+              <td class="texto-suave">${escapeHtml(a.nome_arquivo)}</td>
+              <td>${formatarTamanhoArquivo(a.tamanho)}</td>
+              <td class="texto-suave">${escapeHtml(a.usuario_nome)} · ${fmtDataCurta((a.criado_em || "").slice(0, 10))}</td>
+              <td>
+                <button class="botao secundario pequeno" data-acao="baixar-anexo-memorial" data-memorial-id="${memorial.id}" data-id="${a.id}" data-nome-arquivo="${escapeHtml(a.nome_arquivo)}">Baixar</button>
+                ${podeEditar ? `<button class="botao perigo pequeno" data-acao="excluir-anexo-memorial" data-memorial-id="${memorial.id}" data-id="${a.id}">Excluir</button>` : ""}
+              </td>
+            </tr>`
+          )
+          .join("")
+      : '<tr><td colspan="5" class="texto-suave">Nenhum anexo enviado.</td></tr>';
+    const abaAnexosHtml = `<div class="memorial-aba-conteudo" data-aba-conteudo="anexos" ${abaInicial === "anexos" ? "" : "hidden"}>
+      <div class="cartao">
+        <h3 style="margin-top:0;">Anexos</h3>
+        <p class="texto-suave">Laudos, especificações e rótulos ligados a este memorial (PDF ou Word, até 40 MB por arquivo).</p>
+        <div class="barra-acoes">
+          <span class="texto-suave">${anexos.length} anexo(s)</span>
+          ${podeEditar ? `<button class="botao" data-acao="novo-anexo-memorial" data-id="${memorial.id}">+ Novo anexo</button>` : ""}
+        </div>
+        <table>
+          <thead><tr><th>Nome</th><th>Arquivo</th><th>Tamanho</th><th>Enviado por</th><th>Ações</th></tr></thead>
+          <tbody>${linhasAnexos}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+    // ---- Padronização de Rótulo ----
+    const p = padronizacao || {};
+    const CAMPOS_PADRONIZACAO_UI = [
+      ["produto", "Produto", "input"], ["peso_liquido", "Peso Líquido", "input"], ["contem", "Contém", "input"],
+      ["denominacao_legal", "Denominação Legal", "input"], ["lista_ingredientes", "Lista de Ingredientes", "textarea"],
+      ["alergenicos", "Alergênicos", "textarea"], ["advertencias", "Advertências", "textarea"],
+      ["conservacao", "Conservação", "textarea"], ["informacoes_consumo", "Informações ao Consumidor", "textarea"],
+      ["largura_rotulo", "Largura do Rótulo", "input"], ["comprimento_rotulo", "Comprimento do Rótulo", "input"],
+      ["altura_rotulo", "Altura do Rótulo", "input"], ["cor_capsula", "Cor da Cápsula", "input"],
+      ["tamanho_capsulas", "Tamanho das Cápsulas", "input"], ["tipo_capsulas", "Tipo de Cápsulas", "input"],
+      ["tamanho_pote", "Tamanho do Pote", "input"], ["simbolos_logos", "Símbolos e Logos", "textarea"],
+      ["alegacoes", "Alegações no Rótulo", "textarea"], ["dados_distribuidor", "Dados do Distribuidor", "textarea"],
+      ["observacoes_tabela", "Observações da Tabela", "textarea"],
+    ];
+    const abaPadronizacaoHtml = `<div class="memorial-aba-conteudo" data-aba-conteudo="padronizacao" ${abaInicial === "padronizacao" ? "" : "hidden"}>
+      <div class="cartao">
+        <h3 style="margin-top:0;">Padronização de Rótulo</h3>
+        <p class="texto-suave">Dizeres de rotulagem — os campos que vão impressos no rótulo do produto, formatados a partir do memorial.</p>
+        ${
+          podePadronizar
+            ? `<form data-form="salvar-padronizacao-memorial" data-id="${memorial.id}">
+                 ${CAMPOS_PADRONIZACAO_UI.map(([c, r, t]) => campoMemorialHtml(c, r, t, p[c])).join("")}
+                 <button class="botao" type="submit">Salvar padronização</button>
+               </form>`
+            : CAMPOS_PADRONIZACAO_UI.map(([c, r, t]) => campoMemorialHtml(c, r, t, p[c])).join("")
+        }
+      </div>
+    </div>`;
+
+    // ---- Exportar (100% client-side, como no sistema original) ----
+    const abaExportarHtml = `<div class="memorial-aba-conteudo" data-aba-conteudo="exportar" ${abaInicial === "exportar" ? "" : "hidden"}>
+      <div class="cartao">
+        <h3 style="margin-top:0;">Exportar</h3>
+        <p class="texto-suave">Gera uma versão para impressão/PDF do memorial, usando a função de impressão do navegador (Salvar como PDF no diálogo de impressão).</p>
+        <button class="botao" data-acao="imprimir-memorial">Imprimir / Salvar como PDF</button>
+        <h3 style="margin-top:24px;">PDF Completo (Fase 43)</h3>
+        <p class="texto-suave">Gera, no servidor, um único arquivo PDF com o memorial inteiro (todos os campos preenchidos) mais os anexos que forem PDF ou imagem, já incorporados como páginas — não precisa abrir o diálogo de impressão nem baixar os anexos um por um. Um anexo de outro tipo (Word, Excel, etc.) não entra fisicamente no PDF — continua disponível para baixar separadamente na tabela abaixo, e aparece listado numa página de apêndice explicando o motivo.</p>
+        <button class="botao" data-acao="baixar-pdf-completo-memorial" data-id="${memorial.id}" data-codigo="${escapeHtml(memorial.codigo)}">Baixar PDF Completo</button>
+        <h3 style="margin-top:24px;">Anexos disponíveis</h3>
+        <table>
+          <thead><tr><th>Nome</th><th>Arquivo</th><th>Ações</th></tr></thead>
+          <tbody>${
+            anexos.length
+              ? anexos.map((a) => `<tr><td>${escapeHtml(a.nome)}</td><td class="texto-suave">${escapeHtml(a.nome_arquivo)}</td><td><button class="botao secundario pequeno" data-acao="baixar-anexo-memorial" data-memorial-id="${memorial.id}" data-id="${a.id}" data-nome-arquivo="${escapeHtml(a.nome_arquivo)}">Baixar</button></td></tr>`).join("")
+              : '<tr><td colspan="3" class="texto-suave">Nenhum anexo.</td></tr>'
+          }</tbody>
+        </table>
+      </div>
+    </div>`;
+
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("memoriais")}
+         <div class="memorial-content">
+           <a class="link-voltar" href="#/memorial/memoriais">&larr; Voltar para Memoriais</a>
+           <h2>${escapeHtml(memorial.codigo)} <span class="selo ${STATUS_MEMORIAL_SELO[memorial.status] || ""}">${STATUS_MEMORIAL_LABEL[memorial.status] || memorial.status}</span></h2>
+           <div class="cartao">
+             <div class="linha-detalhe">
+               <div><span class="rotulo">Empresa</span><br>${escapeHtml(memorial.empresa_nome)}</div>
+               <div><span class="rotulo">Produto</span><br>${escapeHtml(memorial.produto_nome)}</div>
+               <div><span class="rotulo">Início</span><br>${fmtDataCurta(memorial.data_inicio)}</div>
+               <div><span class="rotulo">Fim previsto</span><br>${fmtDataCurta(memorial.data_fim)}</div>
+               <div><span class="rotulo">Assinaturas</span><br>${memorial.assinaturas_count}/2</div>
+             </div>
+             ${
+               podeConcluir
+                 ? `<form data-form="alterar-status-memorial" data-id="${memorial.id}" class="grade-filtros" style="margin-top:12px;">
+                      <div class="campo"><label>Alterar status</label><select name="status">${opcoesStatus}</select></div>
+                      <button class="botao secundario" type="submit">Aplicar</button>
+                    </form>`
+                 : ""
+             }
+             ${
+               podeExcluir && memorial.status === "rascunho"
+                 ? `<button class="botao perigo pequeno" style="margin-top:8px;" data-acao="excluir-memorial" data-id="${memorial.id}">Excluir memorial</button>`
+                 : ""
+             }
+           </div>
+
+           <div class="memorial-abas">
+             ${navAbasHtml}
+             ${
+               podeEditar
+                 ? `<form data-form="editar-memorial" data-id="${memorial.id}">${abasNumeradasHtml}</form>`
+                 : abasNumeradasHtml
+             }
+             ${abaAssinaturasHtml}
+             ${abaAnexosHtml}
+             ${abaPadronizacaoHtml}
+             ${abaExportarHtml}
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
+  }
+
+  function modalAssinarMemorial(memorialId) {
+    abrirModal(`
+      <h3>Assinar memorial</h3>
+      <form data-form="assinar-memorial" data-id="${memorialId}">
+        <div class="campo"><label>Cargo/função nesta assinatura</label>
+          <input name="cargo" placeholder="ex.: Responsável Técnico, Controle de Qualidade" required>
+        </div>
+        <p class="dica">Sua assinatura fica registrada com seu nome de usuário e não pode ser feita duas vezes pela
+        mesma pessoa. Com 2 assinaturas e o memorial em status "Concluído", ele é aprovado automaticamente.</p>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Assinar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalNovoAnexoMemorial(memorialId) {
+    abrirModal(`
+      <h3>Novo anexo</h3>
+      <form data-form="enviar-anexo-memorial" data-id="${memorialId}">
+        <div class="campo"><label>Nome (opcional — usa o nome do arquivo se deixar em branco)</label><input name="nome"></div>
+        <div class="campo"><label>Arquivo (PDF ou Word, até 40 MB)</label><input type="file" name="arquivo" accept=".pdf,.doc,.docx" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Enviar</button>
+        </div>
+      </form>`);
+  }
+
+  // Lê um arquivo escolhido pelo usuário e devolve um data URL
+  // ("data:<mime>;base64,AAAA...") — o backend aceita esse formato
+  // inteiro (ver memorial_anexos.py), então não precisa cortar o prefixo
+  // aqui.
+  function lerArquivoComoBase64(arquivo) {
+    return new Promise((resolve, reject) => {
+      const leitor = new FileReader();
+      leitor.onload = () => resolve(leitor.result);
+      leitor.onerror = () => reject(leitor.error || new Error("Falha ao ler o arquivo."));
+      leitor.readAsDataURL(arquivo);
+    });
+  }
+
+  // Fase 46 — mesma ideia de lerArquivoComoBase64(), mas devolvendo texto
+  // puro: o snapshot é um arquivo .json normal, sem necessidade nenhuma de
+  // base64 (o backend já recebe/devolve JSON puro nesta rota).
+  function lerArquivoComoTexto(arquivo) {
+    return new Promise((resolve, reject) => {
+      const leitor = new FileReader();
+      leitor.onload = () => resolve(leitor.result);
+      leitor.onerror = () => reject(leitor.error || new Error("Falha ao ler o arquivo."));
+      leitor.readAsText(arquivo);
+    });
+  }
+
+  // =======================================================================
+  // ESTOQUE (WMS básico) — Fase 4
+  // =======================================================================
+  async function carregarDepositos() {
+    const empresas = await chamarApi("/empresas");
+    const listas = await Promise.all(empresas.map((e) => chamarApi(`/empresas/${e.id}/unidades`)));
+    return listas.flat().filter((u) => u.tipo === "deposito");
+  }
+
+  function seloContagem(status) {
+    const mapa = {
+      em_andamento: ["amarelo", "Em andamento"],
+      concluida: ["ativo", "Concluída"],
+      cancelada: ["inativo", "Cancelada"],
+    };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  async function renderEstoque(fefo) {
+    fefo = fefo || {};
+    app.innerHTML = '<div class="carregando">Carregando estoque…</div>';
+
+    // Fase 35 — verificação oportunista de agendamentos de contagem: toda
+    // vez que esta tela é aberta por alguém que já pode conduzir
+    // contagens, checamos se algum agendamento está "vencido" hoje. Se
+    // estiver, a contagem correspondente já nasce sozinha ANTES de
+    // carregarmos a listagem abaixo — não é um processo rodando sozinho
+    // em segundo plano, é "verificado sempre que alguém abre a tela"
+    // (ver comentário em app/routes/estoque.py e o README).
+    let contagensGeradasPorAgendamento = [];
+    if (temPermissao("estoque", "contagem")) {
+      try {
+        const resultado = await chamarApi("/estoque/agendamentos/verificar", { method: "POST" });
+        contagensGeradasPorAgendamento = resultado.contagens_geradas || [];
+      } catch (erro) {
+        // Nunca deixa uma falha na verificação impedir a tela de abrir.
+        console.error("Falha ao verificar agendamentos de contagem:", erro);
+      }
+    }
+
+    const podeVerAgendamentos = temPermissao("estoque", "visualizar");
+    const [pendentes, posicoes, saldo, depositos, itens, contagens, ajustesPendentesAprovacao, configuracaoEstoque, agendamentosContagem] = await Promise.all([
+      chamarApi("/estoque/lotes-pendentes-enderecamento"),
+      chamarApi("/estoque/posicoes"),
+      chamarApi("/estoque/saldo"),
+      carregarDepositos(),
+      chamarApi("/itens"),
+      chamarApi("/estoque/contagens"),
+      chamarApi("/estoque/ajustes-pendentes-aprovacao"),
+      chamarApi("/estoque/configuracao"),
+      podeVerAgendamentos ? chamarApi("/estoque/agendamentos") : Promise.resolve([]),
+    ]);
+    state.cache.posicoesEstoque = posicoes;
+    state.cache.depositos = depositos;
+    state.cache.itens = itens;
+    state.cache.agendamentosContagem = agendamentosContagem;
+
+    const podeCadastrarPosicao = temPermissao("estoque", "cadastrar_posicao");
+    const podeEnderecar = temPermissao("estoque", "enderecar");
+    const podeTransferir = temPermissao("estoque", "transferir");
+    const podeAjustar = temPermissao("estoque", "ajustar");
+    const podeDarBaixa = temPermissao("estoque", "dar_baixa");
+    const podeContagem = temPermissao("estoque", "contagem");
+    const podeAprovarAjusteContagem = temPermissao("estoque", "aprovar_ajuste_contagem");
+    // Fase 32 — só quem tem essa permissão nova (Administrador, por
+    // padrão) vê o botão de alterar o limiar; qualquer um que veja o
+    // módulo Estoque vê o VALOR atual (não é sensível, só a alteração é).
+    const podeConfigurarAlcada = temPermissao("estoque", "configurar_alcada_divergencia");
+    // Fase 35 — mesma filosofia: ver os agendamentos é liberado a quem já
+    // vê o módulo Estoque; só CRIAR/EDITAR/EXCLUIR exige a permissão nova.
+    const podeAgendarContagem = temPermissao("estoque", "agendar_contagem");
+
+    if (contagensGeradasPorAgendamento.length > 0) {
+      const numeros = contagensGeradasPorAgendamento.map((c) => c.numero).join(", ");
+      const mensagemAgendamento = `${contagensGeradasPorAgendamento.length} contagem(ns) gerada(s) automaticamente por agendamento: ${numeros}.`;
+      // Anexa (não substitui) uma mensagem já definida por quem chamou
+      // renderEstoque() — por exemplo, ao SALVAR um agendamento diário,
+      // a própria tela seguinte já verifica e gera a contagem do dia na
+      // hora; sem isso, essa mensagem apagaria silenciosamente o "Agendamento
+      // de contagem criado." que o usuário acabou de ver confirmado.
+      if (state.flash) {
+        state.flash.texto = `${state.flash.texto} ${mensagemAgendamento}`;
+      } else {
+        definirFlash("ok", mensagemAgendamento);
+      }
+    }
+
+    let fefoResultadoHtml = "";
+    if (fefo.resultado) {
+      const r = fefo.resultado;
+      fefoResultadoHtml = `
+        <div class="subcartao">
+          <p>${r.atende_totalmente ? '<span class="mensagem-ok">Atende totalmente</span>' : '<span class="mensagem-erro">Atende só parcialmente</span>'}
+             — solicitado ${r.quantidade_solicitada}, atendido ${r.quantidade_atendida}.</p>
+          <table>
+            <thead><tr><th>Lote</th><th>Validade</th><th>Saldo disponível</th><th>Sugerido para separar</th></tr></thead>
+            <tbody>${r.lotes_sugeridos.map((l) => `<tr>
+              <td class="mono"><a href="#/lotes/${l.lote_id}">${escapeHtml(l.codigo_lote)}</a></td>
+              <td>${escapeHtml(l.validade || "—")}</td>
+              <td>${l.saldo_disponivel}</td>
+              <td><strong>${l.quantidade_sugerida}</strong></td>
+            </tr>`).join("") || '<tr><td colspan="4" class="texto-suave">Nenhum lote aprovado com saldo disponível.</td></tr>'}</tbody>
+          </table>
+        </div>`;
+    }
+
+    const linhasPendentes = pendentes
+      .map((l) => `<tr>
+        <td class="mono"><a href="#/lotes/${l.id}">${escapeHtml(l.codigo_lote)}</a></td>
+        <td>${escapeHtml(l.item_codigo)} — ${escapeHtml(l.item_descricao)}</td>
+        <td>${l.quantidade_pendente} ${escapeHtml(l.unidade)}</td>
+        <td>${podeEnderecar ? `<button class="botao secundario pequeno" data-acao="enderecar-lote" data-id="${l.id}">Endereçar</button>` : ""}</td>
+      </tr>`)
+      .join("");
+
+    const linhasPosicoes = posicoes
+      .map((p) => {
+        const deposito = depositos.find((d) => d.id === p.unidade_id);
+        return `<tr>
+          <td class="mono">${escapeHtml(p.codigo)}</td>
+          <td>${deposito ? escapeHtml(deposito.nome) : "unidade #" + p.unidade_id}</td>
+          <td class="texto-suave">${escapeHtml(p.descricao || "—")}</td>
+          <td><span class="selo ${p.status === "ativa" ? "ativo" : "inativo"}">${escapeHtml(p.status)}</span></td>
+        </tr>`;
+      })
+      .join("");
+
+    const linhasSaldo = saldo
+      .map((s) => `<tr class="${s.vencido ? "linha-alerta" : ""}">
+        <td>${escapeHtml(s.item_codigo)} — ${escapeHtml(s.item_descricao)}</td>
+        <td class="mono"><a href="#/lotes/${s.lote_id}">${escapeHtml(s.codigo_lote)}</a></td>
+        <td class="texto-suave">${escapeHtml(s.validade || "—")}${s.vencido ? seloVencido() : ""}</td>
+        <td class="mono">${escapeHtml(s.posicao_codigo)}</td>
+        <td>${s.saldo}</td>
+        <td>
+          ${podeTransferir ? `<button class="botao secundario pequeno" data-acao="transferir-estoque" data-lote-id="${s.lote_id}" data-posicao-id="${s.posicao_id}" data-saldo="${s.saldo}">Transferir</button>` : ""}
+          ${podeAjustar ? `<button class="botao secundario pequeno" data-acao="ajustar-estoque" data-lote-id="${s.lote_id}" data-posicao-id="${s.posicao_id}" data-saldo="${s.saldo}">Ajustar</button>` : ""}
+          ${podeDarBaixa ? `<button class="botao perigo pequeno" data-acao="baixa-estoque" data-lote-id="${s.lote_id}" data-posicao-id="${s.posicao_id}" data-saldo="${s.saldo}">Baixa</button>` : ""}
+        </td>
+      </tr>`)
+      .join("");
+
+    const opcoesItemFefo = itens.map((i) => `<option value="${i.id}" ${String(i.id) === String(fefo.item_id) ? "selected" : ""}>${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+
+    const linhasContagens = contagens
+      .map((c) => {
+        const deposito = depositos.find((d) => d.id === c.unidade_id);
+        return `<tr>
+          <td class="mono">${escapeHtml(c.numero)}</td>
+          <td>${c.tipo === "geral" ? "Geral" : "Cíclica"}</td>
+          <td>${deposito ? escapeHtml(deposito.nome) : "unidade #" + c.unidade_id}</td>
+          <td>${c.origem === "agendamento" ? '<span class="selo ativo" title="Gerada automaticamente por um agendamento">Agendamento</span>' : '<span class="texto-suave">Manual</span>'}</td>
+          <td>${seloContagem(c.status)}</td>
+          <td><button class="botao secundario pequeno" data-acao="ver-detalhe-contagem" data-id="${c.id}">Ver detalhe</button></td>
+        </tr>`;
+      })
+      .join("");
+
+    // ---- Fase 35: agendamentos de cadência automática ----
+    const linhasAgendamentos = agendamentosContagem
+      .map((a) => `<tr>
+        <td>${escapeHtml(a.unidade_nome)}</td>
+        <td>${a.tipo === "geral" ? "Geral" : `Cíclica (${a.percentual_itens}% sorteados)`}</td>
+        <td>${escapeHtml(textoCadenciaAgendamento(a))}</td>
+        <td><span class="selo ${a.ativo ? "ativo" : "inativo"}">${a.ativo ? "ativo" : "inativo"}</span></td>
+        <td class="texto-suave">${a.ultima_geracao_em ? fmtData(a.ultima_geracao_em) : "ainda não gerou"}</td>
+        <td>
+          ${podeAgendarContagem ? `<button class="botao secundario pequeno" data-acao="abrir-editar-agendamento-contagem" data-id="${a.id}">Editar</button>
+          <button class="botao perigo pequeno" data-acao="excluir-agendamento-contagem" data-id="${a.id}">Excluir</button>` : ""}
+        </td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Estoque (WMS)</h2>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Contagem de Inventário</h3>
+           <div style="display:flex;gap:8px;align-items:center;">
+             ${podeConfigurarAlcada ? `<button class="botao secundario pequeno" data-acao="abrir-configurar-alcada-divergencia">Configurar limiar</button>` : ""}
+             ${podeContagem ? `<button class="botao secundario pequeno" data-acao="nova-contagem-estoque" ${depositos.length === 0 ? "disabled title='Cadastre um depósito em Empresas primeiro'" : ""}>+ Nova contagem</button>` : ""}
+           </div>
+         </div>
+         <p class="dica">Fluxo guiado: inicie uma contagem (geral, que já traz todos os pares lote+posição com saldo hoje; ou cíclica, onde você escolhe os itens um a um), registre o que foi fisicamente contado, e ao concluir o sistema gera automaticamente um ajuste (Fase 4) só onde houver divergência — nunca um lançamento manual avulso. Divergências GRANDES (acima de ${configuracaoEstoque.limiar_percentual_divergencia_grande}%, ou "achou algo onde o sistema não sabia de nada") não ajustam sozinhas: ficam pendentes até um segundo usuário aprovar ou rejeitar${podeConfigurarAlcada ? ' (esse percentual é configurável — botão "Configurar limiar" acima, Fase 32)' : ""}.${configuracaoEstoque.limiar_valor_ajuste_divergencia_grande > 0 ? ` Também conta como divergência grande qualquer ajuste cujo valor financeiro estimado passe de ${fmtMoeda(configuracaoEstoque.limiar_valor_ajuste_divergencia_grande)}, mesmo com percentual pequeno (Fase 34).` : ""}</p>
+         ${ajustesPendentesAprovacao.length > 0 ? `<p class="mensagem-erro">${ajustesPendentesAprovacao.length} ajuste(s) de contagem com divergência grande aguardando aprovação — abra o detalhe da contagem correspondente${podeAprovarAjusteContagem ? "" : " (você não tem permissão para decidir sobre eles)"}.</p>` : ""}
+         <table>
+           <thead><tr><th>Número</th><th>Tipo</th><th>Depósito</th><th>Origem</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhasContagens || '<tr><td colspan="6" class="texto-suave">Nenhuma contagem registrada ainda.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       ${podeVerAgendamentos ? `<div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Agendamento de Contagens (Fase 35)</h3>
+           ${podeAgendarContagem ? `<button class="botao secundario pequeno" data-acao="abrir-novo-agendamento-contagem" ${depositos.length === 0 ? "disabled title='Cadastre um depósito em Empresas primeiro'" : ""}>+ Novo agendamento</button>` : ""}
+         </div>
+         <p class="dica">Uma regra cadastrada aqui gera a contagem sozinha quando o dia certo chega — sem
+         precisar que ninguém lembre de criar manualmente. "Automático" significa "verificado sempre que
+         alguém abre esta tela", não um processo rodando sozinho o tempo todo em segundo plano: se o dia
+         certo chegar e ninguém abrir o Estoque naquele dia, a contagem nasce na próxima vez que alguém abrir.</p>
+         <table>
+           <thead><tr><th>Depósito</th><th>Tipo</th><th>Cadência</th><th>Status</th><th>Última geração</th><th></th></tr></thead>
+           <tbody>${linhasAgendamentos || '<tr><td colspan="6" class="texto-suave">Nenhum agendamento cadastrado ainda.</td></tr>'}</tbody>
+         </table>
+       </div>` : ""}
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Lotes pendentes de endereçamento</h3>
+         <p class="texto-suave">Lotes já aprovados pela Qualidade, mas que ainda não foram endereçados (ou só
+         parcialmente) a uma posição física de armazenagem.</p>
+         <table>
+           <thead><tr><th>Lote</th><th>Item</th><th>Pendente</th><th></th></tr></thead>
+           <tbody>${linhasPendentes || '<tr><td colspan="4" class="texto-suave">Nenhum lote pendente de endereçamento.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Posições de armazenagem</h3>
+           ${podeCadastrarPosicao ? `<button class="botao secundario pequeno" data-acao="nova-posicao-estoque" ${depositos.length === 0 ? "disabled title='Cadastre um depósito em Empresas primeiro'" : ""}>+ Nova posição</button>` : ""}
+         </div>
+         ${podeCadastrarPosicao && depositos.length === 0 ? '<p class="texto-suave">Nenhum depósito cadastrado ainda — crie uma unidade do tipo "Depósito" em Empresas antes de cadastrar posições.</p>' : ""}
+         <table>
+           <thead><tr><th>Código</th><th>Depósito</th><th>Descrição</th><th>Status</th></tr></thead>
+           <tbody>${linhasPosicoes || '<tr><td colspan="4" class="texto-suave">Nenhuma posição cadastrada.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Saldo em estoque (por lote e posição)</h3>
+         <p class="texto-suave">Sempre calculado a partir da soma das movimentações — nunca um saldo guardado à
+         parte, para nunca dessincronizar do histórico real.</p>
+         <table>
+           <thead><tr><th>Item</th><th>Lote</th><th>Validade</th><th>Posição</th><th>Saldo</th><th>Ações</th></tr></thead>
+           <tbody>${linhasSaldo || '<tr><td colspan="6" class="texto-suave">Nenhum saldo endereçado ainda.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Sugestão FEFO (primeiro a vencer, primeiro a sair)</h3>
+         <form data-form="consultar-fefo">
+           <div class="grade-filtros">
+             <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItemFefo}</select></div>
+             <div class="campo"><label>Quantidade necessária</label><input name="quantidade" type="number" step="any" required value="${escapeHtml(fefo.quantidade || "")}"></div>
+             <button class="botao secundario" type="submit">Consultar</button>
+           </div>
+         </form>
+         ${fefoResultadoHtml}
+       </div>`,
+      "estoque"
+    );
+  }
+
+  function modalNovaContagemEstoque() {
+    const depositos = state.cache.depositos || [];
+    const opcoes = depositos.map((d) => `<option value="${d.id}">${escapeHtml(d.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Nova contagem de inventário</h3>
+      <form data-form="nova-contagem-estoque">
+        <div class="campo"><label>Depósito</label><select name="unidade_id" required>${opcoes}</select></div>
+        <div class="campo"><label>Tipo</label>
+          <select name="tipo" required>
+            <option value="geral">Geral — traz automaticamente todos os pares lote+posição com saldo hoje</option>
+            <option value="ciclica">Cíclica — você escolhe os itens um a um, depois de criada</option>
+          </select>
+        </div>
+        <div class="campo"><label>Observação (opcional)</label><textarea name="observacao" placeholder="Ex.: contagem mensal do depósito central"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Iniciar contagem</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Fase 32/34: limiares de divergência de contagem configuráveis ----
+  function modalConfigurarAlcadaDivergencia(configuracao) {
+    abrirModal(`
+      <h3>Configurar limiares de divergência grande</h3>
+      <p class="texto-suave">Acima deste percentual (em relação ao saldo que o sistema tinha no início da
+      contagem), o ajuste gerado ao concluir uma contagem NÃO é aplicado sozinho — fica pendente até um
+      segundo usuário aprovar (Fase 21). Quando o saldo inicial era zero e a contagem física encontra algo,
+      isso sempre conta como divergência grande, independente deste valor.</p>
+      <form data-form="configurar-alcada-divergencia">
+        <div class="campo"><label>Limiar por percentual (%)</label>
+          <input name="limiar_percentual_divergencia_grande" type="number" step="0.1" min="0.1" max="100"
+                 value="${configuracao.limiar_percentual_divergencia_grande}" required>
+        </div>
+        <div class="campo"><label>Limiar por valor do ajuste (R$, 0 = desligado)</label>
+          <input name="limiar_valor_ajuste_divergencia_grande" type="number" step="0.01" min="0"
+                 value="${configuracao.limiar_valor_ajuste_divergencia_grande}" required>
+          <p class="dica">Fase 34 — um SEGUNDO gatilho, independente do percentual: se o valor financeiro do
+          ajuste (diferença × custo unitário do lote) ultrapassar este valor em R$, também exige segunda
+          aprovação, mesmo que o percentual esteja abaixo do limiar acima. Use 0 para desligar este gatilho
+          (só o percentual decide, comportamento padrão). Quando o custo do lote não é conhecido, o sistema
+          nunca arrisca deixar passar sem aprovação — trata como divergência grande por segurança.</p>
+        </div>
+        ${configuracao.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(configuracao.atualizado_em)}.</p>` : ""}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Fase 35: agendamento/cadência automática de contagens ----
+  const NOMES_DIA_SEMANA = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira", "sexta-feira", "sábado", "domingo"];
+
+  function textoCadenciaAgendamento(a) {
+    if (a.cadencia === "diaria") return "Todos os dias";
+    if (a.cadencia === "semanal") return `Toda ${NOMES_DIA_SEMANA[a.dia_semana]}`;
+    if (a.cadencia === "mensal") return `Todo dia ${a.dia_mes} do mês`;
+    return a.cadencia;
+  }
+
+  function modalAgendamentoContagem(agendamento) {
+    const depositos = state.cache.depositos || [];
+    const opcoesDeposito = depositos
+      .map((d) => `<option value="${d.id}" ${agendamento && String(agendamento.unidade_id) === String(d.id) ? "selected" : ""}>${escapeHtml(d.nome)}</option>`)
+      .join("");
+    const tipo = agendamento ? agendamento.tipo : "geral";
+    const cadencia = agendamento ? agendamento.cadencia : "diaria";
+    abrirModal(`
+      <h3>${agendamento ? "Editar" : "Novo"} agendamento de contagem</h3>
+      <p class="texto-suave">Gera automaticamente uma contagem de inventário na cadência escolhida — geral
+      (todos os itens) ou cíclica (uma amostra aleatória do tamanho configurado). A verificação acontece
+      sempre que alguém abre esta tela, não num horário exato do relógio.</p>
+      <form data-form="salvar-agendamento-contagem" data-id="${agendamento ? agendamento.id : ""}">
+        <div class="campo"><label>Depósito</label><select name="unidade_id" required>${opcoesDeposito}</select></div>
+        <div class="campo"><label>Tipo de contagem</label>
+          <select name="tipo" required>
+            <option value="geral" ${tipo === "geral" ? "selected" : ""}>Geral — inclui todos os pares lote+posição com saldo</option>
+            <option value="ciclica" ${tipo === "ciclica" ? "selected" : ""}>Cíclica — sorteia uma amostra aleatória a cada geração</option>
+          </select>
+        </div>
+        <div class="campo"><label>Amostra (% dos itens — só para tipo Cíclica)</label>
+          <input name="percentual_itens" type="number" step="0.1" min="0.1" max="100"
+                 value="${agendamento && agendamento.percentual_itens != null ? agendamento.percentual_itens : ""}"
+                 placeholder="Ex.: 10 (sorteia 10% das combinações lote+posição a cada geração)">
+        </div>
+        <div class="campo"><label>Cadência</label>
+          <select name="cadencia" required>
+            <option value="diaria" ${cadencia === "diaria" ? "selected" : ""}>Diária — todos os dias</option>
+            <option value="semanal" ${cadencia === "semanal" ? "selected" : ""}>Semanal — um dia fixo da semana</option>
+            <option value="mensal" ${cadencia === "mensal" ? "selected" : ""}>Mensal — um dia fixo do mês</option>
+          </select>
+        </div>
+        <div class="campo"><label>Dia da semana (só para cadência Semanal)</label>
+          <select name="dia_semana">
+            <option value="">—</option>
+            ${NOMES_DIA_SEMANA.map((nome, i) => `<option value="${i}" ${agendamento && agendamento.dia_semana === i ? "selected" : ""}>${escapeHtml(nome)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="campo"><label>Dia do mês (só para cadência Mensal)</label>
+          <input name="dia_mes" type="number" min="1" max="31"
+                 value="${agendamento && agendamento.dia_mes != null ? agendamento.dia_mes : ""}"
+                 placeholder="Ex.: 5 (todo dia 5; se o mês não tiver esse dia, usa o último dia do mês)">
+        </div>
+        <div class="campo"><label>Observação (opcional)</label><textarea name="observacao" placeholder="Ex.: cobre o depósito central">${agendamento ? escapeHtml(agendamento.observacao || "") : ""}</textarea></div>
+        ${agendamento ? `<div class="campo"><label><input type="checkbox" name="ativo" ${agendamento.ativo ? "checked" : ""}> Ativo</label></div>` : ""}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalDetalheContagem(contagem) {
+    const podeContagem = temPermissao("estoque", "contagem");
+    const podeConcluir = temPermissao("estoque", "ajustar");
+    const podeAprovarAjuste = temPermissao("estoque", "aprovar_ajuste_contagem");
+    const emAndamento = contagem.status === "em_andamento";
+    const pendentes = contagem.itens.filter((i) => i.status === "pendente").length;
+
+    const posicoes = state.cache.posicoesEstoque || [];
+    const opcoesPosicao = posicoes.map((p) => `<option value="${p.id}">${escapeHtml(p.codigo)}</option>`).join("");
+
+    function celulaAprovacao(i) {
+      if (i.aprovacao_status === "pendente") {
+        const percentual = i.percentual_divergencia != null ? ` (${(i.percentual_divergencia * 100).toFixed(0)}%)` : "";
+        // Fase 34 — quando o gatilho de valor está ligado, mostra o valor
+        // financeiro estimado do ajuste (ou avisa que o custo não é
+        // conhecido, se for o caso — filosofia de transparência da Fase 13).
+        let valorTexto = "";
+        if (i.valor_ajuste_estimado != null) {
+          valorTexto = `<br><span class="texto-suave">≈ ${fmtMoeda(i.valor_ajuste_estimado)}</span>`;
+        } else if (i.custo_unitario_ajuste === null && i.origem_custo_ajuste === "indisponivel") {
+          valorTexto = `<br><span class="texto-suave">Valor do ajuste: indisponível (custo do lote desconhecido)</span>`;
+        }
+        const botoes = podeAprovarAjuste
+          ? `<br><button class="botao secundario pequeno" data-acao="aprovar-ajuste-contagem" data-contagem-id="${contagem.id}" data-item-id="${i.id}">Aprovar</button>
+             <button class="botao perigo pequeno" data-acao="abrir-rejeitar-ajuste-contagem" data-contagem-id="${contagem.id}" data-item-id="${i.id}">Rejeitar</button>`
+          : "";
+        return `<span class="selo amarelo">Aguardando aprovação${percentual}</span>${valorTexto}${botoes}`;
+      }
+      if (i.aprovacao_status === "aprovado") return '<span class="selo ativo">Aprovado</span>';
+      if (i.aprovacao_status === "rejeitado") {
+        return `<span class="selo inativo">Rejeitado</span>${i.motivo_rejeicao ? `<br><span class="texto-suave">${escapeHtml(i.motivo_rejeicao)}</span>` : ""}`;
+      }
+      return "—";
+    }
+
+    const linhasItens = contagem.itens.length
+      ? contagem.itens.map((i) => `<tr>
+          <td class="mono">${escapeHtml(i.codigo_lote)}</td>
+          <td>${escapeHtml(i.item_codigo)}</td>
+          <td class="mono">${escapeHtml(i.posicao_codigo)}</td>
+          <td>${i.saldo_sistema_no_inicio}</td>
+          <td>${i.quantidade_contada === null ? "—" : i.quantidade_contada}</td>
+          <td>${i.diferenca === null ? "—" : (i.diferenca === 0 ? "sem divergência" : `<strong class="${i.diferenca < 0 ? "mensagem-erro" : "mensagem-ok"}">${i.diferenca > 0 ? "+" : ""}${i.diferenca}</strong>`)}</td>
+          <td>${i.status === "contado" ? '<span class="selo azul">Contado</span>' : '<span class="selo amarelo">Pendente</span>'}</td>
+          <td>${celulaAprovacao(i)}</td>
+          <td>${emAndamento && podeContagem ? `<button class="botao secundario pequeno" data-acao="contar-item-contagem" data-contagem-id="${contagem.id}" data-item-id="${i.id}" data-saldo="${i.saldo_sistema_no_inicio}" data-lote="${escapeHtml(i.codigo_lote)}" data-posicao="${escapeHtml(i.posicao_codigo)}">${i.status === "contado" ? "Recontar" : "Contar"}</button>` : ""}</td>
+        </tr>`).join("")
+      : '<tr><td colspan="9" class="texto-suave">Nenhum item nesta contagem ainda.</td></tr>';
+
+    const formAdicionarItem = emAndamento && contagem.tipo === "ciclica" && podeContagem ? `
+      <form data-form="adicionar-item-contagem" data-id="${contagem.id}" style="display:flex;gap:8px;align-items:flex-end;margin-top:12px;">
+        <div class="campo" style="margin:0;"><label>ID do lote</label><input name="lote_id" type="number" min="1" required style="width:120px;"></div>
+        <div class="campo" style="margin:0;"><label>Posição</label><select name="posicao_id" required>${opcoesPosicao}</select></div>
+        <button class="botao secundario" type="submit">+ Adicionar item</button>
+      </form>
+      <p class="dica">O ID do lote aparece na tela Lotes/Qualidade ou na coluna "Lote" de Saldo em Estoque.</p>` : "";
+
+    abrirModal(`
+      <div class="barra-acoes">
+        <h3 style="margin:0;">${escapeHtml(contagem.numero)} — ${contagem.tipo === "geral" ? "Geral" : "Cíclica"}</h3>
+        ${seloContagem(contagem.status)}
+      </div>
+      ${contagem.observacao ? `<p class="texto-suave">${escapeHtml(contagem.observacao)}</p>` : ""}
+      ${emAndamento && pendentes > 0 ? `<p class="dica">${pendentes} item(ns) ainda pendente(s) de contagem — registre a contagem de todos antes de concluir.</p>` : ""}
+      <table>
+        <thead><tr><th>Lote</th><th>Item</th><th>Posição</th><th>Saldo sistema</th><th>Contado</th><th>Diferença</th><th>Status</th><th>Aprovação de ajuste</th><th></th></tr></thead>
+        <tbody>${linhasItens}</tbody>
+      </table>
+      ${formAdicionarItem}
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+        ${emAndamento && podeContagem ? `<button type="button" class="botao perigo" data-acao="abrir-cancelar-contagem" data-id="${contagem.id}">Cancelar contagem</button>` : ""}
+        ${emAndamento && podeConcluir ? `<button type="button" class="botao" data-acao="concluir-contagem" data-id="${contagem.id}" ${pendentes > 0 ? "disabled" : ""}>Concluir contagem</button>` : ""}
+      </div>`);
+  }
+
+  function modalRejeitarAjusteContagem(contagemId, itemId) {
+    abrirModal(`
+      <h3>Rejeitar ajuste de contagem</h3>
+      <p class="texto-suave">Rejeitar NÃO altera o saldo do sistema — a divergência apontada pela contagem
+      fica registrada (neste item e na auditoria) para investigação, sem "corrigir" o estoque às cegas.</p>
+      <form data-form="rejeitar-ajuste-contagem" data-contagem-id="${contagemId}" data-item-id="${itemId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="Ex.: contagem parece ter sido feita na posição errada, refazer fisicamente..."></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar rejeição</button>
+        </div>
+      </form>`);
+  }
+
+  function modalContarItemContagem(contagemId, itemId, saldoSistema, codigoLote, posicaoCodigo) {
+    abrirModal(`
+      <h3>Registrar contagem — ${escapeHtml(codigoLote)} em ${escapeHtml(posicaoCodigo)}</h3>
+      <p class="texto-suave">O sistema espera ${saldoSistema} nesta posição. Informe o que foi fisicamente contado — se for diferente, um ajuste automático será gerado ao concluir a contagem.</p>
+      <form data-form="contar-item-contagem" data-contagem-id="${contagemId}" data-item-id="${itemId}">
+        <div class="campo"><label>Quantidade contada</label><input name="quantidade_contada" type="number" step="any" min="0" required value="${saldoSistema}"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Registrar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarContagem(contagemId) {
+    abrirModal(`
+      <h3>Cancelar contagem</h3>
+      <p class="texto-suave">Isso encerra a contagem sem gerar nenhum ajuste de estoque — o que já foi contado fica só no histórico.</p>
+      <form data-form="cancelar-contagem" data-id="${contagemId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="Ex.: contagem iniciada por engano, depósito errado..."></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar cancelamento</button>
+        </div>
+      </form>`);
+  }
+
+  function modalNovaPosicaoEstoque() {
+    const depositos = state.cache.depositos || [];
+    const opcoes = depositos.map((d) => `<option value="${d.id}">${escapeHtml(d.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Nova posição de armazenagem</h3>
+      <form data-form="criar-posicao-estoque">
+        <div class="campo"><label>Depósito</label><select name="unidade_id" required>${opcoes}</select></div>
+        <div class="campo"><label>Código</label><input name="codigo" required placeholder="ex.: A1-01"></div>
+        <div class="campo"><label>Descrição</label><input name="descricao"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEnderecarLote(lote) {
+    const posicoes = (state.cache.posicoesEstoque || []).filter((p) => p.status === "ativa");
+    const opcoes = posicoes.map((p) => `<option value="${p.id}">${escapeHtml(p.codigo)}</option>`).join("");
+    abrirModal(`
+      <h3>Endereçar lote ${escapeHtml(lote.codigo_lote)}</h3>
+      <p class="texto-suave">Pendente de endereçamento: <strong>${lote.quantidade_pendente} ${escapeHtml(lote.unidade)}</strong>.</p>
+      ${posicoes.length === 0
+        ? '<p class="mensagem-erro">Nenhuma posição de armazenagem ativa cadastrada ainda.</p>'
+        : `<form data-form="enderecar-lote" data-id="${lote.id}">
+             <div class="campo"><label>Posição</label><select name="posicao_id" required>${opcoes}</select></div>
+             <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required value="${lote.quantidade_pendente}"></div>
+             <div class="rodape-modal">
+               <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+               <button type="submit" class="botao">Endereçar</button>
+             </div>
+           </form>`}
+    `);
+  }
+
+  function modalTransferirEstoque(loteId, posicaoOrigemId, saldo) {
+    const posicoes = (state.cache.posicoesEstoque || []).filter((p) => p.status === "ativa" && p.id !== posicaoOrigemId);
+    const opcoes = posicoes.map((p) => `<option value="${p.id}">${escapeHtml(p.codigo)}</option>`).join("");
+    abrirModal(`
+      <h3>Transferir estoque</h3>
+      <p class="texto-suave">Saldo disponível na posição de origem: <strong>${saldo}</strong>.</p>
+      ${posicoes.length === 0
+        ? '<p class="mensagem-erro">Não há outra posição ativa cadastrada para transferir.</p>'
+        : `<form data-form="transferir-estoque" data-lote-id="${loteId}" data-posicao-origem-id="${posicaoOrigemId}">
+             <div class="campo"><label>Posição de destino</label><select name="posicao_destino_id" required>${opcoes}</select></div>
+             <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required max="${saldo}"></div>
+             <div class="rodape-modal">
+               <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+               <button type="submit" class="botao">Transferir</button>
+             </div>
+           </form>`}
+    `);
+  }
+
+  function modalAjustarEstoque(loteId, posicaoId, saldo) {
+    abrirModal(`
+      <h3>Ajustar estoque</h3>
+      <p class="texto-suave">Saldo atual nesta posição: <strong>${saldo}</strong>. Use um valor negativo para
+      reduzir e positivo para aumentar. O motivo é obrigatório e fica registrado na auditoria.</p>
+      <form data-form="ajustar-estoque" data-lote-id="${loteId}" data-posicao-id="${posicaoId}">
+        <div class="campo"><label>Quantidade do ajuste (+/-)</label><input name="quantidade" type="number" step="any" required placeholder="ex.: -2 ou 3.5"></div>
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="ex.: divergência encontrada em contagem cíclica"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Registrar ajuste</button>
+        </div>
+      </form>`);
+  }
+
+  function modalBaixaEstoque(loteId, posicaoId, saldo) {
+    abrirModal(`
+      <h3>Dar baixa em estoque</h3>
+      <p class="texto-suave">Saldo disponível nesta posição: <strong>${saldo}</strong>.</p>
+      <form data-form="baixa-estoque" data-lote-id="${loteId}" data-posicao-id="${posicaoId}">
+        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required max="${saldo}"></div>
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="ex.: descarte, amostra consumida, devolução ao fornecedor"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Dar baixa</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // COMERCIAL (CRM básico + Pedidos de Venda) — Fase 5
+  // =======================================================================
+  function seloPedido(status) {
+    const mapa = {
+      rascunho: ["inativo", "Rascunho"], confirmado: ["azul", "Confirmado"],
+      expedido: ["ativo", "Expedido"], cancelado: ["bloqueado", "Cancelado"],
+    };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  function seloConta(status) {
+    const mapa = {
+      aberto: ["azul", "Aberto"], pago_parcial: ["amarelo", "Pago parcial"],
+      pago: ["ativo", "Pago"], cancelado: ["bloqueado", "Cancelado"],
+    };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  async function renderComercial() {
+    app.innerHTML = '<div class="carregando">Carregando comercial…</div>';
+    const [clientes, pedidos, itens] = await Promise.all([
+      chamarApi("/comercial/clientes"), chamarApi("/comercial/pedidos"), chamarApi("/itens"),
+    ]);
+    state.cache.clientes = clientes;
+    state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
+    await carregarEmpresasParaSeletor();
+
+    const podeCadastrarCliente = temPermissao("comercial", "cadastrar_cliente");
+    const podeCriarPedido = temPermissao("comercial", "criar_pedido");
+    const podeConfigurarAppVendas = temPermissao("comercial", "configurar_comercial");
+
+    const linhasClientes = clientes
+      .map((c) => `<tr>
+        <td>${escapeHtml(c.razao_social)}</td>
+        <td class="mono">${escapeHtml(c.cnpj)}</td>
+        <td class="texto-suave">${escapeHtml(c.endereco || "—")}</td>
+        <td>${c.limite_credito != null ? `R$ ${Number(c.limite_credito).toFixed(2)}` : '<span class="texto-suave">sem limite</span>'}</td>
+        <td><span class="selo ${c.status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(c.status)}</span></td>
+        <td style="display:flex;gap:6px;">
+          <button class="botao secundario pequeno" data-acao="ver-desempenho-cliente" data-id="${c.id}" data-nome="${escapeHtml(c.razao_social)}">Desempenho</button>
+          ${podeCadastrarCliente ? `<button class="botao secundario pequeno" data-acao="editar-cliente" data-id="${c.id}">Editar</button>` : ""}
+        </td>
+      </tr>`)
+      .join("");
+
+    const linhasPedidos = pedidos
+      .map((p) => `<tr>
+        <td class="mono"><a href="#/pedido/${p.id}">${escapeHtml(p.numero)}</a></td>
+        <td>${escapeHtml(p.cliente_razao_social)}</td>
+        <td>${seloPedido(p.status)}</td>
+        <td class="texto-suave">${fmtData(p.criado_em)}</td>
+        <td><button class="botao secundario pequeno" data-acao="ver-pedido" data-id="${p.id}">Abrir</button></td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Comercial (CRM)</h2>
+
+       ${podeConfigurarAppVendas ? `
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">App de Vendas (Fase 36)</h3>
+           <button class="botao secundario pequeno" data-acao="abrir-configurar-app-vendas">Configurar</button>
+         </div>
+         <p class="texto-suave">Percentual de verba comercial gerada por venda, percentual de comissão padrão do
+         vendedor e minutos de inatividade até um rascunho do aplicativo de vendas expirar sozinho.</p>
+       </div>` : ""}
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Clientes</h3>
+           ${podeCadastrarCliente ? `<button class="botao secundario pequeno" data-acao="novo-cliente">+ Novo cliente</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Razão social</th><th>CNPJ</th><th>Endereço</th><th>Limite de crédito</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhasClientes || '<tr><td colspan="6" class="texto-suave">Nenhum cliente cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Pedidos de Venda</h3>
+           ${podeCriarPedido ? `<button class="botao" data-acao="novo-pedido" ${clientes.filter((c) => c.status === "ativo").length === 0 ? "disabled title='Cadastre um cliente ativo primeiro'" : ""}>+ Novo pedido</button>` : ""}
+         </div>
+         ${podeCriarPedido && clientes.filter((c) => c.status === "ativo").length === 0 ? '<p class="texto-suave">Nenhum cliente ativo cadastrado ainda — cadastre um cliente antes de criar um pedido.</p>' : ""}
+         <table>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Status</th><th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhasPedidos || '<tr><td colspan="5" class="texto-suave">Nenhum pedido de venda registrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "comercial"
+    );
+  }
+
+  function modalNovoCliente() {
+    abrirModal(`
+      <h3>Novo cliente</h3>
+      <form data-form="criar-cliente">
+        <div class="campo"><label>Razão social</label><input name="razao_social" required></div>
+        <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia"></div>
+        <div class="campo"><label>CNPJ</label><input name="cnpj" required placeholder="00.000.000/0000-00"></div>
+        <div class="campo"><label>Endereço</label><input name="endereco"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarCliente(cliente) {
+    abrirModal(`
+      <h3>Editar ${escapeHtml(cliente.razao_social)}</h3>
+      <form data-form="editar-cliente" data-id="${cliente.id}">
+        <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia" value="${escapeHtml(cliente.nome_fantasia || "")}"></div>
+        <div class="campo"><label>Endereço</label><input name="endereco" value="${escapeHtml(cliente.endereco || "")}"></div>
+        <div class="campo"><label>Limite de crédito (R$, opcional)</label>
+          <input name="limite_credito" type="number" step="0.01" min="0" placeholder="deixe em branco = sem limite"
+                 value="${cliente.limite_credito != null ? cliente.limite_credito : ""}">
+          <div class="dica">Fase 63 — quando configurado, confirmar um pedido de venda que faça o saldo em
+          aberto do cliente (pedidos confirmados/expedidos ainda não totalmente pagos) ultrapassar este valor
+          não acontece na hora: fica pendente até um segundo usuário aprovar. Deixe em branco para nunca
+          bloquear por crédito.</div>
+        </div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${cliente.status === "ativo" ? "selected" : ""}>Ativo</option>
+            <option value="inativo" ${cliente.status === "inativo" ? "selected" : ""}>Inativo</option>
+          </select>
+        </div>
+        <h4>Dados fiscais (Fase 70 — exigidos para emitir NF-e para este cliente)</h4>
+        <div class="campo"><label>Inscrição Estadual</label>
+          <input name="inscricao_estadual" value="${escapeHtml(cliente.inscricao_estadual || "")}" placeholder="ou 'ISENTO' se não for contribuinte de ICMS">
+        </div>
+        <div class="campo"><label>Logradouro</label><input name="logradouro" value="${escapeHtml(cliente.logradouro || "")}"></div>
+        <div class="campo"><label>Número</label><input name="numero_endereco" value="${escapeHtml(cliente.numero_endereco || "")}"></div>
+        <div class="campo"><label>Complemento</label><input name="complemento_endereco" value="${escapeHtml(cliente.complemento_endereco || "")}"></div>
+        <div class="campo"><label>Bairro</label><input name="bairro" value="${escapeHtml(cliente.bairro || "")}"></div>
+        <div class="campo"><label>Município</label><input name="municipio" value="${escapeHtml(cliente.municipio || "")}"></div>
+        <div class="campo"><label>Código IBGE do município</label>
+          <input name="codigo_ibge_municipio" value="${escapeHtml(cliente.codigo_ibge_municipio || "")}">
+        </div>
+        <div class="campo"><label>UF</label><input name="uf" value="${escapeHtml(cliente.uf || "")}" maxlength="2" style="text-transform:uppercase;"></div>
+        <div class="campo"><label>CEP</label><input name="cep" value="${escapeHtml(cliente.cep || "")}"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`, { largo: true });
+  }
+
+  // ---- Fase 64: Desempenho de Cliente (Scorecard) ----
+  function modalDesempenhoCliente(nomeCliente, desempenho) {
+    const pg = desempenho.pagamentos;
+    const p = desempenho.pedidos_por_status;
+    const rotuloStatus = { rascunho: "Rascunho", confirmado: "Confirmado", expedido: "Expedido", cancelado: "Cancelado" };
+    const linhasStatus = Object.keys(p)
+      .filter((k) => p[k] > 0)
+      .map((k) => `<tr><td>${rotuloStatus[k] || k}</td><td>${p[k]}</td></tr>`)
+      .join("");
+    abrirModal(`
+      <h3>Desempenho — ${escapeHtml(nomeCliente)}</h3>
+      <p class="texto-suave">Calculado na hora, a partir do histórico de Pedidos de Venda (Fase 5) e Contas a
+      Receber (Fase 6) deste cliente — não é um dado salvo à parte, então nunca fica desatualizado.</p>
+      <div class="linha-detalhe">
+        <div><div class="rotulo">Total de pedidos</div>${desempenho.total_pedidos_venda}</div>
+        <div><div class="rotulo">Valor total vendido</div>${fmtMoeda(desempenho.valor_total_vendido)}</div>
+        <div><div class="rotulo">Saldo em aberto atual</div>${fmtMoeda(desempenho.saldo_aberto_atual)}</div>
+      </div>
+      ${linhasStatus ? `
+      <table>
+        <thead><tr><th>Status do pedido</th><th>Quantidade</th></tr></thead>
+        <tbody>${linhasStatus}</tbody>
+      </table>` : '<p class="texto-suave">Nenhum pedido de venda registrado ainda.</p>'}
+
+      <h4>Pontualidade de pagamento</h4>
+      ${pg.total_avaliados > 0
+        ? `<p>${pg.no_prazo} de ${pg.total_avaliados} conta(s) já totalmente paga(s) foram pagas dentro do prazo — <strong>${pg.taxa_pontualidade_pct}%</strong> de pontualidade (${pg.atrasados} atrasada(s)).</p>`
+        : '<p class="texto-suave">Ainda não há contas a receber totalmente pagas deste cliente para avaliar pontualidade.</p>'}
+      ${pg.contas_em_atraso_no_momento > 0
+        ? `<p class="mensagem-erro">${pg.contas_em_atraso_no_momento} conta(s) em aberto com o vencimento já vencido neste momento.</p>` : ""}
+
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+      </div>`, { largo: true });
+  }
+
+  function modalNovoPedido() {
+    const clientes = (state.cache.clientes || []).filter((c) => c.status === "ativo");
+    const itens = state.cache.itensVendaveis || [];
+    const opcoesCliente = clientes.map((c) => `<option value="${c.id}">${escapeHtml(c.razao_social)} — ${escapeHtml(c.cnpj)}</option>`).join("");
+    const opcoesItem = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+    abrirModal(`
+      <h3>Novo pedido de venda</h3>
+      ${itens.length === 0 ? '<p class="mensagem-erro">Nenhum item do tipo "produto_acabado" cadastrado ainda — cadastre um em Itens antes de vender.</p>' : ""}
+      <form data-form="criar-pedido">
+        <div class="campo"><label>Cliente</label><select name="cliente_id" required>${opcoesCliente}</select></div>
+        <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItem}</select></div>
+        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
+        <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div class="dica">O pedido é criado como rascunho com este primeiro item — depois de criado, você pode adicionar mais itens na tela de detalhe antes de confirmar. O preço aqui informado é o que será usado para gerar a conta a receber quando o pedido for expedido.</div>
+        ${campoSeletorEmpresa(state.cache.empresasSeletor || [])}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar (rascunho)</button>
+        </div>
+      </form>`);
+  }
+
+  function modalAdicionarItemPedido(pedidoId) {
+    const itens = state.cache.itensVendaveis || [];
+    const opcoesItem = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+    abrirModal(`
+      <h3>Adicionar item ao pedido</h3>
+      <form data-form="adicionar-item-pedido" data-id="${pedidoId}">
+        <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItem}</select></div>
+        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
+        <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Adicionar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarPedido(pedido) {
+    abrirModal(`
+      <h3>Cancelar pedido ${escapeHtml(pedido.numero)}</h3>
+      ${pedido.status === "confirmado" ? '<p class="texto-suave">Este pedido já está confirmado — cancelar libera automaticamente o estoque reservado para outros pedidos.</p>' : ""}
+      <form data-form="cancelar-pedido" data-id="${pedido.id}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Cancelar pedido</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Fase 63: Limite de Crédito do Cliente (Alçada na Confirmação do Pedido de Venda) ----
+  function modalRejeitarConfirmacaoPedido(pendenteId, pedidoId) {
+    abrirModal(`
+      <h3>Rejeitar solicitação de confirmação</h3>
+      <p class="texto-suave">Rejeitar NÃO cancela o pedido — ele continua em rascunho, podendo ter a confirmação
+      solicitada de novo depois (ex.: após o cliente pagar alguma conta em aberto, ou ter o limite ajustado).</p>
+      <form data-form="rejeitar-confirmacao-pedido" data-pendente-id="${pendenteId}" data-pedido-id="${pedidoId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="Ex.: aguardar pagamento de conta em aberto, negociar novo limite..."></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar rejeição</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderPedidoDetalhe(pedidoId) {
+    app.innerHTML = '<div class="carregando">Carregando pedido…</div>';
+    const podeVerFiscal = temPermissao("fiscal", "visualizar");
+    const [pedido, itens, notasFiscais] = await Promise.all([
+      chamarApi(`/comercial/pedidos/${pedidoId}`), chamarApi("/itens"),
+      podeVerFiscal ? chamarApi(`/fiscal/notas?pedido_id=${pedidoId}`) : Promise.resolve([]),
+    ]);
+    state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
+
+    const podeEditarItens = temPermissao("comercial", "criar_pedido");
+    const podeConfirmar = temPermissao("comercial", "confirmar_pedido");
+    const podeExpedir = temPermissao("comercial", "expedir_pedido");
+    const podeCancelar = temPermissao("comercial", "cancelar_pedido");
+    // Fase 63 — mesmo raciocínio de `envio_pendente` em
+    // renderPedidoCompraDetalhe (Fase 61): só quem tem essa permissão pode
+    // decidir sobre a solicitação de confirmação pendente, e mesmo quem
+    // tem não pode decidir sobre a que ELE MESMO solicitou (segregação de
+    // função — a mesma trava existe no servidor; aqui só evita mostrar os
+    // botões à toa).
+    const podeAprovarLimiteCredito = temPermissao("comercial", "aprovar_pedido_acima_limite_credito");
+    const confirmacaoPendente = pedido.confirmacao_pendente;
+    const solicitanteConfirmacaoSouEu = confirmacaoPendente && state.usuarioAtual && confirmacaoPendente.solicitado_por === state.usuarioAtual.id;
+
+    const itensHtml = pedido.itens
+      .map((it) => {
+        const reservasHtml = it.reservas.length
+          ? `<table><thead><tr><th>Lote</th><th>Posição</th><th>Quantidade</th></tr></thead><tbody>${it.reservas.map((r) => `<tr>
+               <td class="mono"><a href="#/lotes/${r.lote_id}">${escapeHtml(r.codigo_lote)}</a></td>
+               <td class="mono">${escapeHtml(r.posicao_codigo)}</td>
+               <td>${r.quantidade}</td>
+             </tr>`).join("")}</tbody></table>`
+          : '<p class="texto-suave">Nenhuma reserva ainda (o pedido precisa ser confirmado).</p>';
+        return `<div class="subcartao">
+          <div class="linha-detalhe">
+            <div><span class="rotulo">Item</span><br>${escapeHtml(it.item_codigo)} — ${escapeHtml(it.item_descricao)}</div>
+            <div><span class="rotulo">Quantidade</span><br>${it.quantidade} ${escapeHtml(it.unidade)}</div>
+            <div><span class="rotulo">Preço unitário</span><br>R$ ${Number(it.preco_unitario).toFixed(2)}</div>
+            <div><span class="rotulo">Valor total</span><br>R$ ${Number(it.valor_total).toFixed(2)}</div>
+            <div>${pedido.status === "rascunho" && podeEditarItens ? `<button class="botao perigo pequeno" data-acao="remover-item-pedido" data-pedido-id="${pedido.id}" data-linha-id="${it.id}">Remover</button>` : ""}</div>
+          </div>
+          ${reservasHtml}
+        </div>`;
+      })
+      .join("") || '<p class="texto-suave">Nenhum item neste pedido.</p>';
+
+    const contaReceberHtml = pedido.conta_receber
+      ? `<div class="cartao">
+           <h3 style="margin-top:0;">Conta a receber gerada</h3>
+           <div class="linha-detalhe">
+             <div><span class="rotulo">Número</span><br><a href="#/financeiro">${escapeHtml(pedido.conta_receber.numero)}</a></div>
+             <div><span class="rotulo">Valor total</span><br>R$ ${Number(pedido.conta_receber.valor_total).toFixed(2)}</div>
+             <div><span class="rotulo">Vencimento</span><br>${escapeHtml(pedido.conta_receber.vencimento)}</div>
+             <div><span class="rotulo">Status</span><br>${seloConta(pedido.conta_receber.status)}</div>
+           </div>
+           <p class="dica">Veja detalhes, registre recebimentos ou cancele esta conta na tela <a href="#/financeiro">Financeiro</a>.</p>
+         </div>`
+      : "";
+
+    renderShell(
+      `<a class="link-voltar" href="#/comercial">← Voltar para Comercial</a>
+       <h2>${escapeHtml(pedido.numero)}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><span class="rotulo">Status</span><br>${seloPedido(pedido.status)}</div>
+           <div><span class="rotulo">Cliente</span><br>${escapeHtml(pedido.cliente_razao_social)} — ${escapeHtml(pedido.cliente_cnpj)}</div>
+           <div><span class="rotulo">Criado em</span><br>${fmtData(pedido.criado_em)}</div>
+           <div><span class="rotulo">Valor total do pedido</span><br>R$ ${Number(pedido.valor_total).toFixed(2)}</div>
+         </div>
+         ${pedido.motivo_cancelamento ? `<p class="mensagem-erro">Cancelado: ${escapeHtml(pedido.motivo_cancelamento)}</p>` : ""}
+         ${confirmacaoPendente ? `
+         <div class="subcartao">
+           <p class="mensagem-erro" style="margin-top:0;">Confirmação aguardando aprovação (Fase 63) — valor do
+           pedido de R$ ${Number(confirmacaoPendente.valor_pedido).toFixed(2)} somado ao saldo em aberto de
+           R$ ${Number(confirmacaoPendente.saldo_aberto_no_momento).toFixed(2)} ultrapassa o limite de crédito de
+           R$ ${Number(confirmacaoPendente.limite_credito_no_momento).toFixed(2)} do cliente, solicitado em
+           ${fmtData(confirmacaoPendente.solicitado_em)}.</p>
+           ${podeAprovarLimiteCredito
+             ? (solicitanteConfirmacaoSouEu
+                 ? `<p class="texto-suave">Você solicitou esta confirmação — a aprovação precisa ser feita por outro usuário (segregação de função).</p>`
+                 : `<div style="display:flex;gap:8px;">
+                      <button class="botao secundario" data-acao="aprovar-confirmacao-pedido" data-pendente-id="${confirmacaoPendente.id}" data-pedido-id="${pedido.id}">Aprovar confirmação</button>
+                      <button class="botao perigo" data-acao="abrir-rejeitar-confirmacao-pedido" data-pendente-id="${confirmacaoPendente.id}" data-pedido-id="${pedido.id}">Rejeitar</button>
+                    </div>`)
+             : `<p class="texto-suave">Aguardando outro usuário com permissão de aprovar decidir sobre esta confirmação.</p>`}
+         </div>` : ""}
+         <div class="barra-acoes">
+           <span></span>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             ${pedido.status === "rascunho" && podeEditarItens ? `<button class="botao secundario" data-acao="adicionar-item-pedido" data-id="${pedido.id}">+ Adicionar item</button>` : ""}
+             ${pedido.status === "rascunho" && podeConfirmar && !confirmacaoPendente ? `<button class="botao" data-acao="confirmar-pedido" data-id="${pedido.id}">Confirmar (reservar estoque)</button>` : ""}
+             ${pedido.status === "confirmado" && podeExpedir ? `<button class="botao" data-acao="expedir-pedido" data-id="${pedido.id}">Expedir</button>` : ""}
+             ${(pedido.status === "rascunho" || pedido.status === "confirmado") && podeCancelar ? `<button class="botao secundario" data-acao="cancelar-pedido" data-id="${pedido.id}">Cancelar</button>` : ""}
+             ${podeEditarItens ? `<button class="botao secundario" data-acao="duplicar-pedido-comercial" data-id="${pedido.id}" data-numero="${escapeHtml(pedido.numero)}">Duplicar / Usar como modelo</button>` : ""}
+           </div>
+         </div>
+       </div>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Itens</h3>
+         ${itensHtml}
+       </div>
+       ${contaReceberHtml}
+       ${podeVerFiscal ? cartaoNotaFiscalDoPedido(pedido, notasFiscais) : ""}`,
+      "comercial"
+    );
+  }
+
+  // =======================================================================
+  // FISCAL — Fase 70 (Emissão de NF-e via provedor terceirizado)
+  // =======================================================================
+  const ROTULOS_STATUS_NOTA = {
+    processando_autorizacao: ["amarelo", "Processando"],
+    autorizada: ["ativo", "Autorizada"],
+    rejeitada: ["bloqueado", "Rejeitada"],
+    erro: ["bloqueado", "Erro"],
+    cancelada: ["inativo", "Cancelada"],
+  };
+
+  function seloNota(status) {
+    const par = ROTULOS_STATUS_NOTA[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  // Card mostrado dentro do detalhe do pedido de venda: se ainda não há
+  // nenhuma NF-e para este pedido e ele já foi expedido, mostra o botão de
+  // emitir; se já existe alguma (mesmo rejeitada/cancelada), mostra o
+  // histórico completo — nunca esconde uma tentativa anterior, mesmo que
+  // tenha falhado (Fase 70 nunca apaga uma tentativa de emissão).
+  function cartaoNotaFiscalDoPedido(pedido, notasFiscais) {
+    const podeEmitir = temPermissao("fiscal", "emitir");
+    const existeNotaAtiva = notasFiscais.some((n) => n.status === "processando_autorizacao" || n.status === "autorizada");
+
+    const linhasHistorico = notasFiscais.map((n) => `
+      <div class="subcartao">
+        <div class="linha-detalhe">
+          <div><span class="rotulo">Nº / Série</span><br>${n.numero} / ${n.serie}</div>
+          <div><span class="rotulo">Status</span><br>${seloNota(n.status)}</div>
+          <div><span class="rotulo">Ambiente</span><br>${n.ambiente === "producao" ? '<span class="selo bloqueado">Produção</span>' : '<span class="selo azul">Homologação</span>'}</div>
+          <div><span class="rotulo">Emitida em</span><br>${fmtData(n.criado_em)}</div>
+        </div>
+        ${n.mensagem_sefaz ? `<p class="dica">${escapeHtml(n.mensagem_sefaz)}</p>` : ""}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <a class="botao secundario pequeno" href="#/fiscal/${n.id}">Ver detalhes</a>
+          ${n.status === "processando_autorizacao" && podeEmitir
+            ? `<button class="botao secundario pequeno" data-acao="consultar-status-nota" data-id="${n.id}" data-pedido-id="${pedido.id}">Consultar status</button>`
+            : ""}
+          ${n.url_danfe ? `<a class="botao secundario pequeno" href="${escapeHtml(n.url_danfe)}" target="_blank" rel="noopener">Ver DANFE</a>` : ""}
+        </div>
+      </div>`).join("");
+
+    return `<div class="cartao">
+      <h3 style="margin-top:0;">Nota Fiscal (NF-e)</h3>
+      ${linhasHistorico || '<p class="texto-suave">Nenhuma NF-e emitida para este pedido ainda.</p>'}
+      ${pedido.status === "expedido" && !existeNotaAtiva && podeEmitir
+        ? `<button class="botao" data-acao="emitir-nfe" data-pedido-id="${pedido.id}">Emitir NF-e</button>`
+        : ""}
+      ${pedido.status !== "expedido" && podeEmitir
+        ? `<p class="texto-suave">Só é possível emitir NF-e depois que o pedido for expedido.</p>` : ""}
+    </div>`;
+  }
+
+  async function renderNotasFiscais() {
+    app.innerHTML = '<div class="carregando">Carregando notas fiscais…</div>';
+    const notas = await chamarApi("/fiscal/notas");
+    const podeConfigurar = temPermissao("fiscal", "configurar");
+
+    const linhas = notas.map((n) => `<tr>
+      <td class="mono"><a href="#/fiscal/${n.id}">${n.numero}/${n.serie}</a></td>
+      <td><a href="#/pedido/${n.pedido_id}">Ver pedido</a></td>
+      <td>${seloNota(n.status)}</td>
+      <td>${n.ambiente === "producao" ? '<span class="selo bloqueado">Produção</span>' : '<span class="selo azul">Homologação</span>'}</td>
+      <td>R$ ${Number(n.valor_total).toFixed(2)}</td>
+      <td class="texto-suave">${fmtData(n.criado_em)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Notas Fiscais (NF-e)</h2>
+       <p class="dica">
+         Emitidas via provedor terceirizado (Focus NFe) a partir de pedidos de venda já expedidos — veja o histórico
+         completo, incluindo tentativas rejeitadas, ou entre num pedido específico para emitir uma nova.
+         ${podeConfigurar ? `<a href="#/fiscal-configuracao">Configurar provedor de NF-e →</a>` : ""}
+       </p>
+       <div class="cartao">
+         <table>
+           <thead><tr><th>Nº/Série</th><th>Pedido</th><th>Status</th><th>Ambiente</th><th>Valor</th><th>Emitida em</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhuma NF-e emitida ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "fiscal"
+    );
+  }
+
+  async function renderNotaFiscalDetalhe(notaId) {
+    app.innerHTML = '<div class="carregando">Carregando nota fiscal…</div>';
+    const nota = await chamarApi(`/fiscal/notas/${notaId}`);
+    const podeEmitir = temPermissao("fiscal", "emitir");
+    const podeCancelar = temPermissao("fiscal", "cancelar");
+
+    const itensHtml = nota.itens.map((it) => `<tr>
+      <td>${escapeHtml(it.descricao)}</td>
+      <td class="mono">${escapeHtml(it.ncm)}</td>
+      <td class="mono">${escapeHtml(it.cfop)}</td>
+      <td class="mono">${escapeHtml(it.codigo_tributario_icms)}</td>
+      <td>${it.quantidade} ${escapeHtml(it.unidade)}</td>
+      <td>R$ ${Number(it.valor_unitario).toFixed(2)}</td>
+      <td>R$ ${Number(it.valor_total).toFixed(2)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<a class="link-voltar" href="#/fiscal">← Voltar para Notas Fiscais</a>
+       <h2>NF-e ${nota.numero}/${nota.serie}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><span class="rotulo">Status</span><br>${seloNota(nota.status)}</div>
+           <div><span class="rotulo">Ambiente</span><br>${nota.ambiente === "producao" ? '<span class="selo bloqueado">Produção</span>' : '<span class="selo azul">Homologação</span>'}</div>
+           <div><span class="rotulo">Pedido</span><br><a href="#/pedido/${nota.pedido_id}">${escapeHtml(nota.pedido_numero || "")}</a></div>
+           <div><span class="rotulo">Valor total</span><br>R$ ${Number(nota.valor_total).toFixed(2)}</div>
+           <div><span class="rotulo">Chave de acesso</span><br><span class="mono">${escapeHtml(nota.chave_acesso || "—")}</span></div>
+           <div><span class="rotulo">Protocolo de autorização</span><br><span class="mono">${escapeHtml(nota.protocolo_autorizacao || "—")}</span></div>
+           <div><span class="rotulo">Emitida em</span><br>${fmtData(nota.criado_em)}</div>
+         </div>
+         ${nota.mensagem_sefaz ? `<p class="dica">${escapeHtml(nota.mensagem_sefaz)}</p>` : ""}
+         ${nota.status === "cancelada" ? `<p class="mensagem-erro">Cancelada em ${fmtData(nota.cancelada_em)}: ${escapeHtml(nota.justificativa_cancelamento || "")}</p>` : ""}
+         <div class="barra-acoes">
+           <span></span>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             ${nota.url_danfe ? `<a class="botao secundario" href="${escapeHtml(nota.url_danfe)}" target="_blank" rel="noopener">Ver DANFE</a>` : ""}
+             ${nota.url_xml ? `<a class="botao secundario" href="${escapeHtml(nota.url_xml)}" target="_blank" rel="noopener">Baixar XML</a>` : ""}
+             ${nota.status === "processando_autorizacao" && podeEmitir
+               ? `<button class="botao secundario" data-acao="consultar-status-nota" data-id="${nota.id}">Consultar status</button>` : ""}
+             ${nota.status === "autorizada" && podeCancelar
+               ? `<button class="botao perigo" data-acao="abrir-cancelar-nota" data-id="${nota.id}">Cancelar NF-e</button>` : ""}
+           </div>
+         </div>
+       </div>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Itens</h3>
+         <table>
+           <thead><tr><th>Descrição</th><th>NCM</th><th>CFOP</th><th>CST/CSOSN</th><th>Quantidade</th><th>Vl. unitário</th><th>Vl. total</th></tr></thead>
+           <tbody>${itensHtml}</tbody>
+         </table>
+       </div>`,
+      "fiscal"
+    );
+  }
+
+  function modalCancelarBoleto(boletoId) {
+    abrirModal(`
+      <h3>Cancelar boleto</h3>
+      <p class="dica">Cancelar um boleto ainda pendente (não pago) — informe o motivo.</p>
+      <form data-form="cancelar-boleto" data-id="${boletoId}">
+        <div class="campo"><label>Justificativa</label>
+          <textarea name="justificativa" rows="3" required></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Confirmar cancelamento</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarNota(notaId) {
+    abrirModal(`
+      <h3>Cancelar NF-e</h3>
+      <p class="dica">
+        Exigência da SEFAZ: a justificativa precisa ter ao menos 15 caracteres. Cancelar uma NF-e autorizada é uma
+        ação com efeito fiscal real — confirme com um contador se tiver dúvida antes de cancelar uma nota emitida
+        em ambiente de produção.
+      </p>
+      <form data-form="cancelar-nota" data-id="${notaId}">
+        <div class="campo"><label>Justificativa (mínimo 15 caracteres)</label>
+          <textarea name="justificativa" rows="3" minlength="15" required></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Confirmar cancelamento</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderConfiguracaoBoleto() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const config = await chamarApi("/financeiro/boletos/configuracao");
+
+    renderShell(
+      `<h2>Configuração de Boleto Bancário</h2>
+       <div class="cartao">
+         <p class="dica">
+           Integração com um gateway de pagamentos terceirizado (Asaas) — diferente da NF-e (Fase 70, por empresa
+           emitente), a conta no provedor de boleto é ÚNICA para todo o sistema. Comece em ambiente
+           <strong>Sandbox</strong> (testes) e só troque para <strong>Produção</strong> depois de validar a
+           emissão de boletos de teste.
+         </p>
+         <form data-form="salvar-configuracao-boleto">
+           <div class="campo"><label>Provedor</label>
+             <select name="provedor"><option value="asaas" selected>Asaas</option></select>
+           </div>
+           <div class="campo"><label>Ambiente</label>
+             <select name="ambiente">
+               <option value="sandbox" ${config.ambiente === "sandbox" ? "selected" : ""}>Sandbox (testes)</option>
+               <option value="producao" ${config.ambiente === "producao" ? "selected" : ""}>Produção (valendo de verdade)</option>
+             </select>
+           </div>
+           <div class="campo"><label>Token de API</label>
+             <input name="token_api" type="password" autocomplete="new-password"
+                    placeholder="${config.token_configurado ? "deixe em branco para manter o token atual" : "nenhum token configurado ainda"}">
+           </div>
+           ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
+           <div class="rodape-modal" style="padding:0;">
+             <button type="submit" class="botao">Salvar configuração</button>
+           </div>
+         </form>
+       </div>`,
+      "financeiro-configuracao-boleto"
+    );
+  }
+
+  async function renderFiscalConfiguracao() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const config = await chamarApi("/fiscal/configuracao");
+
+    renderShell(
+      `<h2>Configuração de NF-e</h2>
+       <div class="cartao">
+         <p class="dica">
+           Integração com um provedor terceirizado (Focus NFe) — o certificado digital A1/A3 da empresa é
+           cadastrado DIRETAMENTE no painel do provedor, nunca aqui. O único dado que entra no Alphafitus OS é o
+           token de API. Comece em ambiente de <strong>Homologação</strong> (testes, sem valor fiscal) e só troque
+           para <strong>Produção</strong> depois de validar a emissão de notas de teste.
+         </p>
+         <p class="mensagem-erro" style="margin-top:0;">
+           <strong>Aviso importante:</strong> os códigos fiscais padrão usados na emissão (CST/CSOSN, CFOP) são
+           pontos de partida neutros, não uma recomendação tributária. Isto não é aconselhamento fiscal — revise
+           com um contador antes de emitir qualquer nota em ambiente de produção.
+         </p>
+         <form data-form="salvar-configuracao-nfe">
+           <div class="campo"><label>Provedor</label>
+             <select name="provedor"><option value="focus_nfe" selected>Focus NFe</option></select>
+           </div>
+           <div class="campo"><label>Ambiente</label>
+             <select name="ambiente">
+               <option value="homologacao" ${config.ambiente === "homologacao" ? "selected" : ""}>Homologação (testes)</option>
+               <option value="producao" ${config.ambiente === "producao" ? "selected" : ""}>Produção (valendo de verdade)</option>
+             </select>
+           </div>
+           <div class="campo"><label>Série da NF-e</label><input name="serie" type="number" min="1" value="${config.serie}"></div>
+           <div class="campo"><label>Token de API</label>
+             <input name="token_api" type="password" autocomplete="new-password"
+                    placeholder="${config.token_configurado ? "deixe em branco para manter o token atual" : "nenhum token configurado ainda"}">
+           </div>
+           ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
+           <div class="rodape-modal" style="padding:0;">
+             <button type="submit" class="botao">Salvar configuração</button>
+           </div>
+         </form>
+       </div>`,
+      "fiscal-configuracao"
+    );
+  }
+
+  // =======================================================================
+  // APP DE VENDAS — Fase 36 (rascunho com reserva temporária, verbas
+  // comerciais e comissão do vendedor)
+  // =======================================================================
+  // "Enviar o pedido" pode falhar por dois motivos bem diferentes, e o
+  // vendedor precisa entender qual foi: (a) falta de conexão com a
+  // internet — o rascunho continua montado no servidor exatamente como
+  // estava, nada foi perdido, e o app deve avisar e tentar de novo sozinho
+  // quando a conexão voltar (é isto que `CHAVE_PENDENTE_ENVIO_VENDAS`
+  // guarda); ou (b) um erro de negócio de verdade (ex.: outro vendedor já
+  // enviou primeiro e consumiu o saldo) — aí não faz sentido tentar de
+  // novo automaticamente, o vendedor precisa decidir o que fazer.
+  // `chamarApi` só preenche `erro.status` quando a resposta chegou do
+  // servidor; se o `fetch` nem saiu do aparelho (sem internet), o erro
+  // lançado não tem `.status` — é esse o sinal usado abaixo para
+  // diferenciar os dois casos.
+  const CHAVE_PENDENTE_ENVIO_VENDAS = "alphafitus_pedido_pendente_envio_vendas";
+
+  function marcarPedidoPendenteDeEnvio(pedidoId) {
+    localStorage.setItem(CHAVE_PENDENTE_ENVIO_VENDAS, String(pedidoId));
+  }
+  function limparPedidoPendenteDeEnvio() {
+    localStorage.removeItem(CHAVE_PENDENTE_ENVIO_VENDAS);
+  }
+  function pedidoPendenteDeEnvio() {
+    const v = localStorage.getItem(CHAVE_PENDENTE_ENVIO_VENDAS);
+    return v ? Number(v) : null;
+  }
+
+  // Sincronização automática enquanto a tela do App de Vendas está aberta
+  // — cada sincronização bem-sucedida já é, em si, a chance de o backend
+  // avisar sobre qualquer mudança (ex.: a sessão expirou, ou outro
+  // vendedor mudou o saldo disponível de um item), sem exigir que o
+  // vendedor recarregue a página manualmente. Não é um cron de verdade,
+  // só um `setInterval` do navegador — para automaticamente ao sair da
+  // tela (ver `pararSincronizacaoAppVendas`, chamado em toda navegação).
+  let timerSincronizacaoAppVendas = null;
+  function pararSincronizacaoAppVendas() {
+    if (timerSincronizacaoAppVendas) {
+      clearInterval(timerSincronizacaoAppVendas);
+      timerSincronizacaoAppVendas = null;
+    }
+  }
+  function iniciarSincronizacaoAppVendas() {
+    pararSincronizacaoAppVendas();
+    timerSincronizacaoAppVendas = setInterval(() => {
+      if (location.hash !== "#/app-vendas") {
+        pararSincronizacaoAppVendas();
+        return;
+      }
+      renderAppVendas(true).catch(() => { /* próxima sincronização tenta de novo */ });
+    }, 20000);
+  }
+
+  async function tentarEnviarPedidoPendente(pedidoId) {
+    try {
+      const resultadoEnvioPendente = await chamarApi(`/vendas-app/rascunhos/${pedidoId}/enviar`, { method: "POST" });
+      limparPedidoPendenteDeEnvio();
+      // Fase 63 — acima do limite de crédito do cliente, o pedido não fica
+      // 'confirmado' na hora: fica em rascunho aguardando aprovação de
+      // outro usuário. Mesmo assim, do ponto de vista da fila de envio
+      // offline, o envio em si deu certo (chegou ao servidor) — só o
+      // texto do flash muda.
+      if (resultadoEnvioPendente.pedido && resultadoEnvioPendente.pedido.confirmacao_pendente_criada_id) {
+        definirFlash("ok", "A internet voltou e o pedido pendente foi enviado — como o valor ultrapassa o limite de crédito do cliente, aguarda aprovação de outro usuário.");
+      } else {
+        definirFlash("ok", "A internet voltou e o pedido pendente foi enviado com sucesso.");
+      }
+    } catch (erro) {
+      if (erro.status !== undefined) {
+        // Não é mais falta de internet — é um erro de negócio de verdade
+        // (ex.: saldo insuficiente porque outro vendedor enviou primeiro).
+        // Continuar tentando sozinho não ajudaria; desiste e mostra o
+        // motivo real para o vendedor decidir o que fazer.
+        limparPedidoPendenteDeEnvio();
+        definirFlash("erro", erro.message);
+      }
+      // Se ainda for falha de rede, mantém marcado — a próxima vez que o
+      // navegador disparar o evento "online", ou a próxima sincronização
+      // automática, tenta de novo.
+    }
+    return renderAppVendas();
+  }
+
+  window.addEventListener("online", () => {
+    const pendente = pedidoPendenteDeEnvio();
+    if (pendente) tentarEnviarPedidoPendente(pendente);
+  });
+
+  async function renderAppVendas(silencioso) {
+    if (!silencioso) app.innerHTML = '<div class="carregando">Carregando aplicativo de vendas…</div>';
+    let rascunhoResp, clientes;
+    try {
+      [rascunhoResp, clientes] = await Promise.all([
+        chamarApi("/vendas-app/meu-rascunho"),
+        chamarApi("/comercial/clientes"),
+      ]);
+    } catch (erro) {
+      // Numa sincronização silenciosa em segundo plano, um erro (rede
+      // instável, sessão de token renovando) não deve derrubar a tela que
+      // o vendedor já está vendo — só desiste desta rodada e tenta de novo
+      // no próximo ciclo do timer.
+      if (silencioso) return;
+      throw erro;
+    }
+    state.cache.clientesAtivosAppVendas = clientes.filter((c) => c.status === "ativo");
+    const rascunho = rascunhoResp.rascunho;
+    state.cache.rascunhoAppVendas = rascunho;
+
+    const idPendente = pedidoPendenteDeEnvio();
+    const bannerPendenteHtml = idPendente
+      ? `<div class="cartao">
+           <p class="mensagem-erro">Você tem um pedido aguardando envio — não foi possível enviar na última
+           tentativa por falta de internet, mas o rascunho continua montado no servidor, nada foi perdido.
+           <button class="botao pequeno" data-acao="tentar-enviar-pendente-vendas" data-id="${idPendente}">Tentar enviar agora</button></p>
+         </div>`
+      : "";
+
+    if (!rascunho) {
+      const clientesAtivos = state.cache.clientesAtivosAppVendas;
+      renderShell(
+        `<h2>App de Vendas</h2>
+         ${bannerPendenteHtml}
+         <div class="cartao">
+           <h3 style="margin-top:0;">Nenhum rascunho aberto</h3>
+           <p class="texto-suave">Escolha um cliente para começar um novo pedido. Enquanto você monta o
+           carrinho, cada item colocado fica reservado temporariamente só para você — outro vendedor só vê o
+           que sobrar do saldo disponível. Se você fechar o app, ou ficar sem tocar no rascunho por tempo
+           demais, a reserva é liberada automaticamente para os outros.</p>
+           ${clientesAtivos.length === 0
+             ? '<p class="mensagem-erro">Nenhum cliente ativo cadastrado ainda — cadastre um em Comercial (CRM).</p>'
+             : `<button class="botao" data-acao="abrir-novo-rascunho-vendas">+ Novo rascunho</button>`}
+         </div>`,
+        "app-vendas"
+      );
+      return;
+    }
+
+    let catalogo, verba;
+    try {
+      [catalogo, verba] = await Promise.all([
+        chamarApi("/vendas-app/catalogo"),
+        chamarApi(`/vendas-app/clientes/${rascunho.cliente_id}/verba`),
+      ]);
+    } catch (erro) {
+      if (silencioso) return;
+      throw erro;
+    }
+    state.cache.catalogoAppVendas = catalogo;
+
+    const itensHtml = (rascunho.itens || [])
+      .map((it) => `<tr>
+        <td>${escapeHtml(it.item_codigo)} — ${escapeHtml(it.item_descricao)}</td>
+        <td>${it.quantidade} ${escapeHtml(it.unidade)}</td>
+        <td>${fmtMoeda(it.preco_unitario)}</td>
+        <td>${fmtMoeda(it.valor_total)}</td>
+        <td><button class="botao perigo pequeno" data-acao="remover-item-rascunho-vendas" data-pedido-id="${rascunho.id}" data-linha-id="${it.id}">Remover</button></td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>App de Vendas</h2>
+       ${bannerPendenteHtml}
+       <p class="texto-suave">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> — ${seloPedido(rascunho.status)}</p>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Itens do rascunho</h3>
+           <div style="display:flex; gap:8px;">
+             <button class="botao secundario pequeno" data-acao="sincronizar-app-vendas">Sincronizar</button>
+             <a class="botao secundario pequeno" href="#/app-vendas/portfolio">Ver Portfólio</a>
+             <button class="botao secundario pequeno" data-acao="abrir-adicionar-item-rascunho-vendas" data-id="${rascunho.id}">+ Adicionar item</button>
+           </div>
+         </div>
+         <table>
+           <thead><tr><th>Item</th><th>Quantidade</th><th>Preço unit.</th><th>Valor total</th><th></th></tr></thead>
+           <tbody>${itensHtml || '<tr><td colspan="5" class="texto-suave">Nenhum item ainda.</td></tr>'}</tbody>
+         </table>
+         <p><strong>Valor total do pedido:</strong> ${fmtMoeda(rascunho.valor_total)}${rascunho.verba_utilizada > 0 ? ` (já descontando ${fmtMoeda(rascunho.verba_utilizada)} de verba aplicada)` : ""}</p>
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Verba comercial do cliente</h3>
+           <button class="botao secundario pequeno" data-acao="abrir-aplicar-verba-vendas">Aplicar verba neste pedido</button>
+         </div>
+         <p class="texto-suave">Saldo disponível: <strong>${fmtMoeda(verba.saldo_disponivel)}</strong> — gerado em vendas anteriores deste cliente, pode ser usado para abater o valor desta ou de uma venda futura.</p>
+       </div>
+
+       <div class="cartao">
+         <p class="texto-suave">Rascunho ativo até <strong>${fmtData(rascunho.sessao ? rascunho.sessao.expira_em : rascunho.sessao_expira_em)}</strong> — sincronizar, adicionar ou remover um item renova esse prazo. Se ele passar sem nenhuma dessas ações, ou se você fechar o app sem enviar, o pedido é cancelado sozinho e o saldo reservado volta para os outros vendedores.</p>
+         <div style="display:flex; gap:8px; flex-wrap:wrap;">
+           <button class="botao" data-acao="enviar-rascunho-vendas" data-id="${rascunho.id}">Enviar pedido</button>
+           <button class="botao secundario perigo" data-acao="abandonar-rascunho-vendas" data-id="${rascunho.id}">Abandonar rascunho</button>
+         </div>
+       </div>`,
+      "app-vendas"
+    );
+
+    if (location.hash === "#/app-vendas") iniciarSincronizacaoAppVendas();
+  }
+
+  // ============================================================
+  // PORTFÓLIO (Fase 77) — navegação visual pelo catálogo vendável, em
+  // cartões por categoria, para o vendedor "clicar e selecionar" em vez de
+  // escolher num <select> comprido. Selecionar um item some direto para o
+  // rascunho (mesmo endpoint de sempre) e a tela RENDERIZA O PRÓPRIO
+  // PORTFÓLIO DE NOVO (não navega para o carrinho) — assim o vendedor
+  // continua adicionando itens sem perder o lugar onde estava navegando,
+  // só acompanhando o resumo do pedido fixo no topo.
+  // ============================================================
+  async function renderPortfolioVendas(manterCache) {
+    if (!manterCache) app.innerHTML = '<div class="carregando">Carregando portfólio…</div>';
+    let rascunho, dadosPortfolio;
+    if (manterCache && state.cache.portfolioVendas && state.cache.rascunhoAppVendas !== undefined) {
+      dadosPortfolio = state.cache.portfolioVendas;
+      rascunho = state.cache.rascunhoAppVendas;
+    } else {
+      const [rascunhoResp, portfolioResp] = await Promise.all([
+        chamarApi("/vendas-app/meu-rascunho"),
+        chamarApi("/vendas-app/portfolio"),
+      ]);
+      rascunho = rascunhoResp.rascunho;
+      dadosPortfolio = portfolioResp;
+      state.cache.rascunhoAppVendas = rascunho;
+      state.cache.portfolioVendas = dadosPortfolio;
+    }
+
+    if (!rascunho) {
+      if (!state.cache.clientesAtivosAppVendas) {
+        const clientes = await chamarApi("/comercial/clientes");
+        state.cache.clientesAtivosAppVendas = clientes.filter((c) => c.status === "ativo");
+      }
+      const clientesAtivos = state.cache.clientesAtivosAppVendas;
+      renderShell(
+        `<h2>Portfólio</h2>
+         <div class="cartao">
+           <h3 style="margin-top:0;">Nenhum rascunho aberto</h3>
+           <p class="texto-suave">Para navegar pelo portfólio e adicionar itens direto a um pedido, comece um
+           rascunho primeiro — o mesmo rascunho usado na tela <a href="#/app-vendas">App de Vendas</a>.</p>
+           ${clientesAtivos.length === 0
+             ? '<p class="mensagem-erro">Nenhum cliente ativo cadastrado ainda — cadastre um em Comercial (CRM).</p>'
+             : `<button class="botao" data-acao="abrir-novo-rascunho-vendas">+ Novo rascunho</button>`}
+         </div>`,
+        "app-vendas-portfolio"
+      );
+      return;
+    }
+
+    const categorias = dadosPortfolio.categorias || [];
+    const filtro = state.cache.portfolioFiltroCategoria || "";
+    const abasCategoriaHtml = categorias.length > 1
+      ? `<div class="portfolio-filtros">
+           <button class="botao pequeno ${filtro ? "secundario" : ""}" data-acao="filtrar-portfolio" data-categoria="">Todas (${dadosPortfolio.total_itens})</button>
+           ${categorias.map((c) => `<button class="botao pequeno ${filtro === c.nome ? "" : "secundario"}" data-acao="filtrar-portfolio" data-categoria="${escapeHtml(c.nome)}">${escapeHtml(c.nome)} (${c.itens.length})</button>`).join("")}
+         </div>`
+      : "";
+    const categoriasVisiveis = filtro ? categorias.filter((c) => c.nome === filtro) : categorias;
+
+    const secoesHtml = categoriasVisiveis
+      .map((cat) => `
+        <h3 class="portfolio-titulo-categoria">${escapeHtml(cat.nome)}</h3>
+        <div class="portfolio-grade">
+          ${cat.itens.map((item) => `
+            <div class="portfolio-card">
+              <div class="portfolio-card-topo">
+                <span class="mono texto-suave" style="font-size:12px;">${escapeHtml(item.codigo)}</span>
+                <span class="texto-suave" style="font-size:12px;">Disp.: ${item.saldo_disponivel_para_venda}</span>
+              </div>
+              <h4 style="margin:6px 0 12px;">${escapeHtml(item.descricao)}</h4>
+              <button class="botao pequeno" style="width:100%;" data-acao="selecionar-item-portfolio"
+                data-id="${item.id}" data-codigo="${escapeHtml(item.codigo)}" data-descricao="${escapeHtml(item.descricao)}"
+                data-disponivel="${item.saldo_disponivel_para_venda}" ${item.saldo_disponivel_para_venda <= 0 ? "disabled" : ""}>
+                ${item.saldo_disponivel_para_venda <= 0 ? "Sem saldo" : "+ Selecionar"}
+              </button>
+            </div>`).join("")}
+        </div>`)
+      .join("") || '<p class="texto-suave">Nenhum produto vendável ativo cadastrado ainda.</p>';
+
+    renderShell(
+      `<h2>Portfólio</h2>
+       <div class="cartao portfolio-resumo-pedido">
+         <div class="barra-acoes">
+           <p style="margin:0;">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> —
+             ${(rascunho.itens || []).length} ${(rascunho.itens || []).length === 1 ? "item" : "itens"} —
+             <strong>${fmtMoeda(rascunho.valor_total)}</strong></p>
+           <a class="botao secundario pequeno" href="#/app-vendas">Ver pedido completo</a>
+         </div>
+       </div>
+       ${abasCategoriaHtml}
+       ${secoesHtml}`,
+      "app-vendas-portfolio"
+    );
+  }
+
+  function modalSelecionarItemPortfolio(item) {
+    abrirModal(`
+      <h3>Adicionar ao pedido</h3>
+      <p class="texto-suave">${escapeHtml(item.codigo)} — ${escapeHtml(item.descricao)} (disponível: ${item.disponivel})</p>
+      <form data-form="selecionar-item-portfolio" data-id="${item.id}">
+        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required autofocus></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" value="un" required></div>
+        <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Adicionar e continuar no portfólio</button>
+        </div>
+      </form>`);
+  }
+
+  function modalNovoRascunhoVendas() {
+    const clientes = state.cache.clientesAtivosAppVendas || [];
+    const opcoesCliente = clientes.map((c) => `<option value="${c.id}">${escapeHtml(c.razao_social)} — ${escapeHtml(c.cnpj)}</option>`).join("");
+    abrirModal(`
+      <h3>Novo rascunho</h3>
+      <form data-form="criar-rascunho-vendas">
+        <div class="campo"><label>Cliente</label><select name="cliente_id" required>${opcoesCliente}</select></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Iniciar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalAdicionarItemRascunhoVendas(rascunhoId) {
+    const catalogo = state.cache.catalogoAppVendas || [];
+    const opcoesItem = catalogo
+      .map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)} (disponível: ${i.saldo_disponivel_para_venda})</option>`)
+      .join("");
+    abrirModal(`
+      <h3>Adicionar item ao rascunho</h3>
+      ${catalogo.length === 0 ? '<p class="mensagem-erro">Nenhum produto vendável ativo cadastrado ainda.</p>' : ""}
+      <form data-form="adicionar-item-rascunho-vendas" data-id="${rascunhoId}">
+        <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItem}</select></div>
+        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" value="un" required></div>
+        <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div class="dica">O "disponível" já desconta o que outros vendedores têm reservado em rascunhos abertos agora — sincronize antes de confiar num número que já faz um tempo que você olhou.</div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Adicionar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalAplicarVerbaVendas(rascunho, verba) {
+    abrirModal(`
+      <h3>Aplicar verba comercial</h3>
+      <p class="texto-suave">Saldo disponível do cliente: <strong>${fmtMoeda(verba.saldo_disponivel)}</strong>.
+      Valor atual do pedido: <strong>${fmtMoeda(rascunho.valor_total)}</strong>.</p>
+      <form data-form="aplicar-verba-vendas" data-id="${rascunho.id}">
+        <div class="campo"><label>Valor de verba a aplicar (R$, 0 para remover)</label>
+          <input name="valor" type="number" step="0.01" min="0" value="${rascunho.verba_utilizada || 0}" required>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalConfigurarAppVendas(configuracao) {
+    abrirModal(`
+      <h3>Configurar App de Vendas</h3>
+      <form data-form="configurar-app-vendas">
+        <div class="campo"><label>Percentual de verba comercial gerada por venda (%)</label>
+          <input name="percentual_verba_gerada" type="number" step="0.1" min="0" max="100" value="${configuracao.percentual_verba_gerada}" required>
+        </div>
+        <div class="campo"><label>Percentual de comissão padrão do vendedor (%)</label>
+          <input name="percentual_comissao_padrao" type="number" step="0.1" min="0" max="100" value="${configuracao.percentual_comissao_padrao}" required>
+        </div>
+        <div class="campo"><label>Minutos de inatividade até um rascunho expirar sozinho</label>
+          <input name="minutos_expiracao_rascunho" type="number" step="1" min="1" value="${configuracao.minutos_expiracao_rascunho}" required>
+        </div>
+        <div class="dica">0% em qualquer um dos percentuais desliga aquele comportamento (nenhuma verba
+        gerada, ou nenhuma comissão calculada) — é o padrão até alguém configurar um valor aqui.</div>
+        ${configuracao.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(configuracao.atualizado_em)}.</p>` : ""}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderMinhasComissoes(ano, mes) {
+    app.innerHTML = '<div class="carregando">Carregando comissões…</div>';
+    const hoje = new Date();
+    ano = ano || state.cache.comissoesAno || hoje.getFullYear();
+    mes = mes || state.cache.comissoesMes || (hoje.getMonth() + 1);
+    state.cache.comissoesAno = ano;
+    state.cache.comissoesMes = mes;
+
+    const dados = await chamarApi(`/vendas-app/minhas-comissoes?ano=${ano}&mes=${mes}`);
+
+    const linhas = dados.contas
+      .map((c) => `<tr>
+        <td class="mono"><a href="#/pedido/${c.pedido_id}">${escapeHtml(c.pedido_numero)}</a></td>
+        <td>${escapeHtml(c.cliente_razao_social)}</td>
+        <td>${seloConta(c.status)}</td>
+        <td>${escapeHtml(c.vencimento)}</td>
+        <td>${fmtMoeda(c.valor_total)}</td>
+        <td>${fmtMoeda(c.total_baixado)}</td>
+        <td>${fmtMoeda(c.comissao_projetada)}</td>
+        <td>${fmtMoeda(c.comissao_realizada)}</td>
+        <td><button class="botao secundario pequeno" data-acao="duplicar-pedido-vendas-app" data-id="${c.pedido_id}" data-numero="${escapeHtml(c.pedido_numero)}">Usar como modelo</button></td>
+      </tr>`)
+      .join("");
+
+    const opcoesMes = Array.from({ length: 12 }, (_, i) => i + 1)
+      .map((m) => `<option value="${m}" ${m === mes ? "selected" : ""}>${String(m).padStart(2, "0")}</option>`)
+      .join("");
+    const opcoesAno = Array.from({ length: 5 }, (_, i) => hoje.getFullYear() - 2 + i)
+      .map((a) => `<option value="${a}" ${a === ano ? "selected" : ""}>${a}</option>`)
+      .join("");
+
+    renderShell(
+      `<h2>Minhas Comissões</h2>
+       <div class="cartao">
+         <form data-form="filtrar-minhas-comissoes" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap;">
+           <div class="campo"><label>Mês</label><select name="mes">${opcoesMes}</select></div>
+           <div class="campo"><label>Ano</label><select name="ano">${opcoesAno}</select></div>
+           <button type="submit" class="botao secundario">Filtrar</button>
+         </form>
+         <p class="dica">Percentual de comissão vigente: ${dados.percentual_comissao}%. A comissão
+         <strong>projetada</strong> assume que a venda inteira ainda vai ser paga; a <strong>realizada</strong>
+         já reflete só o que o cliente efetivamente pagou até agora — na liquidação do boleto, ou no pagamento
+         efetivo da compra, nunca antes disso.</p>
+       </div>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Vendas com vencimento em ${String(mes).padStart(2, "0")}/${ano}</h3>
+         <table>
+           <thead><tr><th>Pedido</th><th>Cliente</th><th>Status</th><th>Vencimento</th><th>Valor</th><th>Já pago</th><th>Comissão projetada</th><th>Comissão realizada</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="9" class="texto-suave">Nenhuma venda sua com vencimento neste mês.</td></tr>'}</tbody>
+         </table>
+         <p><strong>Total vendas:</strong> ${fmtMoeda(dados.total_vendas)} —
+         <strong>Comissão projetada:</strong> ${fmtMoeda(dados.total_comissao_projetada)} —
+         <strong>Comissão realizada:</strong> ${fmtMoeda(dados.total_comissao_realizada)}</p>
+       </div>`,
+      "minhas-comissoes"
+    );
+  }
+
+  // =======================================================================
+  // FINANCEIRO (Contas a Receber e a Pagar) — Fase 6
+  // =======================================================================
+  function fmtMoeda(v) {
+    return "R$ " + Number(v || 0).toFixed(2);
+  }
+
+  async function renderFinanceiro() {
+    app.innerHTML = '<div class="carregando">Carregando financeiro…</div>';
+    const filtroReceberStatus = state.cache.filtroReceberStatus || "";
+    const filtroPagarStatus = state.cache.filtroPagarStatus || "";
+
+    const [contasReceber, contasPagar, estornosPendentes, baixasPendentes, configuracaoFinanceiro] = await Promise.all([
+      chamarApi(`/financeiro/contas-receber${filtroReceberStatus ? "?status=" + filtroReceberStatus : ""}`),
+      chamarApi(`/financeiro/contas-pagar${filtroPagarStatus ? "?status=" + filtroPagarStatus : ""}`),
+      chamarApi("/financeiro/estornos-pendentes"),
+      chamarApi("/financeiro/baixas-pendentes"),
+      chamarApi("/financeiro/configuracao"),
+    ]);
+
+    const podeCriarContaPagar = temPermissao("financeiro", "criar_conta_pagar");
+    const podeBaixarReceber = temPermissao("financeiro", "registrar_baixa_receber");
+    const podeCancelarReceber = temPermissao("financeiro", "cancelar_conta_receber");
+    const podeBaixarPagar = temPermissao("financeiro", "registrar_baixa_pagar");
+    const podeCancelarPagar = temPermissao("financeiro", "cancelar_conta_pagar");
+    const podeAprovarEstornoReceber = temPermissao("financeiro", "aprovar_estorno_receber");
+    const podeAprovarEstornoPagar = temPermissao("financeiro", "aprovar_estorno_pagar");
+    // Fase 31 — mesma ideia da Fase 22, mas para o REGISTRO de uma baixa
+    // nova (não o estorno de uma já lançada).
+    const podeAprovarBaixaReceber = temPermissao("financeiro", "aprovar_baixa_receber");
+    const podeAprovarBaixaPagar = temPermissao("financeiro", "aprovar_baixa_pagar");
+    // Fase 33 — régua de prazo (em dias) para estornar uma baixa, editável
+    // pela tela por quem tem a permissão nova `configurar_limite_estorno`.
+    const podeConfigurarLimiteEstorno = temPermissao("financeiro", "configurar_limite_estorno");
+    const limiteEstornoTexto = configuracaoFinanceiro.limite_dias_estorno_baixa > 0
+      ? `${configuracaoFinanceiro.limite_dias_estorno_baixa} dia(s) a partir do lançamento original`
+      : "sem limite de prazo";
+    // Fase 41 — mesma linha de configuração, segundo campo.
+    const impostoVendaTexto = configuracaoFinanceiro.percentual_imposto_venda > 0
+      ? `${fmtPct(configuracaoFinanceiro.percentual_imposto_venda)} sobre a receita bruta (usado no DRE)`
+      : "nenhum imposto configurado";
+    // Fase 55 — mesma linha de configuração, terceiro campo: janela de
+    // dias usada para achar candidato de conciliação bancária (Fase 40).
+    const toleranciaConciliacaoTexto = `${configuracaoFinanceiro.tolerancia_dias_conciliacao} dia(s) de tolerância na data`;
+
+    if (podeCriarContaPagar) {
+      // Necessário para a tela de "Nova conta a pagar" (seleção de
+      // fornecedor) — carregado aqui, não a cada abertura de modal, para
+      // não precisar de outra chamada de rede a cada clique.
+      state.cache.fornecedoresAtivos = await chamarApi("/fornecedores");
+      await carregarEmpresasParaSeletor();
+    }
+
+    const opcoesStatusConta = (selecionado) => `
+      <option value="">Todos os status</option>
+      <option value="aberto" ${selecionado === "aberto" ? "selected" : ""}>Aberto</option>
+      <option value="pago_parcial" ${selecionado === "pago_parcial" ? "selected" : ""}>Pago parcial</option>
+      <option value="pago" ${selecionado === "pago" ? "selected" : ""}>Pago</option>
+      <option value="cancelado" ${selecionado === "cancelado" ? "selected" : ""}>Cancelado</option>`;
+
+    const linhasReceber = contasReceber
+      .map((c) => `<tr class="${c.vencida ? "linha-alerta" : ""}">
+        <td class="mono">${escapeHtml(c.numero)}</td>
+        <td>${escapeHtml(c.cliente_razao_social)}</td>
+        <td class="mono texto-suave">${escapeHtml(c.pedido_numero || "—")}</td>
+        <td>${fmtMoeda(c.valor_total)}</td>
+        <td>${fmtMoeda(c.saldo_aberto)}</td>
+        <td>${escapeHtml(c.vencimento)}${c.vencida ? ' <span class="selo bloqueado">Vencida</span>' : ""}</td>
+        <td>${seloConta(c.status)}</td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${c.status !== "pago" && c.status !== "cancelado" && podeBaixarReceber ? `<button class="botao secundario pequeno" data-acao="baixar-conta-receber" data-id="${c.id}">Registrar recebimento</button>` : ""}
+          <button class="botao secundario pequeno" data-acao="ver-baixas-conta-receber" data-id="${c.id}">Ver baixas</button>
+          ${c.status === "aberto" && podeCancelarReceber ? `<button class="botao perigo pequeno" data-acao="cancelar-conta-receber" data-id="${c.id}">Cancelar</button>` : ""}
+        </td>
+      </tr>`)
+      .join("");
+
+    const linhasPagar = contasPagar
+      .map((c) => `<tr class="${c.vencida ? "linha-alerta" : ""}">
+        <td class="mono">${escapeHtml(c.numero)}</td>
+        <td>${escapeHtml(c.fornecedor_nome)}</td>
+        <td class="texto-suave">${escapeHtml(c.descricao)}</td>
+        <td>${c.categoria === "despesa_operacional" ? '<span class="selo inativo">Despesa operacional</span>' : '<span class="texto-suave">Compra</span>'}</td>
+        <td>${fmtMoeda(c.valor_total)}</td>
+        <td>${fmtMoeda(c.saldo_aberto)}</td>
+        <td>${escapeHtml(c.vencimento)}${c.vencida ? ' <span class="selo bloqueado">Vencida</span>' : ""}</td>
+        <td>${seloConta(c.status)}</td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${c.status !== "pago" && c.status !== "cancelado" && podeBaixarPagar ? `<button class="botao secundario pequeno" data-acao="baixar-conta-pagar" data-id="${c.id}">Registrar pagamento</button>` : ""}
+          <button class="botao secundario pequeno" data-acao="ver-baixas-conta-pagar" data-id="${c.id}">Ver baixas</button>
+          ${c.status === "aberto" && podeCancelarPagar ? `<button class="botao perigo pequeno" data-acao="cancelar-conta-pagar" data-id="${c.id}">Cancelar</button>` : ""}
+        </td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Financeiro</h2>
+
+       <p class="dica">Prazo para estornar uma baixa: ${limiteEstornoTexto} (Fase 33). Imposto sobre vendas: ${impostoVendaTexto} (Fase 41). Conciliação bancária: ${toleranciaConciliacaoTexto} (Fase 55).${podeConfigurarLimiteEstorno ? ` <button class="botao secundario pequeno" data-acao="abrir-configurar-limite-estorno">Configurar Financeiro</button>` : ""}</p>
+       ${estornosPendentes.length > 0 ? `<p class="mensagem-erro">${estornosPendentes.length} solicitação(ões) de estorno acima do valor de alçada aguardando aprovação — abra "Ver baixas" na conta correspondente para decidir${(podeAprovarEstornoReceber || podeAprovarEstornoPagar) ? "" : " (você não tem permissão para decidir sobre elas)"}.</p>` : ""}
+       ${baixasPendentes.length > 0 ? `<p class="mensagem-erro">${baixasPendentes.length} solicitação(ões) de REGISTRO de baixa acima do valor de alçada aguardando aprovação — abra "Ver baixas" na conta correspondente para decidir${(podeAprovarBaixaReceber || podeAprovarBaixaPagar) ? "" : " (você não tem permissão para decidir sobre elas)"}.</p>` : ""}
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Contas a Receber</h3>
+           <form data-form="filtrar-contas-receber" style="display:flex;gap:8px;">
+             <select name="status">${opcoesStatusConta(filtroReceberStatus)}</select>
+             <button class="botao secundario pequeno" type="submit">Filtrar</button>
+           </form>
+         </div>
+         <p class="dica">Geradas automaticamente ao expedir um pedido de venda (ver tela Comercial) — o valor é congelado a partir do preço de cada item no momento da expedição.</p>
+         <table>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Pedido</th><th>Valor total</th><th>Saldo aberto</th><th>Vencimento</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhasReceber || '<tr><td colspan="8" class="texto-suave">Nenhuma conta a receber encontrada.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Contas a Pagar</h3>
+           <div style="display:flex;gap:8px;align-items:center;">
+             <form data-form="filtrar-contas-pagar" style="display:flex;gap:8px;">
+               <select name="status">${opcoesStatusConta(filtroPagarStatus)}</select>
+               <button class="botao secundario pequeno" type="submit">Filtrar</button>
+             </form>
+             ${podeCriarContaPagar ? `<button class="botao secundario pequeno" data-acao="nova-conta-pagar" ${(state.cache.fornecedoresAtivos || []).length === 0 ? "disabled title='Cadastre um fornecedor primeiro'" : ""}>+ Nova conta a pagar</button>` : ""}
+           </div>
+         </div>
+         <p class="dica">Lançadas manualmente contra um fornecedor (ex.: ao receber a nota fiscal de compra) — o vínculo com um lote recebido é opcional, só para rastreabilidade. A categoria (Fase 41) decide se entra no CMV ou nas Despesas Operacionais do DRE.</p>
+         <table>
+           <thead><tr><th>Número</th><th>Fornecedor</th><th>Descrição</th><th>Categoria</th><th>Valor total</th><th>Saldo aberto</th><th>Vencimento</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhasPagar || '<tr><td colspan="9" class="texto-suave">Nenhuma conta a pagar encontrada.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "financeiro"
+    );
+  }
+
+  // ---- Fase 33: limite de prazo para estorno de baixa, configurável ----
+  // Fase 41: a MESMA tela/formulário ganhou um segundo campo (percentual
+  // de imposto sobre vendas, usado no DRE) — mesma permissão de sempre,
+  // não parecia valer a pena abrir um modal novo só para um campo.
+  function modalConfigurarLimiteEstorno(configuracao) {
+    abrirModal(`
+      <h3>Configurações do Financeiro</h3>
+      <p class="texto-suave">Número de dias, contados a partir do lançamento original da baixa, dentro do qual
+      ainda é permitido estorná-la (Fase 14/22). Use <strong>0</strong> para "sem limite" — o comportamento
+      padrão, em que um estorno vale a qualquer momento.</p>
+      <form data-form="configurar-limite-estorno">
+        <div class="campo"><label>Limite de estorno (dias, 0 = sem limite)</label>
+          <input name="limite_dias_estorno_baixa" type="number" step="1" min="0"
+                 value="${configuracao.limite_dias_estorno_baixa}" required>
+        </div>
+        <div class="campo"><label>Imposto sobre vendas (%, usado no DRE — Fase 41)</label>
+          <input name="percentual_imposto_venda" type="number" step="0.01" min="0" max="100"
+                 value="${configuracao.percentual_imposto_venda}" required>
+        </div>
+        <p class="dica">Alíquota efetiva única aplicada sobre a receita bruta do período no DRE — útil para um
+        regime simplificado ou para cobrir algum tributo não detalhado abaixo. Use <strong>0</strong> para não
+        calcular nada por aqui.</p>
+        <div class="campo"><label>PIS (%, usado no DRE — Fase 56)</label>
+          <input name="percentual_pis" type="number" step="0.01" min="0" max="100"
+                 value="${configuracao.percentual_pis}" required>
+        </div>
+        <div class="campo"><label>COFINS (%, usado no DRE — Fase 56)</label>
+          <input name="percentual_cofins" type="number" step="0.01" min="0" max="100"
+                 value="${configuracao.percentual_cofins}" required>
+        </div>
+        <div class="campo"><label>ICMS (%, usado no DRE — Fase 56)</label>
+          <input name="percentual_icms" type="number" step="0.01" min="0" max="100"
+                 value="${configuracao.percentual_icms}" required>
+        </div>
+        <div class="campo"><label>ISS (%, usado no DRE — Fase 56)</label>
+          <input name="percentual_iss" type="number" step="0.01" min="0" max="100"
+                 value="${configuracao.percentual_iss}" required>
+        </div>
+        <p class="dica">Cada alíquota acima (PIS/COFINS/ICMS/ISS) também é aplicada sobre a receita bruta e SOMADA
+        ao imposto sobre vendas genérico acima, nunca em substituição a ele — configure só as que fizerem sentido
+        para o seu regime tributário e deixe as demais em <strong>0</strong>.</p>
+        <div class="campo"><label>Tolerância de dias para conciliação bancária (Fase 55)</label>
+          <input name="tolerancia_dias_conciliacao" type="number" step="1" min="0"
+                 value="${configuracao.tolerancia_dias_conciliacao}" required>
+        </div>
+        <p class="dica">Janela de dias, contada a partir da data da transação do extrato bancário (Fase 40), dentro
+        da qual uma baixa já registrada no Financeiro é considerada candidata a corresponder a ela. Use
+        <strong>0</strong> para exigir o mesmo dia exato.</p>
+        ${configuracao.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(configuracao.atualizado_em)}.</p>` : ""}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalNovaContaPagar() {
+    const fornecedores = state.cache.fornecedoresAtivos || [];
+    const opcoesFornecedor = fornecedores.map((f) => `<option value="${f.id}">${escapeHtml(f.nome)} — ${escapeHtml(f.cnpj)}</option>`).join("");
+    abrirModal(`
+      <h3>Nova conta a pagar</h3>
+      <form data-form="criar-conta-pagar">
+        <div class="campo"><label>Fornecedor</label><select name="fornecedor_id" required>${opcoesFornecedor}</select></div>
+        <div class="campo"><label>Descrição (ex.: número da nota fiscal)</label><input name="descricao" required placeholder="NF 12345"></div>
+        <div class="campo"><label>Valor total (R$)</label><input name="valor_total" type="number" step="0.01" min="0.01" required></div>
+        <div class="campo"><label>Vencimento</label><input name="vencimento" type="date" required></div>
+        <div class="campo"><label>Categoria</label>
+          <select name="categoria">
+            <option value="compra">Compra (insumo/material — entra no CMV do DRE)</option>
+            <option value="despesa_operacional">Despesa operacional (aluguel, salário, marketing... — entra nas Despesas Operacionais do DRE, Fase 41)</option>
+          </select>
+        </div>
+        <div class="campo"><label>Lote recebido (opcional)</label><input name="lote_id" type="number" min="1" placeholder="ID do lote — só para rastreabilidade"></div>
+        <div class="dica">Se esta nota fiscal corresponde a um lote específico recebido deste fornecedor, informe o ID do lote (visível na tela Lotes) para manter a rastreabilidade — deixe em branco se não se aplica. A categoria só afeta como esta conta entra no DRE (Fase 20/41); não muda nada no ciclo de baixa/estorno de sempre.</div>
+        ${campoSeletorEmpresa(state.cache.empresasSeletor || [])}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Lançar conta a pagar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalBaixarConta(tipo, conta) {
+    const titulo = tipo === "receber" ? "Registrar recebimento" : "Registrar pagamento";
+    const rotuloContraparte = tipo === "receber" ? conta.cliente_razao_social : conta.fornecedor_nome;
+    abrirModal(`
+      <h3>${titulo} — ${escapeHtml(conta.numero)}</h3>
+      <div class="linha-detalhe">
+        <div><span class="rotulo">${tipo === "receber" ? "Cliente" : "Fornecedor"}</span><br>${escapeHtml(rotuloContraparte)}</div>
+        <div><span class="rotulo">Saldo em aberto</span><br>${fmtMoeda(conta.saldo_aberto)}</div>
+      </div>
+      <form data-form="baixar-conta-${tipo}" data-id="${conta.id}">
+        <div class="campo"><label>Valor (R$)</label><input name="valor" type="number" step="0.01" min="0.01" max="${conta.saldo_aberto}" value="${conta.saldo_aberto}" required></div>
+        <div class="campo"><label>Forma de pagamento</label>
+          <select name="forma_pagamento" required>
+            <option value="pix">Pix</option>
+            <option value="boleto">Boleto</option>
+            <option value="dinheiro">Dinheiro</option>
+            <option value="cartao">Cartão</option>
+            <option value="transferencia">Transferência</option>
+          </select>
+        </div>
+        <div class="campo"><label>Data do pagamento</label><input name="data_pagamento" type="date"></div>
+        <div class="campo"><label>Observação (opcional)</label><input name="observacao"></div>
+        <p class="dica">Valores acima de R$ 1.000,00 não entram no ledger na hora: ficam pendentes até um segundo usuário (diferente de quem registrou) aprovar.</p>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Registrar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarConta(tipo, conta) {
+    const titulo = tipo === "receber" ? "Cancelar conta a receber" : "Cancelar conta a pagar";
+    abrirModal(`
+      <h3>${titulo} — ${escapeHtml(conta.numero)}</h3>
+      <p class="texto-suave">Só é possível cancelar uma conta que ainda não teve nenhum recebimento/pagamento registrado.</p>
+      <form data-form="cancelar-conta-${tipo}" data-id="${conta.id}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Cancelar conta</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Fase 14: Estorno de Baixa ----
+  // Uma baixa estornada NUNCA é apagada/alterada (bloqueado por trigger
+  // append-only desde a Fase 6) — o estorno é sempre uma nova linha no
+  // ledger, referenciando a original. Esta tela só lista o ledger completo
+  // (baixas normais + estornos) e oferece o botão "Estornar" em cada baixa
+  // normal ainda não estornada.
+  // Fase 71 — Boletos Bancários (só se aplica a contas a RECEBER).
+  const ROTULOS_STATUS_BOLETO = {
+    pendente: ["amarelo", "Pendente"],
+    recebido: ["ativo", "Recebido"],
+    vencido: ["bloqueado", "Vencido"],
+    cancelado: ["inativo", "Cancelado"],
+    erro: ["bloqueado", "Erro"],
+  };
+
+  function seloBoleto(status) {
+    const par = ROTULOS_STATUS_BOLETO[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  function secaoBoletosDaConta(conta, boletos) {
+    const podeGerar = temPermissao("financeiro", "gerar_boleto");
+    const podeCancelar = temPermissao("financeiro", "cancelar_boleto");
+    const existeBoletoPendente = boletos.some((b) => b.status === "pendente");
+
+    const linhas = boletos.map((b) => `<tr>
+      <td>${seloBoleto(b.status)}</td>
+      <td>${fmtMoeda(b.valor)}</td>
+      <td>${escapeHtml(b.vencimento)}</td>
+      <td>${b.status === "pendente" ? `<span class="mono texto-suave" style="font-size:11px;">${escapeHtml(b.linha_digitavel || "—")}</span>` : "—"}</td>
+      <td style="display:flex;gap:6px;flex-wrap:wrap;">
+        ${b.url_boleto ? `<a class="botao secundario pequeno" href="${escapeHtml(b.url_boleto)}" target="_blank" rel="noopener">Ver boleto</a>` : ""}
+        ${b.status === "pendente" ? `<button class="botao secundario pequeno" data-acao="consultar-status-boleto" data-id="${b.id}" data-conta-id="${conta.id}">Consultar status</button>` : ""}
+        ${b.status === "pendente" && podeCancelar ? `<button class="botao perigo pequeno" data-acao="abrir-cancelar-boleto" data-id="${b.id}" data-conta-id="${conta.id}">Cancelar</button>` : ""}
+      </td>
+    </tr>`).join("");
+
+    return `
+      <h4>Boleto bancário (Fase 71)</h4>
+      ${linhas ? `<table>
+        <thead><tr><th>Status</th><th>Valor</th><th>Vencimento</th><th>Linha digitável</th><th>Ação</th></tr></thead>
+        <tbody>${linhas}</tbody>
+      </table>` : '<p class="texto-suave">Nenhum boleto gerado para esta conta ainda.</p>'}
+      ${conta.status !== "pago" && conta.status !== "cancelado" && !existeBoletoPendente && podeGerar
+        ? `<button class="botao secundario" data-acao="gerar-boleto" data-conta-id="${conta.id}">Gerar boleto (saldo em aberto)</button>` : ""}
+      <p class="dica">Via provedor terceirizado (Asaas) — configure o token de API em
+      <a href="#/financeiro-configuracao-boleto">Configuração de Boleto</a> antes da primeira emissão.
+      "Consultar status" confirma o pagamento junto ao provedor e, se recebido, registra a baixa automaticamente.</p>
+    `;
+  }
+
+  function modalBaixasConta(tipo, conta, boletos) {
+    const podeEstornar = temPermissao("financeiro", tipo === "receber" ? "estornar_baixa_receber" : "estornar_baixa_pagar");
+    // Fase 22: quem tem permissão de aprovar decide sobre a solicitação
+    // pendente (segregação de função de verdade é sempre garantida pelo
+    // servidor, que recusa se quem decide for quem solicitou).
+    const podeAprovarEstorno = temPermissao("financeiro", tipo === "receber" ? "aprovar_estorno_receber" : "aprovar_estorno_pagar");
+    // Fase 31 — mesma ideia, mas para o REGISTRO de uma baixa nova.
+    const podeAprovarBaixa = temPermissao("financeiro", tipo === "receber" ? "aprovar_baixa_receber" : "aprovar_baixa_pagar");
+    const titulo = tipo === "receber" ? "Baixas (recebimentos) — " : "Baixas (pagamentos) — ";
+    const linhasPendentesRegistro = (conta.baixas_pendentes_registro || [])
+      .map((p) => `<tr>
+        <td>${escapeHtml(p.data_pagamento)}</td>
+        <td>${fmtMoeda(p.valor)}</td>
+        <td>${escapeHtml(p.forma_pagamento)}</td>
+        <td class="texto-suave">${escapeHtml(p.observacao || "—")}</td>
+        <td>
+          ${podeAprovarBaixa
+            ? `<button class="botao secundario pequeno" data-acao="aprovar-baixa-registro" data-tipo="${tipo}" data-pendente-id="${p.id}">Aprovar</button><br>
+               <button class="botao perigo pequeno" data-acao="abrir-rejeitar-baixa-registro" data-tipo="${tipo}" data-pendente-id="${p.id}">Rejeitar</button>`
+            : '<span class="texto-suave">Aguardando outro usuário decidir</span>'}
+        </td>
+      </tr>`)
+      .join("");
+    const linhas = (conta.baixas || [])
+      .map((b) => {
+        let selo = "";
+        let acao = "";
+        if (b.is_estorno) {
+          selo = '<span class="selo azul">Estorno</span>';
+        } else if (b.estornada) {
+          selo = '<span class="selo bloqueado">Estornada</span>';
+        } else if (b.estorno_pendente) {
+          selo = `<span class="selo amarelo">Estorno pendente de aprovação</span><br><span class="texto-suave">${escapeHtml(b.estorno_pendente.motivo_solicitacao)}</span>`;
+          if (podeAprovarEstorno) {
+            acao = `<button class="botao secundario pequeno" data-acao="aprovar-estorno" data-tipo="${tipo}" data-pendente-id="${b.estorno_pendente.id}">Aprovar</button><br>
+              <button class="botao perigo pequeno" data-acao="abrir-rejeitar-estorno" data-tipo="${tipo}" data-pendente-id="${b.estorno_pendente.id}">Rejeitar</button>`;
+          }
+        }
+        const podeEstornarEsta = podeEstornar && !b.is_estorno && !b.estornada && !b.estorno_pendente;
+        if (podeEstornarEsta) {
+          acao = `<button class="botao perigo pequeno" data-acao="estornar-baixa" data-tipo="${tipo}" data-conta-id="${conta.id}" data-baixa-id="${b.id}" data-valor="${b.valor}">Estornar</button>`;
+        }
+        return `<tr>
+          <td>${escapeHtml(b.data_pagamento)}</td>
+          <td>${b.is_estorno ? "-" : ""}${fmtMoeda(b.valor)}</td>
+          <td>${escapeHtml(b.forma_pagamento)}</td>
+          <td class="texto-suave">${escapeHtml(b.is_estorno ? (b.motivo_estorno || "") : (b.observacao || "—"))}</td>
+          <td>${selo}</td>
+          <td>${acao}</td>
+        </tr>`;
+      })
+      .join("");
+    abrirModal(`
+      <h3>${titulo}${escapeHtml(conta.numero)}</h3>
+      <div class="linha-detalhe">
+        <div><span class="rotulo">Valor total</span><br>${fmtMoeda(conta.valor_total)}</div>
+        <div><span class="rotulo">Total baixado (líquido)</span><br>${fmtMoeda(conta.total_baixado)}</div>
+        <div><span class="rotulo">Saldo em aberto</span><br>${fmtMoeda(conta.saldo_aberto)}</div>
+      </div>
+      ${linhasPendentesRegistro ? `
+      <h4>Registros de baixa aguardando aprovação (Fase 31)</h4>
+      <table>
+        <thead><tr><th>Data</th><th>Valor</th><th>Forma</th><th>Observação</th><th>Ação</th></tr></thead>
+        <tbody>${linhasPendentesRegistro}</tbody>
+      </table>
+      <p class="dica">Estas solicitações ainda NÃO entraram no ledger abaixo nem afetam o saldo em aberto — só passam a valer se e quando aprovadas por um segundo usuário.</p>
+      ` : ""}
+      <table>
+        <thead><tr><th>Data</th><th>Valor</th><th>Forma</th><th>Observação / motivo do estorno</th><th></th><th>Ação</th></tr></thead>
+        <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhuma baixa registrada.</td></tr>'}</tbody>
+      </table>
+      <p class="dica">Um estorno nunca apaga a baixa original — ele insere uma nova linha, de mesmo valor, que neutraliza a original no cálculo do saldo. O histórico completo permanece sempre visível aqui. Estornos de baixas acima de R$ 1.000,00 não revertem na hora: ficam pendentes até um segundo usuário aprovar. O mesmo vale para REGISTRAR uma baixa nova acima desse valor (Fase 31) — veja a seção acima, se houver alguma pendente.</p>
+      ${tipo === "receber" ? secaoBoletosDaConta(conta, boletos || []) : ""}
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+      </div>`, { largo: true });
+  }
+
+  function modalEstornarBaixa(tipo, contaId, baixaId, valor) {
+    abrirModal(`
+      <h3>Estornar baixa — ${fmtMoeda(valor)}</h3>
+      <p class="texto-suave">Isso registra uma nova linha no ledger, do mesmo valor, revertendo esta baixa — a linha original permanece intacta no histórico. Informe o motivo (obrigatório).</p>
+      <p class="dica">Se o valor desta baixa for acima de R$ 1.000,00, o estorno não é aplicado na hora: fica pendente até um segundo usuário aprovar (segregação de função).</p>
+      <form data-form="estornar-baixa" data-tipo="${tipo}" data-conta-id="${contaId}" data-baixa-id="${baixaId}">
+        <div class="campo"><label>Motivo do estorno</label><textarea name="motivo" required placeholder="Ex.: valor lançado errado, pagamento em duplicidade, conta errada..."></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar estorno</button>
+        </div>
+      </form>`);
+  }
+
+  function modalRejeitarEstorno(tipo, pendenteId) {
+    abrirModal(`
+      <h3>Rejeitar solicitação de estorno</h3>
+      <p class="texto-suave">Rejeitar NÃO reverte a baixa — ela continua valendo exatamente como está, sem nenhuma alteração no saldo. A divergência apontada na solicitação fica registrada (nesta baixa e na auditoria) para investigação.</p>
+      <form data-form="rejeitar-estorno" data-tipo="${tipo}" data-pendente-id="${pendenteId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="Ex.: documentação insuficiente, aguardar confirmação do fornecedor/cliente..."></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar rejeição</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Fase 31: Aprovação Dupla para o REGISTRO de Baixa ----
+  function modalRejeitarBaixaRegistro(tipo, pendenteId) {
+    abrirModal(`
+      <h3>Rejeitar solicitação de registro de baixa</h3>
+      <p class="texto-suave">Rejeitar significa que esta baixa NUNCA entra no ledger — nada é lançado, o saldo em aberto continua exatamente como está. Se o pagamento/recebimento realmente aconteceu, alguém precisa registrar de novo (e outro usuário aprovar).</p>
+      <form data-form="rejeitar-baixa-registro" data-tipo="${tipo}" data-pendente-id="${pendenteId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="Ex.: documentação insuficiente, valor não confere com a nota fiscal..."></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar rejeição</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // CONCILIAÇÃO BANCÁRIA (Importação de Extrato OFX) — Fase 40
+  // =======================================================================
+  // Duas telas: uma lista de extratos já importados, e o detalhe de um
+  // extrato com a fila de transações (conciliadas automaticamente,
+  // pendentes de revisão, ignoradas). O trabalho pesado (parsing do OFX,
+  // achar candidato único e conciliar sozinho) já aconteceu no backend no
+  // momento da importação — esta tela existe para mostrar o resultado e
+  // resolver manualmente o que ficou ambíguo.
+  const SELO_STATUS_TRANSACAO = {
+    pendente: "amarelo", conciliada: "ativo", ignorada: "inativo",
+  };
+
+  function fmtValorExtrato(valor) {
+    const cor = valor >= 0 ? "var(--verde)" : "var(--vermelho)";
+    const sinal = valor >= 0 ? "+" : "";
+    return `<span style="color:${cor};font-weight:600;">${sinal}${fmtMoeda(valor)}</span>`;
+  }
+
+  async function renderConciliacaoBancaria() {
+    app.innerHTML = '<div class="carregando">Carregando extratos importados…</div>';
+    // Fase 55 — carregado aqui só para mostrar a tolerância de dias
+    // configurada no momento (quem chega nesta tela já tem
+    // `financeiro.conciliar_extrato`, e todo perfil com essa permissão no
+    // seed também tem `financeiro.visualizar`, exigida pelo GET).
+    const [extratos, configuracaoFinanceiro] = await Promise.all([
+      chamarApi("/financeiro/extratos"),
+      chamarApi("/financeiro/configuracao"),
+    ]);
+    const totalPendentesGeral = extratos.reduce((soma, e) => soma + ((e.contagem_por_status || {}).pendente || 0), 0);
+
+    const linhas = extratos
+      .map((e) => {
+        const c = e.contagem_por_status || {};
+        return `<tr>
+          <td>${escapeHtml(e.nome_arquivo)}</td>
+          <td class="texto-suave">${escapeHtml(e.banco || "—")} / ${escapeHtml(e.conta || "—")}</td>
+          <td>${e.total_transacoes}</td>
+          <td>${c.pendente ? `<span class="selo amarelo">${c.pendente} pendente(s)</span>` : '<span class="texto-suave">0</span>'}</td>
+          <td>${c.conciliada ? `<span class="selo ativo">${c.conciliada} conciliada(s)</span>` : '<span class="texto-suave">0</span>'}</td>
+          <td>${c.ignorada ? `<span class="selo inativo">${c.ignorada} ignorada(s)</span>` : '<span class="texto-suave">0</span>'}</td>
+          <td class="texto-suave">${fmtData(e.importado_em)}</td>
+          <td><a href="#/conciliacao-bancaria/${e.id}" class="botao secundario pequeno">Ver transações</a></td>
+        </tr>`;
+      })
+      .join("");
+
+    renderShell(
+      `<h2>Conciliação Bancária</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <p class="texto-suave" style="margin:0;">Importe o extrato do seu banco (arquivo OFX — toda Internet Banking tem a opção
+           "Exportar extrato"/"OFX/Money/Quicken") para conciliar automaticamente contra as baixas já registradas no
+           Financeiro. Transações com um único candidato óbvio (mesmo valor, dentro de ${configuracaoFinanceiro.tolerancia_dias_conciliacao}
+           dia(s) — configurável em "Configurar Financeiro", na tela Financeiro) são conciliadas na hora; o resto fica
+           pendente para você revisar.</p>
+           <div style="display:flex;gap:8px;">
+             <button class="botao" data-acao="abrir-importar-extrato">Importar extrato (OFX)</button>
+             <button class="botao secundario" data-acao="conciliar-pendentes-em-massa" ${totalPendentesGeral === 0 ? "disabled title='Nenhuma transação pendente no momento'" : ""}>Conciliar todos os candidatos únicos</button>
+           </div>
+         </div>
+         <p class="dica">"Conciliar todos os candidatos únicos" (Fase 55) reprocessa TODAS as transações pendentes do
+         sistema (de qualquer extrato já importado), útil quando uma baixa foi lançada no Financeiro DEPOIS que o
+         extrato correspondente já tinha sido importado — sem isso, essa transação ficaria pendente para sempre até
+         alguém conciliá-la manualmente, mesmo sendo agora um candidato óbvio.</p>
+         <table>
+           <thead><tr>
+             <th>Arquivo</th><th>Banco / Conta</th><th>Transações</th><th>Pendentes</th><th>Conciliadas</th>
+             <th>Ignoradas</th><th>Importado em</th><th>Ações</th>
+           </tr></thead>
+           <tbody>${linhas || '<tr><td colspan="8" class="texto-suave">Nenhum extrato importado ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "conciliacao-bancaria"
+    );
+  }
+
+  function modalImportarExtratoBancario() {
+    abrirModal(`
+      <h3>Importar extrato bancário (OFX)</h3>
+      <p class="texto-suave">O arquivo nunca sai do seu navegador para nenhum lugar além deste próprio sistema —
+      ele é lido aqui e enviado direto para o Alphafitus. Reimportar o mesmo arquivo (ou um novo extrato com
+      período sobreposto a uma importação anterior) é seguro: transações já importadas antes (identificadas pelo
+      próprio banco) nunca são duplicadas.</p>
+      <form data-form="importar-extrato-bancario">
+        <div class="campo"><label>Arquivo (.ofx)</label><input type="file" name="arquivo" accept=".ofx,.qfx" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Importar</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderConciliacaoBancariaDetalhe(extratoId) {
+    app.innerHTML = '<div class="carregando">Carregando extrato…</div>';
+    // Guardado para as ações desta tela (conciliar/ignorar/desconciliar)
+    // saberem para qual extrato voltar depois, sem precisar repetir o ID
+    // em todo botão da linha.
+    state.cache.extratoAtualId = extratoId;
+    const extrato = await chamarApi(`/financeiro/extratos/${extratoId}`);
+
+    const linhas = extrato.transacoes
+      .map((t) => {
+        let conciliadoTexto = "—";
+        if (t.conciliado_com) {
+          const rotuloTipo = t.conciliado_com.tipo === "receber" ? "Recebimento" : "Pagamento";
+          conciliadoTexto = `${rotuloTipo} — ${escapeHtml(t.conciliado_com.conta_numero)} (${escapeHtml(t.conciliado_com.contraparte_nome)})`;
+          if (t.conciliado_automaticamente) conciliadoTexto += ' <span class="texto-suave">(automático)</span>';
+        } else if (t.status === "ignorada") {
+          conciliadoTexto = `<span class="texto-suave">Ignorada: ${escapeHtml(t.ignorado_motivo || "")}</span>`;
+        }
+        let acoes = "";
+        if (t.status === "pendente") {
+          acoes = `<button class="botao secundario pequeno" data-acao="abrir-conciliar-transacao" data-id="${t.id}" data-valor="${t.valor}">Conciliar</button>
+                   <button class="botao perigo pequeno" data-acao="abrir-ignorar-transacao" data-id="${t.id}">Ignorar</button>`;
+        } else {
+          acoes = `<button class="botao secundario pequeno" data-acao="desconciliar-transacao" data-id="${t.id}">Desconciliar</button>`;
+        }
+        return `<tr class="${t.status === "pendente" ? "linha-alerta" : ""}">
+          <td>${escapeHtml(t.data)}</td>
+          <td>${escapeHtml(t.descricao || "—")}</td>
+          <td>${fmtValorExtrato(t.valor)}</td>
+          <td><span class="selo ${SELO_STATUS_TRANSACAO[t.status]}">${t.status}</span></td>
+          <td>${conciliadoTexto}</td>
+          <td>${acoes}</td>
+        </tr>`;
+      })
+      .join("");
+
+    const totalPendentesExtrato = (extrato.transacoes || []).filter((t) => t.status === "pendente").length;
+
+    renderShell(
+      `<h2>Extrato — ${escapeHtml(extrato.nome_arquivo)}</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <div class="linha-detalhe" style="margin:0;">
+             <div><span class="rotulo">Banco / Conta</span><br>${escapeHtml(extrato.banco || "—")} / ${escapeHtml(extrato.conta || "—")}</div>
+             <div><span class="rotulo">Total de transações</span><br>${extrato.total_transacoes}</div>
+             <div><span class="rotulo">Importado em</span><br>${fmtData(extrato.importado_em)}</div>
+           </div>
+           <button class="botao secundario pequeno" data-acao="conciliar-pendentes-em-massa" data-extrato-id="${extratoId}"
+             ${totalPendentesExtrato === 0 ? "disabled title='Nenhuma transação pendente neste extrato'" : ""}>Conciliar candidatos únicos deste extrato</button>
+         </div>
+         <table>
+           <thead><tr><th>Data</th><th>Descrição</th><th>Valor</th><th>Status</th><th>Conciliado com</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhuma transação neste extrato.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "conciliacao-bancaria"
+    );
+  }
+
+  async function modalConciliarTransacao(transacaoId, valor) {
+    const sugestoes = await chamarApi(`/financeiro/extratos/transacoes/${transacaoId}/sugestoes`);
+    const rotuloTipo = sugestoes.tipo === "receber" ? "contas a receber (créditos)" : "contas a pagar (débitos)";
+    const candidatosHtml = sugestoes.candidatos
+      .map((c, indice) => `
+        <label class="campo" style="display:flex;gap:8px;align-items:baseline;font-weight:normal;">
+          <input type="radio" name="baixa_id" value="${c.id}" ${indice === 0 ? "checked" : ""} required style="min-height:auto;width:auto;">
+          <span>${escapeHtml(c.conta_numero)} — ${escapeHtml(c.contraparte_nome)} — ${fmtMoeda(c.valor)} em ${escapeHtml(c.data_pagamento)}
+          (${escapeHtml(c.forma_pagamento)})</span>
+        </label>`)
+      .join("");
+
+    abrirModal(`
+      <h3>Conciliar transação — ${fmtValorExtrato(valor)}</h3>
+      ${sugestoes.candidatos.length > 0
+        ? `<p class="texto-suave">Candidatos em ${rotuloTipo} com o mesmo valor e data próxima, ainda não conciliados com nenhuma outra transação:</p>
+           <form data-form="conciliar-transacao-extrato" data-id="${transacaoId}" data-tipo="${sugestoes.tipo}">
+             ${candidatosHtml}
+             <div class="rodape-modal">
+               <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+               <button type="submit" class="botao">Conciliar com o selecionado</button>
+             </div>
+           </form>`
+        : `<p class="mensagem-erro">Nenhuma baixa em ${rotuloTipo} com o mesmo valor e data próxima (até ${sugestoes.tolerancia_dias_conciliacao}
+           dia(s) — configurável em "Configurar Financeiro", na tela Financeiro) foi encontrada, e que já não esteja
+           conciliada com outra transação. Confirme se a baixa já foi registrada na tela Financeiro, ou ignore esta transação se ela não
+           corresponder a nenhuma conta (ex.: transferência entre contas próprias). Se a baixa for lançada depois, use "Conciliar todos os
+           candidatos únicos" na lista de extratos para reprocessar sem precisar voltar aqui manualmente.</p>
+           <div class="rodape-modal"><button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button></div>`}
+    `);
+  }
+
+  function modalIgnorarTransacaoExtrato(transacaoId) {
+    abrirModal(`
+      <h3>Ignorar transação do extrato</h3>
+      <p class="texto-suave">Use isto para transações que nunca vão corresponder a uma baixa (ex.: transferência entre
+      contas próprias, taxa/juros do próprio banco, saldo inicial). Reversível — dá para desconciliar depois.</p>
+      <form data-form="ignorar-transacao-extrato" data-id="${transacaoId}">
+        <div class="campo"><label>Motivo</label><input name="motivo" required placeholder="Ex.: transferência entre contas próprias"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Ignorar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // PAINEL GERENCIAL (BI básico) — Fase 7
+  // =======================================================================
+  // Tela 100% somente-leitura: um único GET que já vem agregado do
+  // servidor (ver app/routes/relatorios.py). Não há formulários nem
+  // data-acao de escrita aqui — só um botão de "Atualizar" que refaz a
+  // mesma chamada, útil porque os números mudam conforme outras telas são
+  // usadas em outras abas/usuários.
+  function fmtPct(v) {
+    return v === null || v === undefined ? "—" : Number(v).toFixed(1) + "%";
+  }
+
+  function kpi(rotulo, valor, extra) {
+    return `<div class="kpi">
+      <span class="kpi-rotulo">${escapeHtml(rotulo)}</span>
+      <span class="kpi-valor">${valor}</span>
+      ${extra ? `<span class="kpi-extra">${extra}</span>` : ""}
+    </div>`;
+  }
+
+  function fmtDataCurta(iso) {
+    const [ano, mes, dia] = iso.split("-");
+    return `${dia}/${mes}/${ano}`;
+  }
+
+  // Fase 69 — Painel Gerencial: Série Histórica / Tendência. Um gráfico de
+  // linha pequeno, em SVG puro (sem biblioteca de gráficos nova) — mesmo
+  // espírito do resto do front-end, vanilla JS do início ao fim. Recebe
+  // `pontos` já ordenados do mais antigo pro mais recente:
+  // [{data: "AAAA-MM-DD", valor: number}, ...].
+  function graficoTendenciaSvg(pontos, opcoes) {
+    opcoes = opcoes || {};
+    const formatar = opcoes.formatar || ((v) => String(v));
+    if (!pontos.length) {
+      return '<p class="texto-suave">Sem histórico ainda — o gráfico começa a se formar a partir da próxima vez que este Painel for aberto.</p>';
+    }
+    if (pontos.length === 1) {
+      return `<p class="texto-suave">Só há um dia de histórico até agora (${escapeHtml(fmtDataCurta(pontos[0].data))}: <strong>${escapeHtml(formatar(pontos[0].valor))}</strong>) — o gráfico de linha aparece a partir do segundo dia com dado.</p>`;
+    }
+    const largura = 320, altura = 110;
+    const margem = { topo: 10, baixo: 10, lado: 6 };
+    const valores = pontos.map((p) => p.valor);
+    const minValor = Math.min(...valores, 0);
+    const maxValor = Math.max(...valores, 0);
+    const faixa = (maxValor - minValor) || 1;
+    const passoX = (largura - margem.lado * 2) / (pontos.length - 1);
+    const escalaY = (v) => altura - margem.baixo - ((v - minValor) / faixa) * (altura - margem.topo - margem.baixo);
+    const coords = pontos.map((p, i) => [margem.lado + i * passoX, escalaY(p.valor)]);
+    const linha = coords.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`).join(" ");
+    const area = `${linha} L${coords[coords.length - 1][0].toFixed(1)},${(altura - margem.baixo).toFixed(1)} `
+      + `L${coords[0][0].toFixed(1)},${(altura - margem.baixo).toFixed(1)} Z`;
+    const circulos = coords.map(([x, y], i) =>
+      `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2.5" fill="#3b82f6"><title>${escapeHtml(fmtDataCurta(pontos[i].data))}: ${escapeHtml(formatar(pontos[i].valor))}</title></circle>`
+    ).join("");
+    const primeiro = pontos[0], ultimo = pontos[pontos.length - 1];
+    return `
+      <svg viewBox="0 0 ${largura} ${altura}" preserveAspectRatio="none" style="width:100%;height:${altura}px;display:block;">
+        <path d="${area}" fill="#3b82f6" fill-opacity="0.12" stroke="none"></path>
+        <path d="${linha}" fill="none" stroke="#3b82f6" stroke-width="2"></path>
+        ${circulos}
+      </svg>
+      <div style="display:flex;justify-content:space-between;font-size:12px;margin-top:2px;">
+        <span class="texto-suave">${escapeHtml(fmtDataCurta(primeiro.data))}: ${escapeHtml(formatar(primeiro.valor))}</span>
+        <span class="texto-suave">${escapeHtml(fmtDataCurta(ultimo.data))}: <strong>${escapeHtml(formatar(ultimo.valor))}</strong></span>
+      </div>`;
+  }
+
+  async function renderPainelGerencial(filtros) {
+    filtros = filtros || {};
+    app.innerHTML = '<div class="carregando">Carregando painel gerencial…</div>';
+    const params = new URLSearchParams();
+    if (filtros.data_inicio) params.set("data_inicio", filtros.data_inicio);
+    if (filtros.data_fim) params.set("data_fim", filtros.data_fim);
+    // Fase 52 — ao contrário do período (que só afeta o cartão "No
+    // período"), o filtro por empresa afeta os cinco cartões de "situação
+    // atual" inteiros — por isso também precisa ir para a chamada do
+    // fluxo de caixa projetado, não só para o dashboard.
+    if (filtros.empresa_id) params.set("empresa_id", filtros.empresa_id);
+    const qs = params.toString();
+    const paramsFluxo = new URLSearchParams();
+    if (filtros.empresa_id) paramsFluxo.set("empresa_id", filtros.empresa_id);
+    const qsFluxo = paramsFluxo.toString();
+    // Fase 69 — Tendência: mesmo filtro de empresa do resto do painel,
+    // mais uma janela de dias própria (independente do filtro de
+    // período do cartão "No período", que é sobre O QUE ACONTECEU numa
+    // janela — aqui é sobre COMO OS NÚMEROS DE AGORA foram mudando).
+    const diasTendencia = filtros.diasTendencia || 30;
+    const paramsTendencia = new URLSearchParams();
+    paramsTendencia.set("dias", diasTendencia);
+    if (filtros.empresa_id) paramsTendencia.set("empresa_id", filtros.empresa_id);
+    const [d, fluxoCaixa, empresasSeletor, tendencia] = await Promise.all([
+      chamarApi("/relatorios/dashboard" + (qs ? "?" + qs : "")),
+      chamarApi("/relatorios/fluxo-caixa-projetado" + (qsFluxo ? "?" + qsFluxo : "")),
+      carregarEmpresasParaSeletor(),
+      chamarApi("/relatorios/painel/tendencia?" + paramsTendencia.toString()),
+    ]);
+
+    const op = d.producao.ordens_por_status;
+    const lp = d.qualidade.lotes_por_status;
+    const ds = d.qualidade.desvios_por_status;
+    const est = d.estoque;
+    const cp = d.comercial.pedidos_por_status;
+    const fr = d.financeiro;
+
+    const rotulosTipoItem = { materia_prima: "Matéria-prima", produto_acabado: "Produto acabado", material_embalagem: "Material de embalagem" };
+    const saldoEstoqueHtml = Object.keys(est.saldo_total_por_tipo_item).length
+      ? Object.entries(est.saldo_total_por_tipo_item)
+          .map(([tipo, saldo]) => `<div class="linha-detalhe"><div><span class="rotulo">${escapeHtml(rotulosTipoItem[tipo] || tipo)}</span><br>${Number(saldo).toFixed(3)}</div></div>`)
+          .join("")
+      : '<p class="texto-suave">Sem saldo em estoque no momento.</p>';
+
+    const dataInicioAttr = escapeHtml(filtros.data_inicio || "");
+    const dataFimAttr = escapeHtml(filtros.data_fim || "");
+    const empresaIdAttr = escapeHtml(filtros.empresa_id || "");
+    const diasTendenciaAttr = escapeHtml(String(diasTendencia));
+    const opcoesEmpresaFiltro = empresasSeletor
+      .map((e) => `<option value="${e.id}" ${String(filtros.empresa_id) === String(e.id) ? "selected" : ""}>${escapeHtml(e.nome_fantasia || e.razao_social)}</option>`)
+      .join("");
+
+    const periodo = d.periodo || { aplicado: false };
+    const blocoPeriodo = periodo.aplicado
+      ? `<div class="cartao">
+           <h3 style="margin-top:0;">No período (Fase 42)</h3>
+           <p class="dica">Indicadores de FLUXO — o que aconteceu entre ${fmtDataCurta(periodo.data_inicio || periodo.data_fim)} e
+           ${fmtDataCurta(periodo.data_fim || periodo.data_inicio)} — diferente dos cartões acima, que sempre mostram a
+           situação ATUAL (saldo de estoque e contas em aberto não fazem sentido "filtrados por período": só existe o
+           saldo de agora).</p>
+           <div class="grade-kpi">
+             ${kpi("Ordens concluídas", periodo.ordens_concluidas_no_periodo)}
+             ${kpi("Lotes aprovados", periodo.lotes_aprovados_no_periodo)}
+             ${kpi("Lotes reprovados", periodo.lotes_reprovados_no_periodo)}
+             ${kpi("Pedidos expedidos", periodo.pedidos_expedidos_no_periodo)}
+             ${kpi("Valor expedido", fmtMoeda(periodo.valor_expedido_no_periodo))}
+             ${kpi("Valor recebido", fmtMoeda(periodo.valor_recebido_no_periodo))}
+             ${kpi("Valor pago", fmtMoeda(periodo.valor_pago_no_periodo))}
+           </div>
+         </div>`
+      : "";
+
+    const empresaFiltrada = d.empresa_filtrada;
+    const indicadorEmpresaHtml = empresaFiltrada
+      ? `<div class="cartao" style="display:flex;align-items:center;justify-content:space-between;gap:12px;">
+           <span>Filtrando por: <strong>${escapeHtml(empresaFiltrada.nome_fantasia || empresaFiltrada.razao_social)}</strong></span>
+           <button class="botao secundario pequeno" data-acao="limpar-filtro-empresa-painel" data-data-inicio="${dataInicioAttr}" data-data-fim="${dataFimAttr}" data-dias-tendencia="${diasTendenciaAttr}">Limpar filtro de empresa</button>
+         </div>`
+      : "";
+
+    renderShell(
+      `<div class="barra-acoes">
+         <h2 style="margin:0;">Painel Gerencial</h2>
+         <div style="display:flex;align-items:center;gap:12px;">
+           <span class="texto-suave">Gerado em ${fmtData(d.gerado_em)}</span>
+           <button class="botao secundario pequeno" data-acao="baixar-painel-pdf" data-data-inicio="${dataInicioAttr}" data-data-fim="${dataFimAttr}" data-empresa-id="${empresaIdAttr}">Baixar PDF</button>
+           <button class="botao secundario pequeno" data-acao="baixar-painel-csv" data-data-inicio="${dataInicioAttr}" data-data-fim="${dataFimAttr}" data-empresa-id="${empresaIdAttr}">Baixar CSV</button>
+           <button class="botao secundario pequeno" data-acao="baixar-painel-xlsx" data-data-inicio="${dataInicioAttr}" data-data-fim="${dataFimAttr}" data-empresa-id="${empresaIdAttr}">Baixar XLSX</button>
+           <button class="botao secundario pequeno" data-acao="atualizar-painel-gerencial" data-data-inicio="${dataInicioAttr}" data-data-fim="${dataFimAttr}" data-empresa-id="${empresaIdAttr}" data-dias-tendencia="${diasTendenciaAttr}">Atualizar</button>
+         </div>
+       </div>
+       <p class="dica">Visão agregada e somente-leitura de todos os módulos — cada número aqui é recalculado a partir das mesmas tabelas que as telas operacionais usam, nunca de um valor pré-calculado à parte.</p>
+
+       ${indicadorEmpresaHtml}
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Filtros</h3>
+         <p class="dica">Ambos opcionais e independentes entre si. Período (Fase 42) aplica só ao cartão "No período" abaixo. Empresa (Fase 52) aplica aos cinco cartões de situação atual (Produção, Qualidade, Estoque, Comercial, Financeiro) inteiros — sem preencher nenhum dos dois, o painel continua mostrando exatamente o que mostrava antes destas fases.</p>
+         <form data-form="filtrar-painel-periodo">
+           <input type="hidden" name="dias_tendencia" value="${diasTendenciaAttr}">
+           <div class="grade-filtros">
+             <div class="campo"><label>De</label><input name="data_inicio" type="date" value="${dataInicioAttr}"></div>
+             <div class="campo"><label>Até</label><input name="data_fim" type="date" value="${dataFimAttr}"></div>
+             ${empresasSeletor.length ? `<div class="campo"><label>Empresa</label><select name="empresa_id"><option value="">— todas —</option>${opcoesEmpresaFiltro}</select></div>` : ""}
+             <button class="botao secundario" type="submit">Filtrar</button>
+           </div>
+         </form>
+       </div>
+
+       ${blocoPeriodo}
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Produção</h3>
+         <div class="grade-kpi">
+           ${kpi("Planejadas", op.planejada)}
+           ${kpi("Liberadas", op.liberada)}
+           ${kpi("Em produção", op.em_producao)}
+           ${kpi("Concluídas", op.concluida)}
+           ${kpi("Canceladas", op.cancelada)}
+           ${kpi("Lotes produzidos (total)", d.producao.lotes_produzidos_total)}
+         </div>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Qualidade</h3>
+         <div class="grade-kpi">
+           ${kpi("Aprovados", (lp.aprovado || 0) + (lp.aprovado_com_ressalva || 0))}
+           ${kpi("Reprovados", lp.reprovado)}
+           ${kpi("Em quarentena/análise", (lp.quarentena || 0) + (lp.em_analise || 0) + (lp.aguardando_aprovacao || 0))}
+           ${kpi("Taxa de aprovação", fmtPct(d.qualidade.taxa_aprovacao_lotes_pct))}
+           ${kpi("Análises aguardando resultado", d.qualidade.analises_aguardando_resultado)}
+           ${kpi("Desvios em aberto", ds.aberto, ds.em_tratativa ? `${ds.em_tratativa} em tratativa` : "")}
+         </div>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Estoque (WMS)</h3>
+         <div class="grade-kpi">
+           ${kpi("Posições ativas", est.posicoes_ativas)}
+           ${kpi("Lotes vencidos com saldo", est.lotes_vencidos_com_saldo)}
+           ${kpi("A vencer em 30 dias", est.lotes_a_vencer_30_dias_com_saldo)}
+         </div>
+         <p class="rotulo" style="margin-top:14px;">Saldo por tipo de item</p>
+         ${saldoEstoqueHtml}
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Comercial</h3>
+         <div class="grade-kpi">
+           ${kpi("Rascunho", cp.rascunho)}
+           ${kpi("Confirmados", cp.confirmado)}
+           ${kpi("Expedidos", cp.expedido)}
+           ${kpi("Cancelados", cp.cancelado)}
+           ${kpi("Valor total expedido", fmtMoeda(d.comercial.valor_total_expedido))}
+           ${kpi("Clientes ativos", d.comercial.clientes_ativos)}
+         </div>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Financeiro</h3>
+         <div class="grade-kpi">
+           ${kpi("A receber em aberto", fmtMoeda(fr.contas_a_receber.total_em_aberto), fr.contas_a_receber.total_vencido > 0 ? `<span class="selo bloqueado">${fmtMoeda(fr.contas_a_receber.total_vencido)} vencido</span>` : "")}
+           ${kpi("Recebido (total)", fmtMoeda(fr.contas_a_receber.total_baixado))}
+           ${kpi("A pagar em aberto", fmtMoeda(fr.contas_a_pagar.total_em_aberto), fr.contas_a_pagar.total_vencido > 0 ? `<span class="selo bloqueado">${fmtMoeda(fr.contas_a_pagar.total_vencido)} vencido</span>` : "")}
+           ${kpi("Pago (total)", fmtMoeda(fr.contas_a_pagar.total_baixado))}
+           ${kpi("Saldo projetado (aberto)", fmtMoeda(fr.saldo_projetado_em_aberto))}
+         </div>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Fluxo de Caixa Projetado</h3>
+         <p class="dica">Saldo em aberto de contas a receber e a pagar (Financeiro), agrupado por faixa de dias até o vencimento — responde "como fica o caixa daqui a X dias, se nada mais entrar ou sair além do que já está lançado?". Calculado em ${fmtDataCurta(fluxoCaixa.hoje)}.</p>
+         <table>
+           <thead><tr><th>Faixa</th><th>Entradas previstas</th><th>Saídas previstas</th><th>Saldo líquido</th><th>Saldo acumulado</th></tr></thead>
+           <tbody>${fluxoCaixa.buckets.map((b) => `<tr class="${b.bucket === "vencido" && (b.entradas_previstas > 0 || b.saidas_previstas > 0) ? "linha-alerta" : ""}">
+             <td>${escapeHtml(b.rotulo)}</td>
+             <td>${fmtMoeda(b.entradas_previstas)}</td>
+             <td>${fmtMoeda(b.saidas_previstas)}</td>
+             <td>${fmtMoeda(b.saldo_liquido)}</td>
+             <td><strong>${fmtMoeda(b.saldo_acumulado)}</strong></td>
+           </tr>`).join("")}</tbody>
+         </table>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Tendência (Fase 69)</h3>
+         <p class="dica">
+           Série histórica — diferente dos cartões acima (sempre a situação DE AGORA), aqui cada ponto é uma "foto"
+           congelada de um dia, capturada automaticamente sempre que alguém abre este Painel Gerencial (não é uma
+           medição em tempo real: um dia em que ninguém abrir o painel com este filtro de empresa fica sem ponto no
+           gráfico). O histórico começa a se formar a partir de hoje — dias anteriores a esta funcionalidade não têm
+           dado.
+         </p>
+         <form data-form="filtrar-tendencia-painel" style="margin-bottom:12px;">
+           <input type="hidden" name="data_inicio" value="${dataInicioAttr}">
+           <input type="hidden" name="data_fim" value="${dataFimAttr}">
+           <input type="hidden" name="empresa_id" value="${empresaIdAttr}">
+           <div class="grade-filtros">
+             <div class="campo">
+               <label>Ver últimos</label>
+               <select name="dias">
+                 <option value="30" ${diasTendencia === 30 ? "selected" : ""}>30 dias</option>
+                 <option value="90" ${diasTendencia === 90 ? "selected" : ""}>90 dias</option>
+                 <option value="180" ${diasTendencia === 180 ? "selected" : ""}>180 dias</option>
+               </select>
+             </div>
+             <button class="botao secundario" type="submit">Aplicar</button>
+           </div>
+         </form>
+         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px;">
+           <div>
+             <p class="rotulo">Saldo projetado (aberto) — Financeiro</p>
+             ${graficoTendenciaSvg(tendencia.map((t) => ({ data: t.data_referencia, valor: t.financeiro.saldo_projetado_em_aberto })), { formatar: fmtMoeda })}
+           </div>
+           <div>
+             <p class="rotulo">A receber em aberto</p>
+             ${graficoTendenciaSvg(tendencia.map((t) => ({ data: t.data_referencia, valor: t.financeiro.contas_a_receber.total_em_aberto })), { formatar: fmtMoeda })}
+           </div>
+           <div>
+             <p class="rotulo">A pagar em aberto</p>
+             ${graficoTendenciaSvg(tendencia.map((t) => ({ data: t.data_referencia, valor: t.financeiro.contas_a_pagar.total_em_aberto })), { formatar: fmtMoeda })}
+           </div>
+           <div>
+             <p class="rotulo">Taxa de aprovação — Qualidade</p>
+             ${graficoTendenciaSvg(
+               tendencia
+                 .filter((t) => t.qualidade.taxa_aprovacao_lotes_pct !== null && t.qualidade.taxa_aprovacao_lotes_pct !== undefined)
+                 .map((t) => ({ data: t.data_referencia, valor: t.qualidade.taxa_aprovacao_lotes_pct })),
+               { formatar: fmtPct }
+             )}
+           </div>
+           <div>
+             <p class="rotulo">Valor total expedido — Comercial</p>
+             ${graficoTendenciaSvg(tendencia.map((t) => ({ data: t.data_referencia, valor: t.comercial.valor_total_expedido })), { formatar: fmtMoeda })}
+           </div>
+           <div>
+             <p class="rotulo">Clientes ativos</p>
+             ${graficoTendenciaSvg(tendencia.map((t) => ({ data: t.data_referencia, valor: t.comercial.clientes_ativos })), { formatar: (v) => String(v) })}
+           </div>
+         </div>
+       </div>`,
+      "painel-gerencial"
+    );
+  }
+
+  // =======================================================================
+  // PAINEL EXECUTIVO — Fase 76 (visão "Power BI" da empresa)
+  // =======================================================================
+  // Pedido do cliente: um painel visual, moderno, em tempo real — pedidos
+  // novos/faturados, desempenho de vendedores, regiões subindo/caindo em
+  // faturamento, clientes sem atendimento, e o caminho completo de uma
+  // Ordem de Produção com o tempo gasto em cada etapa. Tema escuro FIXO
+  // (independente do tema claro/escuro do resto do sistema, ver
+  // `.pe-shell` em styles.css) — pensado para ficar num telão/tablet de
+  // parede, igual às referências visuais que o cliente mandou.
+  const CORES_RANKING_PE = ["#4f7cff", "#ff5c8a", "#ffb703", "#3ddc97", "#7c5cff", "#22c1c3", "#ff9f5c", "#6bd4ff"];
+
+  function peKpi(icone, rotulo, valor, cor) {
+    return `<div class="pe-kpi" style="--pe-cor:${escapeHtml(cor)};">
+      <div class="pe-kpi-icone">${icone}</div>
+      <div class="pe-kpi-valor">${escapeHtml(valor)}</div>
+      <div class="pe-kpi-rotulo">${escapeHtml(rotulo)}</div>
+    </div>`;
+  }
+
+  function peBarraH(rotulo, valor, valorMaximo, cor, formatarValor) {
+    const pct = valorMaximo > 0 ? Math.max(valor > 0 ? 2 : 0, Math.round((valor / valorMaximo) * 100)) : 0;
+    const texto = formatarValor ? formatarValor(valor) : String(valor);
+    return `<div class="pe-barra-h">
+      <span class="rotulo" title="${escapeHtml(rotulo)}">${escapeHtml(rotulo)}</span>
+      <span class="trilha"><span class="preenchido" style="width:${pct}%;background:${escapeHtml(cor)};"></span></span>
+      <span class="valor">${escapeHtml(texto)}</span>
+    </div>`;
+  }
+
+  function fmtDuracaoMinutosPe(minutos) {
+    if (minutos === null || minutos === undefined) return "—";
+    const total = Math.round(minutos);
+    if (total < 60) return `${total} min`;
+    const horas = Math.floor(total / 60);
+    const min = total % 60;
+    if (horas < 24) return `${horas}h${min ? ` ${min}min` : ""}`;
+    const dias = Math.floor(horas / 24);
+    const horasRestantes = horas % 24;
+    return `${dias}d${horasRestantes ? ` ${horasRestantes}h` : ""}`;
+  }
+
+  async function renderPainelExecutivo(ano, mes) {
+    app.innerHTML = '<div class="carregando">Carregando painel executivo…</div>';
+    const hoje = new Date();
+    ano = ano || state.cache.painelExecutivoAno || hoje.getFullYear();
+    mes = mes !== undefined ? mes : (state.cache.painelExecutivoMes !== undefined ? state.cache.painelExecutivoMes : "");
+    state.cache.painelExecutivoAno = ano;
+    state.cache.painelExecutivoMes = mes;
+
+    const qs = new URLSearchParams({ ano: String(ano) });
+    if (mes) qs.set("mes", String(mes));
+    const dados = await chamarApi("/painel-executivo?" + qs.toString());
+
+    const secComercial = dados.secoes.find((s) => s.chave === "comercial");
+    const secProducao = dados.secoes.find((s) => s.chave === "producao");
+
+    const opcoesAno = Array.from({ length: 6 }, (_, i) => hoje.getFullYear() - 4 + i)
+      .map((a) => `<option value="${a}" ${a === Number(ano) ? "selected" : ""}>${a}</option>`).join("");
+    const opcoesMes = [`<option value="" ${!mes ? "selected" : ""}>Todos</option>`]
+      .concat(Array.from({ length: 12 }, (_, i) => i + 1)
+        .map((m) => `<option value="${m}" ${Number(mes) === m ? "selected" : ""}>${String(m).padStart(2, "0")}</option>`))
+      .join("");
+
+    let kpisHtml = "", vendasMesHtml = "", vendedoresHtml = "", regioesHtml = "", funilHtml = "", clientesSemAtendimentoHtml = "";
+    if (secComercial) {
+      const k = secComercial.kpis;
+      kpisHtml = `<div class="pe-grid-kpi">
+        ${peKpi("💰", "Total Vendido", fmtMoeda(k.total_vendido), "#4f7cff")}
+        ${peKpi("🧾", "Total Faturado", fmtMoeda(k.total_faturado), "#22c1c3")}
+        ${peKpi("🆕", "Pedidos Novos", String(k.pedidos_novos), "#ffb703")}
+        ${peKpi("📄", "Notas Emitidas", String(k.notas_emitidas), "#ff5c8a")}
+        ${peKpi("🎯", "Cobertura de Clientes", fmtPct(k.cobertura_clientes_pct), "#7c5cff")}
+      </div>`;
+
+      vendasMesHtml = graficoTendenciaSvg(
+        secComercial.vendas_por_mes.map((m) => ({ data: `${ano}-${String(m.mes).padStart(2, "0")}-01`, valor: m.total })),
+        { formatar: fmtMoeda }
+      );
+
+      const maxVendedor = Math.max(1, ...secComercial.vendedores_ranking.map((v) => v.total), 0);
+      vendedoresHtml = secComercial.vendedores_ranking.length
+        ? secComercial.vendedores_ranking.map((v, i) => peBarraH(v.nome, v.total, maxVendedor, CORES_RANKING_PE[i % CORES_RANKING_PE.length], fmtMoeda)).join("")
+        : '<p class="texto-suave">Nenhuma venda com vendedor identificado neste período.</p>';
+
+      const maxRegiao = Math.max(1, ...secComercial.regioes.map((r) => r.total_atual), 0);
+      regioesHtml = secComercial.regioes.length
+        ? secComercial.regioes.map((r) => {
+            const pct = maxRegiao > 0 ? Math.max(r.total_atual > 0 ? 2 : 0, Math.round((r.total_atual / maxRegiao) * 100)) : 0;
+            const seta = r.tendencia === "subindo" ? "▲" : r.tendencia === "caindo" ? "▼" : "—";
+            return `<div class="pe-barra-h">
+              <span class="rotulo" title="${escapeHtml(r.regiao)}">${escapeHtml(r.regiao)}</span>
+              <span class="trilha"><span class="preenchido" style="width:${pct}%;background:#4f7cff;"></span></span>
+              <span class="valor">${fmtMoeda(r.total_atual)}</span>
+              <span class="pe-tendencia-${r.tendencia}" style="width:64px;text-align:right;font-size:12px;">${seta} ${Math.abs(r.variacao_pct)}%</span>
+            </div>`;
+          }).join("")
+        : '<p class="texto-suave">Sem vendas por região neste período.</p>';
+
+      const funil = secComercial.funil_pedidos;
+      const rotulosFunil = { novo: "Novo (vendas)", em_producao: "Sendo produzido", em_finalizacao: "Em finalização", aguardando_faturamento: "Aguardando faturamento", faturado: "Faturado" };
+      const coresFunil = { novo: "#7c5cff", em_producao: "#ffb703", em_finalizacao: "#ff9f5c", aguardando_faturamento: "#22c1c3", faturado: "#3ddc97" };
+      const maxFunil = Math.max(1, ...Object.values(funil), 0);
+      funilHtml = Object.keys(rotulosFunil)
+        .map((chave) => peBarraH(rotulosFunil[chave], funil[chave] || 0, maxFunil, coresFunil[chave], (v) => String(v)))
+        .join("");
+
+      clientesSemAtendimentoHtml = secComercial.clientes_sem_atendimento.length
+        ? `<table class="pe-tabela-simples"><thead><tr><th>Cliente</th><th>UF</th><th>Último pedido</th><th>Dias sem comprar</th></tr></thead><tbody>
+            ${secComercial.clientes_sem_atendimento.map((c) => `<tr>
+              <td>${escapeHtml(c.nome)}</td><td>${escapeHtml(c.uf || "—")}</td>
+              <td>${c.ultimo_pedido_em ? fmtData(c.ultimo_pedido_em) : "Nunca comprou"}</td>
+              <td>${c.dias_sem_pedido ?? "—"}</td>
+            </tr>`).join("")}
+          </tbody></table>`
+        : '<p class="texto-suave">Todos os clientes ativos tiveram pedido neste período.</p>';
+    }
+
+    let producaoStatusHtml = "", ordensEmAndamentoHtml = "";
+    if (secProducao) {
+      const rotulosStatus = { planejada: "Planejada", liberada: "Liberada", em_producao: "Em produção", concluida: "Concluída" };
+      const coresStatus = { planejada: "#7c8db5", liberada: "#4f7cff", em_producao: "#ffb703", concluida: "#3ddc97" };
+      producaoStatusHtml = `<div class="pe-grid-kpi">` + Object.keys(rotulosStatus)
+        .map((chave) => peKpi("⚙️", rotulosStatus[chave], String(secProducao.status_ordens[chave] || 0), coresStatus[chave]))
+        .join("") + `</div>`;
+
+      ordensEmAndamentoHtml = secProducao.ordens_em_andamento.length
+        ? secProducao.ordens_em_andamento.map((o) => `
+            <a href="#/painel-executivo/${o.id}" class="pe-card" style="display:block;text-decoration:none;color:inherit;margin-bottom:10px;">
+              <strong>${escapeHtml(o.numero)}</strong> — ${escapeHtml(o.item_descricao)}
+              <div class="texto-suave" style="font-size:12px;">Status: ${escapeHtml(rotulosStatus[o.status] || o.status)} · Etapas concluídas: ${o.etapas_concluidas}/${o.total_etapas} · <span style="color:#4f7cff;">ver linha do tempo completa →</span></div>
+            </a>`).join("")
+        : '<p class="texto-suave">Nenhuma ordem liberada ou em produção agora.</p>';
+    }
+
+    renderShell(
+      `<div class="pe-shell">
+         <div class="pe-topo">
+           <div class="pe-titulo">Painel Executivo — Visão em Tempo Real</div>
+           <form data-form="filtrar-painel-executivo" class="pe-filtros" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+             <label style="font-size:12px;opacity:.8;">Mês <select name="mes">${opcoesMes}</select></label>
+             <label style="font-size:12px;opacity:.8;">Ano <select name="ano">${opcoesAno}</select></label>
+             <button type="submit" class="botao secundario pequeno">Filtrar</button>
+           </form>
+         </div>
+
+         ${secComercial ? `
+           <h3 style="color:#e7ecff;opacity:.9;">Vendas &amp; Faturamento</h3>
+           ${kpisHtml}
+           <div class="pe-grid-cards">
+             <div class="pe-card" style="grid-column: span 2;">
+               <h3>Total vendido por mês — ${ano}</h3>
+               ${vendasMesHtml}
+             </div>
+             <div class="pe-card">
+               <h3>Funil de Pedidos (agora)</h3>
+               ${funilHtml}
+             </div>
+             <div class="pe-card">
+               <h3>Desempenho por Vendedor</h3>
+               ${vendedoresHtml}
+             </div>
+             <div class="pe-card">
+               <h3>Faturamento por Região (vs. mesmo período no ano anterior)</h3>
+               ${regioesHtml}
+             </div>
+             <div class="pe-card" style="grid-column: span 2;">
+               <h3>Clientes sem atendimento no período</h3>
+               ${clientesSemAtendimentoHtml}
+             </div>
+           </div>
+         ` : ""}
+
+         ${secProducao ? `
+           <h3 style="color:#e7ecff;opacity:.9;margin-top:24px;">Produção — Onde tudo está acontecendo agora</h3>
+           ${producaoStatusHtml}
+           <div class="pe-card">
+             <h3>Ordens em andamento — clique para ver a linha do tempo completa</h3>
+             ${ordensEmAndamentoHtml}
+           </div>
+         ` : ""}
+
+         ${!secComercial && !secProducao ? '<p class="texto-suave">Seu usuário não tem permissão para ver nenhuma seção deste painel.</p>' : ""}
+       </div>`,
+      "painel-executivo"
+    );
+  }
+
+  async function renderLinhaDoTempoOrdemExecutivo(ordemId) {
+    app.innerHTML = '<div class="carregando">Carregando linha do tempo…</div>';
+    const dados = await chamarApi(`/painel-executivo/ordens/${ordemId}/linha-do-tempo`);
+
+    const eventosHtml = dados.eventos.map((e) => `
+      <div class="pe-evento">
+        <div>
+          <div>${escapeHtml(e.titulo)}</div>
+          <div class="pe-evento-quando">${fmtData(e.quando)}</div>
+          ${e.duracao_desde_evento_anterior_minutos !== null ? `<div class="pe-evento-duracao">+${fmtDuracaoMinutosPe(e.duracao_desde_evento_anterior_minutos)} desde o evento anterior</div>` : ""}
+        </div>
+      </div>`).join("");
+
+    renderShell(
+      `<div class="pe-shell">
+         <div class="pe-topo">
+           <div class="pe-titulo">Linha do tempo — OP ${escapeHtml(dados.ordem.numero)}</div>
+           <a href="#/painel-executivo" class="botao secundario pequeno">Voltar ao Painel Executivo</a>
+         </div>
+         <p class="texto-suave">Quantidade planejada: ${dados.ordem.quantidade_planejada} ${escapeHtml(dados.ordem.unidade)} — Status atual: ${escapeHtml(dados.ordem.status)}</p>
+         <div class="pe-card">
+           <div class="pe-linha-tempo">${eventosHtml || '<p class="texto-suave">Nenhum evento registrado ainda para esta ordem.</p>'}</div>
+         </div>
+       </div>`,
+      "painel-executivo"
+    );
+  }
+
+  // =======================================================================
+  // RASTREABILIDADE AVANÇADA / SIMULAÇÃO DE RECALL — Fase 8
+  // =======================================================================
+  // Árvores de genealogia (para trás/matérias-primas e para frente/pedidos)
+  // são renderizadas recursivamente a partir da MESMA estrutura devolvida
+  // pelo servidor, tanto na consulta ao vivo quanto no detalhe de uma
+  // simulação já registrada (que é só um snapshot congelado da mesma forma).
+  function renderNoUpstream(node) {
+    if (!node) return "";
+    const rotulo = `<strong>${escapeHtml(node.codigo_lote)}</strong> — ${escapeHtml(node.item_codigo)} (${escapeHtml(node.item_descricao)}) ${seloLote(node.status)}`;
+    const qtd = node.quantidade_consumida_nesta_ordem !== undefined
+      ? ` <span class="texto-suave">— consumido nesta ordem: ${node.quantidade_consumida_nesta_ordem}</span>` : "";
+    const fornecedorHtml = node.fornecedor
+      ? `<div class="texto-suave" style="margin-left:4px;">Fornecedor: ${escapeHtml(node.fornecedor.nome)} — ${escapeHtml(node.fornecedor.cnpj)}</div>` : "";
+    const ordemHtml = node.ordem_producao
+      ? `<div class="texto-suave" style="margin-left:4px;">Produzido na ordem ${escapeHtml(node.ordem_producao.numero)}</div>` : "";
+    const filhos = (node.componentes || []).map((c) => `<li>${renderNoUpstream(c)}</li>`).join("");
+    return `<div>${rotulo}${qtd}</div>${fornecedorHtml}${ordemHtml}${filhos ? `<ul class="arvore-genealogia">${filhos}</ul>` : ""}`;
+  }
+
+  function renderNoDownstream(node) {
+    if (!node) return "";
+    const rotulo = `<strong>${escapeHtml(node.codigo_lote)}</strong> — ${escapeHtml(node.item_codigo)} (${escapeHtml(node.item_descricao)}) ${seloLote(node.status)}`;
+    const producaoHtml = (node.usado_em_producao || []).map((u) => {
+      const gerado = u.lote_gerado ? `<ul class="arvore-genealogia"><li>${renderNoDownstream(u.lote_gerado)}</li></ul>` : "";
+      return `<li>Consumido na ordem ${escapeHtml(u.ordem_producao.numero)} (${escapeHtml(u.ordem_producao.status)}) — quantidade: ${u.quantidade_consumida}${gerado}</li>`;
+    }).join("");
+    const pedidosHtml = (node.pedidos || []).map((p) => {
+      const seloPedido = p.status === "expedido"
+        ? `<span class="selo bloqueado">Expedido — cliente recebeu</span>`
+        : `<span class="selo azul">${escapeHtml(p.status)}</span>`;
+      return `<li>Pedido <strong>${escapeHtml(p.numero)}</strong> ${seloPedido} — Cliente: ${escapeHtml(p.cliente ? p.cliente.razao_social : "—")} (quantidade: ${p.quantidade_reservada})</li>`;
+    }).join("");
+    const filhos = producaoHtml + pedidosHtml;
+    return `<div>${rotulo}</div>${filhos ? `<ul class="arvore-genealogia">${filhos}</ul>` : '<p class="texto-suave" style="margin-left:4px;">Não foi consumido em nenhuma produção nem reservado em nenhum pedido.</p>'}`;
+  }
+
+  function renderResumoRecall(resumo) {
+    return `<div class="grade-kpi">
+      ${kpi("Lotes acima na cadeia (upstream)", resumo.total_lotes_upstream)}
+      ${kpi("Lotes abaixo na cadeia (downstream)", resumo.total_lotes_downstream)}
+      ${kpi("Pedidos já expedidos afetados", resumo.pedidos_expedidos.length, resumo.pedidos_reservados_nao_expedidos.length ? `<span class="texto-suave">+ ${resumo.pedidos_reservados_nao_expedidos.length} reservado(s), ainda não expedido(s)</span>` : "")}
+      ${kpi("Clientes afetados", resumo.total_clientes_afetados)}
+    </div>`;
+  }
+
+  async function renderRastreabilidade() {
+    app.innerHTML = '<div class="carregando">Carregando rastreabilidade…</div>';
+    const podeSimular = temPermissao("rastreabilidade", "simular_recall");
+    const buscaAtual = state.cache.rastreabilidadeBusca || "";
+    const resultadosBusca = state.cache.rastreabilidadeResultadosBusca || [];
+    const loteSelecionadoId = state.cache.rastreabilidadeLoteId || null;
+
+    const [genealogia, historico] = await Promise.all([
+      loteSelecionadoId ? chamarApi(`/rastreabilidade/lotes/${loteSelecionadoId}/genealogia-completa`) : Promise.resolve(null),
+      chamarApi("/rastreabilidade/recalls"),
+    ]);
+
+    const linhasBusca = resultadosBusca.length
+      ? resultadosBusca.map((l) => `<tr class="${l.id === loteSelecionadoId ? "linha-selecionada" : ""}">
+          <td class="mono">${escapeHtml(l.codigo_lote)}</td>
+          <td>${escapeHtml(l.item_codigo)} — ${escapeHtml(l.item_descricao)}</td>
+          <td>${seloLote(l.status)}</td>
+          <td><button class="botao secundario pequeno" data-acao="selecionar-lote-rastreabilidade" data-id="${l.id}">Ver genealogia</button></td>
+        </tr>`).join("")
+      : (buscaAtual ? '<tr><td colspan="4" class="texto-suave">Nenhum lote encontrado para essa busca.</td></tr>' : "");
+
+    const blocoGenealogia = genealogia ? `
+      <div class="cartao">
+        <div class="barra-acoes">
+          <h3 style="margin:0;">Genealogia de ${escapeHtml(genealogia.lote_investigado.codigo_lote)} — ${escapeHtml(genealogia.lote_investigado.item_codigo)}</h3>
+          ${podeSimular ? `<button class="botao perigo" data-acao="simular-recall" data-id="${genealogia.lote_investigado.lote_id}" data-codigo="${escapeHtml(genealogia.lote_investigado.codigo_lote)}">Simular Recall</button>` : ""}
+        </div>
+        ${renderResumoRecall(genealogia.resumo)}
+        <div class="subcartao" style="margin-top:16px;">
+          <p class="rotulo">Para trás — de onde veio o material deste lote</p>
+          ${renderNoUpstream(genealogia.upstream)}
+        </div>
+        <div class="subcartao" style="margin-top:12px;">
+          <p class="rotulo">Para frente — para onde este lote foi</p>
+          ${renderNoDownstream(genealogia.downstream)}
+        </div>
+      </div>` : "";
+
+    const linhasHistorico = historico.length
+      ? historico.map((r) => `<tr>
+          <td class="mono">${escapeHtml(r.numero)}</td>
+          <td class="mono">${escapeHtml(r.codigo_lote)}</td>
+          <td>${escapeHtml(r.motivo)}</td>
+          <td>${r.total_lotes_upstream} / ${r.total_lotes_downstream}</td>
+          <td>${r.total_pedidos_expedidos}</td>
+          <td>${r.total_clientes_afetados}</td>
+          <td>${escapeHtml(r.criado_por_nome || "—")}<br><span class="texto-suave">${fmtData(r.criado_em)}</span></td>
+          <td><button class="botao secundario pequeno" data-acao="ver-detalhe-recall" data-id="${r.id}">Ver detalhe</button></td>
+        </tr>`).join("")
+      : '<tr><td colspan="8" class="texto-suave">Nenhuma simulação de recall registrada ainda.</td></tr>';
+
+    renderShell(
+      `<h2>Rastreabilidade (Recall)</h2>
+       <p class="dica">Dado qualquer lote, veja de onde veio o material (matérias-primas e fornecedores, atravessando quantos níveis de produção forem necessários) e para onde ele foi (outros lotes produzidos a partir dele e, no fim da cadeia, quais pedidos e clientes o receberam).</p>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Buscar lote</h3>
+         <form data-form="buscar-lote-rastreabilidade" style="display:flex;gap:8px;">
+           <input name="busca" placeholder="Código do lote ou do item (ex.: L2026-000001, PA-WHEY900)" value="${escapeHtml(buscaAtual)}" style="flex:1;">
+           <button class="botao secundario" type="submit">Buscar</button>
+         </form>
+         ${resultadosBusca.length || buscaAtual ? `<table style="margin-top:12px;">
+           <thead><tr><th>Lote</th><th>Item</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhasBusca}</tbody>
+         </table>` : ""}
+       </div>
+
+       ${blocoGenealogia}
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Histórico de simulações de recall</h3>
+         <p class="dica">Cada simulação é um registro imutável — um snapshot de conformidade do que se sabia no momento da investigação, não recalculado depois.</p>
+         <table>
+           <thead><tr><th>Número</th><th>Lote</th><th>Motivo</th><th>Lotes (↑/↓)</th><th>Pedidos expedidos</th><th>Clientes</th><th>Registrado por</th><th></th></tr></thead>
+           <tbody>${linhasHistorico}</tbody>
+         </table>
+       </div>`,
+      "rastreabilidade"
+    );
+  }
+
+  function modalSimularRecall(loteId, codigoLote) {
+    abrirModal(`
+      <h3>Simular Recall — ${escapeHtml(codigoLote)}</h3>
+      <p class="texto-suave">Isso registra permanentemente uma investigação de recall a partir deste lote — o snapshot da genealogia completa (matérias-primas, fornecedores, lotes gerados, pedidos e clientes) fica gravado com o motivo abaixo e não pode ser editado ou apagado depois.</p>
+      <form data-form="simular-recall" data-id="${loteId}">
+        <div class="campo"><label>Motivo da investigação</label>
+          <textarea name="motivo" required placeholder="Ex.: resultado de estabilidade fora de especificação, reclamação de cliente, desvio crítico relacionado a este lote..."></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Registrar simulação de recall</button>
+        </div>
+      </form>`);
+  }
+
+  // Fase 53 — rótulos legíveis dos tipos de decisão sobre pedido já
+  // expedido (mesmos valores aceitos pelo backend, ver TIPOS_DECISAO_RECALL_PEDIDO
+  // em app/routes/rastreabilidade.py).
+  const RECALL_PEDIDO_TIPOS_DECISAO = [
+    { valor: "notificar_cliente", rotulo: "Notificar cliente" },
+    { valor: "aguardar_devolucao", rotulo: "Aguardar devolução" },
+    { valor: "gerar_nota_credito", rotulo: "Gerar nota de crédito" },
+    { valor: "cancelar_pedido", rotulo: "Cancelar pedido" },
+    { valor: "sem_acao", rotulo: "Sem ação" },
+  ];
+
+  function rotuloTipoDecisaoRecall(valor) {
+    const encontrado = RECALL_PEDIDO_TIPOS_DECISAO.find((t) => t.valor === valor);
+    return encontrado ? encontrado.rotulo : valor;
+  }
+
+  function renderDecisoesPedidosRecall(simulacaoId, decisoesData) {
+    if (!decisoesData || !decisoesData.pedidos.length) {
+      return `<div class="subcartao" style="margin-top:12px;">
+        <p class="rotulo">Decisões sobre pedidos já expedidos</p>
+        <p class="texto-suave">Nenhum pedido já expedido foi afetado por esta simulação.</p>
+      </div>`;
+    }
+    const podeDecidir = temPermissao("rastreabilidade", "decidir_pedido_recall");
+    const blocos = decisoesData.pedidos.map((p) => {
+      const pedido = p.pedido_atual;
+      if (!pedido) return "";
+      const ultimaDecisao = p.decisoes.length ? p.decisoes[p.decisoes.length - 1] : null;
+      const historicoHtml = p.decisoes.length
+        ? `<table style="margin-top:8px;">
+            <thead><tr><th>Quando</th><th>Decisão</th><th>Motivo</th><th>Observação</th><th>Por</th></tr></thead>
+            <tbody>${p.decisoes.map((d) => `<tr>
+              <td>${fmtData(d.criado_em)}</td>
+              <td>${escapeHtml(rotuloTipoDecisaoRecall(d.tipo_decisao))}</td>
+              <td>${escapeHtml(d.motivo)}</td>
+              <td>${escapeHtml(d.observacao || "—")}</td>
+              <td>${escapeHtml(d.criado_por_nome || "—")}</td>
+            </tr>`).join("")}</tbody>
+          </table>`
+        : '<p class="texto-suave" style="margin-top:8px;">Nenhuma decisão registrada ainda para este pedido.</p>';
+
+      return `<div class="subcartao" style="margin-top:12px;">
+        <div class="barra-acoes">
+          <div>
+            <strong>Pedido ${escapeHtml(pedido.numero)}</strong> — Cliente: ${escapeHtml(pedido.cliente_razao_social || "—")}
+            <span class="selo bloqueado" style="margin-left:6px;">${escapeHtml(pedido.status)}</span>
+            ${pedido.conta_receber ? `<span class="selo azul" style="margin-left:4px;">Conta a receber: ${escapeHtml(pedido.conta_receber.status)}</span>` : ""}
+          </div>
+          ${podeDecidir
+            ? `<button class="botao secundario pequeno" data-acao="registrar-decisao-recall-pedido" data-simulacao-id="${simulacaoId}" data-pedido-id="${pedido.id}" data-pedido-numero="${escapeHtml(pedido.numero)}">Registrar decisão</button>`
+            : ""}
+        </div>
+        ${ultimaDecisao ? `<p class="dica" style="margin-top:8px;">Decisão mais recente: <strong>${escapeHtml(rotuloTipoDecisaoRecall(ultimaDecisao.tipo_decisao))}</strong> (${fmtData(ultimaDecisao.criado_em)})</p>` : ""}
+        ${historicoHtml}
+      </div>`;
+    }).join("");
+    return `<div style="margin-top:12px;">
+      <p class="rotulo">Decisões sobre pedidos já expedidos</p>
+      <p class="dica">Registrar uma decisão aqui não executa nada sozinho — é só o histórico de conformidade do que foi decidido para cada pedido. Cancelar o pedido de fato continua sendo feito na tela de Comercial; estornar uma conta a receber, na tela de Financeiro.</p>
+      ${blocos}
+    </div>`;
+  }
+
+  function modalDetalheRecall(simulacao, decisoesData) {
+    const podeBloquearEmMassa = temPermissao("rastreabilidade", "bloquear_em_massa");
+    const lotesAfetados = simulacao.lotes_afetados_status || [];
+    const totalJaBloqueados = lotesAfetados.filter((l) => l.status === "bloqueado").length;
+    const tudoJaBloqueado = lotesAfetados.length > 0 && totalJaBloqueados === lotesAfetados.length;
+
+    const linhasLotesAfetados = lotesAfetados.length
+      ? lotesAfetados.map((l) => `<tr>
+          <td class="mono">${escapeHtml(l.codigo_lote)}</td>
+          <td>${seloLote(l.status)}</td>
+        </tr>`).join("")
+      : '<tr><td colspan="2" class="texto-suave">—</td></tr>';
+
+    abrirModal(`
+      <div class="barra-acoes">
+        <h3 style="margin:0;">${escapeHtml(simulacao.numero)} — ${escapeHtml(simulacao.codigo_lote)}</h3>
+        <button class="botao secundario pequeno" data-acao="baixar-recall-pdf" data-id="${simulacao.id}" data-numero="${escapeHtml(simulacao.numero)}">Baixar Relatório (PDF)</button>
+      </div>
+      <div class="linha-detalhe">
+        <div><span class="rotulo">Registrado por</span><br>${escapeHtml(simulacao.criado_por_nome || "—")}</div>
+        <div><span class="rotulo">Quando</span><br>${fmtData(simulacao.criado_em)}</div>
+      </div>
+      <p><span class="rotulo">Motivo</span><br>${escapeHtml(simulacao.motivo)}</p>
+      ${renderResumoRecall(simulacao.resultado.resumo)}
+      <div class="subcartao" style="margin-top:16px;">
+        <p class="rotulo">Para trás — de onde veio o material deste lote</p>
+        ${renderNoUpstream(simulacao.resultado.upstream)}
+      </div>
+      <div class="subcartao" style="margin-top:12px;">
+        <p class="rotulo">Para frente — para onde este lote foi</p>
+        ${renderNoDownstream(simulacao.resultado.downstream)}
+      </div>
+      <div class="subcartao" style="margin-top:12px;">
+        <div class="barra-acoes">
+          <p class="rotulo" style="margin:0;">Bloqueio em massa — status atual de cada lote afetado</p>
+          ${podeBloquearEmMassa && !tudoJaBloqueado
+            ? `<button class="botao perigo pequeno" data-acao="bloquear-em-massa" data-id="${simulacao.id}" data-numero="${escapeHtml(simulacao.numero)}">Bloquear todos os lotes afetados</button>`
+            : ""}
+        </div>
+        <p class="dica">Aplica o mesmo bloqueio manual da tela Lotes/Qualidade a todos os lotes desta árvore de uma vez só (o lote investigado, mais upstream e downstream). Lotes já bloqueados são pulados sem erro. Pedidos já expedidos NÃO são afetados — essa decisão continua manual, ver seção abaixo.</p>
+        <table>
+          <thead><tr><th>Lote</th><th>Status atual</th></tr></thead>
+          <tbody>${linhasLotesAfetados}</tbody>
+        </table>
+      </div>
+      ${renderDecisoesPedidosRecall(simulacao.id, decisoesData)}
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+      </div>`);
+  }
+
+  function modalRegistrarDecisaoRecallPedido(simulacaoId, pedidoId, pedidoNumero) {
+    const opcoesHtml = RECALL_PEDIDO_TIPOS_DECISAO
+      .map((t) => `<option value="${t.valor}">${escapeHtml(t.rotulo)}</option>`).join("");
+    abrirModal(`
+      <h3>Registrar decisão — Pedido ${escapeHtml(pedidoNumero)}</h3>
+      <p class="texto-suave">Isso registra, como um evento histórico de conformidade, a decisão tomada para este pedido já expedido afetado pelo recall. Não executa nada sozinho: cancelar o pedido de fato continua sendo feito na tela de Comercial, e estornar a conta a receber, na tela de Financeiro.</p>
+      <form data-form="registrar-decisao-recall-pedido" data-simulacao-id="${simulacaoId}" data-pedido-id="${pedidoId}">
+        <div class="campo"><label>Tipo de decisão</label>
+          <select name="tipo_decisao" required>${opcoesHtml}</select>
+        </div>
+        <div class="campo"><label>Motivo</label>
+          <textarea name="motivo" required placeholder="Ex.: cliente será notificado por telefone e e-mail sobre o recall..."></textarea>
+        </div>
+        <div class="campo"><label>Observação (opcional)</label>
+          <textarea name="observacao" placeholder="Detalhes adicionais, se houver..."></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao primario">Registrar decisão</button>
+        </div>
+      </form>`);
+  }
+
+  function modalBloquearEmMassa(simulacaoId, numero) {
+    abrirModal(`
+      <h3>Bloquear em massa — ${escapeHtml(numero)}</h3>
+      <p class="texto-suave">Isso vai bloquear (status "bloqueado") todos os lotes afetados por esta simulação de recall — o lote investigado, mais todo o upstream e downstream — usando a mesma ação de bloqueio da tela Lotes/Qualidade, só que de uma vez para todos. Lotes que já estiverem bloqueados são pulados sem erro. Pedidos de venda já expedidos do mesmo lote NÃO são cancelados nem alterados por esta ação.</p>
+      <form data-form="bloquear-em-massa" data-id="${simulacaoId}">
+        <div class="campo"><label>Motivo do bloqueio em massa</label>
+          <textarea name="motivo" required placeholder="Ex.: recolhimento cautelar decidido após a investigação de recall acima..."></textarea>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Bloquear todos os lotes afetados</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // Dispatcher de AÇÕES (cliques em botões com data-acao)
+  // =======================================================================
+  async function tratarAcao(acao, alvo) {
+    switch (acao) {
+      case "alternar-visibilidade-senha": {
+        // Botão "olho" nos campos de senha — não depende de nenhum dado
+        // do backend, só alterna o `type` do input apontado por
+        // data-alvo entre "password" e "text" para a pessoa conferir o
+        // que digitou antes de enviar o formulário.
+        const campo = document.getElementById(alvo.dataset.alvo);
+        if (!campo) return;
+        const estaMostrando = campo.type === "text";
+        campo.type = estaMostrando ? "password" : "text";
+        alvo.textContent = estaMostrando ? "👁️" : "🙈";
+        alvo.setAttribute("aria-label", estaMostrando ? "Mostrar senha" : "Ocultar senha");
+        return;
+      }
+      case "atualizar-painel-gerencial":
+        return renderPainelGerencial({
+          data_inicio: alvo.dataset.dataInicio, data_fim: alvo.dataset.dataFim,
+          empresa_id: alvo.dataset.empresaId || null,
+          diasTendencia: Number(alvo.dataset.diasTendencia) || 30,
+        });
+      case "limpar-filtro-empresa-painel":
+        // Fase 52 — limpa só o filtro de empresa, preservando o de período
+        // (os dois são independentes — ver o cartão "Filtros") — e a
+        // janela de Tendência (Fase 69) escolhida, pelo mesmo motivo.
+        return renderPainelGerencial({
+          data_inicio: alvo.dataset.dataInicio, data_fim: alvo.dataset.dataFim,
+          diasTendencia: Number(alvo.dataset.diasTendencia) || 30,
+        });
+      case "baixar-painel-pdf": {
+        const dataHoje = new Date().toISOString().slice(0, 10);
+        const paramsPdf = new URLSearchParams();
+        if (alvo.dataset.dataInicio) paramsPdf.set("data_inicio", alvo.dataset.dataInicio);
+        if (alvo.dataset.dataFim) paramsPdf.set("data_fim", alvo.dataset.dataFim);
+        if (alvo.dataset.empresaId) paramsPdf.set("empresa_id", alvo.dataset.empresaId);
+        const qsPdf = paramsPdf.toString();
+        await baixarArquivo("/relatorios/dashboard/pdf" + (qsPdf ? "?" + qsPdf : ""), `Painel-Gerencial-${dataHoje}.pdf`);
+        return;
+      }
+      case "baixar-painel-csv": {
+        const dataHoje = new Date().toISOString().slice(0, 10);
+        const paramsCsv = new URLSearchParams();
+        if (alvo.dataset.dataInicio) paramsCsv.set("data_inicio", alvo.dataset.dataInicio);
+        if (alvo.dataset.dataFim) paramsCsv.set("data_fim", alvo.dataset.dataFim);
+        if (alvo.dataset.empresaId) paramsCsv.set("empresa_id", alvo.dataset.empresaId);
+        const qsCsv = paramsCsv.toString();
+        await baixarArquivo("/relatorios/dashboard/csv" + (qsCsv ? "?" + qsCsv : ""), `Painel-Gerencial-${dataHoje}.csv`);
+        return;
+      }
+      case "baixar-painel-xlsx": {
+        // Fase 45 — .xlsx de verdade (abas, formatação, fórmula), em vez
+        // do CSV cru da Fase 19.
+        const dataHoje = new Date().toISOString().slice(0, 10);
+        const paramsXlsx = new URLSearchParams();
+        if (alvo.dataset.dataInicio) paramsXlsx.set("data_inicio", alvo.dataset.dataInicio);
+        if (alvo.dataset.dataFim) paramsXlsx.set("data_fim", alvo.dataset.dataFim);
+        if (alvo.dataset.empresaId) paramsXlsx.set("empresa_id", alvo.dataset.empresaId);
+        const qsXlsx = paramsXlsx.toString();
+        await baixarArquivo("/relatorios/dashboard/xlsx" + (qsXlsx ? "?" + qsXlsx : ""), `Painel-Gerencial-${dataHoje}.xlsx`);
+        return;
+      }
+
+      // ---- Fase 46: Administração — Snapshots & Restauração ----
+      case "baixar-snapshot-memorial": {
+        const dataHoje = new Date().toISOString().slice(0, 10);
+        await baixarArquivo("/memorial/administracao/snapshot", `Memorial-Tecnico-Snapshot-${dataHoje}.json`);
+        return;
+      }
+
+      // ---- Fase 47: Administração — Backups do Sistema ----
+      case "baixar-backup-sistema": {
+        const agora = new Date();
+        const dois = (n) => String(n).padStart(2, "0");
+        const nomeArquivo = `Alphafitus-Backup-Completo-${agora.getFullYear()}-${dois(agora.getMonth() + 1)}-${dois(agora.getDate())}_${dois(agora.getHours())}h${dois(agora.getMinutes())}min.db`;
+        await baixarArquivo("/sistema/backup", nomeArquivo);
+        return;
+      }
+      // ---- Fase 67: Backup Automático Agendado, Nuvem/E-mail, Restauração ----
+      case "executar-backup-agora": {
+        if (!confirm("Executar um backup agora, enviando para os destinos ativos (nuvem/e-mail)?")) return;
+        await chamarApi("/sistema/backup/executar-agora", { method: "POST" });
+        definirFlash("ok", "Backup executado — veja o resultado de cada destino no histórico abaixo.");
+        return renderMemorialBackups();
+      }
+      case "excluir-horario-backup": {
+        if (!confirm("Remover este horário de backup automático?")) return;
+        await chamarApi(`/sistema/backup/horarios/${alvo.dataset.id}`, { method: "DELETE" });
+        definirFlash("ok", "Horário removido.");
+        return renderMemorialBackups();
+      }
+      case "cancelar-restauracao-pendente": {
+        if (!confirm("Cancelar a restauração pendente? O arquivo enviado será descartado.")) return;
+        await chamarApi("/sistema/backup/restauracao-pendente", { method: "DELETE" });
+        definirFlash("ok", "Restauração pendente cancelada.");
+        return renderMemorialBackups();
+      }
+      case "selecionar-lote-rastreabilidade":
+        state.cache.rastreabilidadeLoteId = Number(alvo.dataset.id);
+        return renderRastreabilidade();
+      case "simular-recall":
+        modalSimularRecall(Number(alvo.dataset.id), alvo.dataset.codigo);
+        return;
+      case "ver-detalhe-recall": {
+        const [simulacao, decisoesData] = await Promise.all([
+          chamarApi(`/rastreabilidade/recalls/${alvo.dataset.id}`),
+          chamarApi(`/rastreabilidade/recalls/${alvo.dataset.id}/decisoes`),
+        ]);
+        modalDetalheRecall(simulacao, decisoesData);
+        return;
+      }
+      case "bloquear-em-massa":
+        modalBloquearEmMassa(Number(alvo.dataset.id), alvo.dataset.numero);
+        return;
+      case "registrar-decisao-recall-pedido":
+        modalRegistrarDecisaoRecallPedido(
+          Number(alvo.dataset.simulacaoId), Number(alvo.dataset.pedidoId), alvo.dataset.pedidoNumero
+        );
+        return;
+      case "alternar-tema": {
+        state.tema = state.tema === "claro" ? "escuro" : "claro";
+        localStorage.setItem("alphafitus_tema", state.tema);
+        document.documentElement.setAttribute("data-tema", state.tema);
+        return;
+      }
+      case "logout": {
+        try {
+          await chamarApi("/auth/logout", { method: "POST", body: { refresh_token: state.refreshToken } });
+        } catch (e) { /* mesmo se falhar no servidor, limpa localmente */ }
+        pararPollingNotificacoes();
+        limparSessao();
+        navegarPara("#/login");
+        return;
+      }
+      case "ir-notificacoes":
+        return navegarPara("#/notificacoes");
+      case "alternar-menu-mobile": {
+        document.querySelector(".barra-lateral").classList.toggle("aberta");
+        document.querySelector(".fundo-menu-mobile").classList.toggle("visivel");
+        return;
+      }
+      case "marcar-notificacao-lida": {
+        await chamarApi(`/notificacoes/${alvo.dataset.id}/marcar-lida`, { method: "POST" });
+        return renderNotificacoes();
+      }
+      case "marcar-todas-notificacoes-lidas": {
+        await chamarApi("/notificacoes/marcar-todas-lidas", { method: "POST" });
+        definirFlash("ok", "Todas as notificações foram marcadas como lidas.");
+        return renderNotificacoes();
+      }
+      case "testar-configuracao-email": {
+        const resp = await chamarApi("/notificacoes/configuracao-email/testar", { method: "POST" });
+        definirFlash("ok", `E-mail de teste enviado para ${resp.enviado_para}.`);
+        return renderNotificacoes();
+      }
+      case "fechar-modal":
+        fecharModais();
+        return;
+      case "novo-usuario":
+        modalNovoUsuario();
+        return;
+      case "editar-usuario": {
+        const usuario = await chamarApi(`/usuarios/${alvo.dataset.id}`);
+        modalEditarUsuario(usuario);
+        return;
+      }
+      case "perfis-usuario": {
+        const usuario = await chamarApi(`/usuarios/${alvo.dataset.id}`);
+        modalPerfisUsuario(usuario);
+        return;
+      }
+      case "inativar-usuario":
+        if (!confirm("Inativar este usuário?")) return;
+        await chamarApi(`/usuarios/${alvo.dataset.id}/inativar`, { method: "POST" });
+        definirFlash("ok", "Usuário inativado.");
+        return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      case "reativar-usuario":
+        await chamarApi(`/usuarios/${alvo.dataset.id}/reativar`, { method: "POST" });
+        definirFlash("ok", "Usuário reativado.");
+        return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      case "novo-perfil":
+        modalNovoPerfil();
+        return;
+      case "editar-permissoes-perfil": {
+        const perfis = await chamarApi("/perfis");
+        const perfil = perfis.find((p) => String(p.id) === alvo.dataset.id);
+        modalPermissoesPerfil(perfil);
+        return;
+      }
+      case "excluir-perfil":
+        if (!confirm("Excluir este perfil? Só é possível se não houver usuários vinculados.")) return;
+        await chamarApi(`/perfis/${alvo.dataset.id}`, { method: "DELETE" });
+        definirFlash("ok", "Perfil excluído.");
+        return renderPerfis();
+      case "nova-empresa":
+        modalNovaEmpresa();
+        return;
+      case "nova-unidade":
+        modalNovaUnidade(alvo.dataset.id);
+        return;
+      case "editar-dados-fiscais-empresa": {
+        const empresas = await chamarApi("/empresas");
+        const empresa = empresas.find((e) => String(e.id) === alvo.dataset.id);
+        modalDadosFiscaisEmpresa(empresa);
+        return;
+      }
+
+      // ---- Fase 70: Fiscal (NF-e) ----
+      case "emitir-nfe": {
+        // Fase 72 (auditoria de segurança): "Emitir NF-e" chama uma API
+        // externa regulada (Focus NFe/SEFAZ) e não é seguro reenviar por
+        // engano — trava o botão assim que a confirmação é aceita, ANTES
+        // do `await`, para um duplo-clique não conseguir disparar uma
+        // segunda emissão enquanto a primeira ainda está em voo (a tela
+        // só é redesenhada, o que naturalmente refaz o botão, depois que
+        // a resposta chega). Ver também o índice único do banco em
+        // schema_fase72.sql, que é a garantia de verdade contra a
+        // corrida — isto aqui é só para não fazer a segunda chamada de
+        // rede à toa.
+        if (alvo.disabled) return;
+        if (!confirm("Emitir NF-e para este pedido? Esta ação envia os dados ao provedor de NF-e configurado.")) return;
+        alvo.disabled = true;
+        const notaEmitida = await chamarApi(`/fiscal/pedidos/${alvo.dataset.pedidoId}/emitir`, { method: "POST" });
+        definirFlash(
+          notaEmitida.status === "autorizada" ? "ok" : "erro",
+          notaEmitida.status === "autorizada"
+            ? `NF-e ${notaEmitida.numero}/${notaEmitida.serie} autorizada.`
+            : `NF-e enviada — status atual: ${notaEmitida.status}.`
+        );
+        return renderPedidoDetalhe(Number(alvo.dataset.pedidoId));
+      }
+      case "consultar-status-nota": {
+        const notaAtualizada = await chamarApi(`/fiscal/notas/${alvo.dataset.id}/consultar-status`, { method: "POST" });
+        definirFlash("ok", `Status atual: ${notaAtualizada.status}.`);
+        return alvo.dataset.pedidoId ? renderPedidoDetalhe(Number(alvo.dataset.pedidoId)) : renderNotaFiscalDetalhe(Number(alvo.dataset.id));
+      }
+      case "abrir-cancelar-nota":
+        modalCancelarNota(alvo.dataset.id);
+        return;
+
+      // ---- Fase 71: Financeiro — Boleto Bancário ----
+      case "gerar-boleto": {
+        // Fase 72 (auditoria de segurança): mesmo raciocínio de
+        // "emitir-nfe" acima — "Gerar boleto" chama uma API financeira
+        // externa (Asaas) e um duplo-clique não pode disparar uma
+        // segunda geração enquanto a primeira ainda está em voo.
+        if (alvo.disabled) return;
+        if (!confirm("Gerar boleto para o saldo em aberto desta conta? Esta ação envia os dados ao provedor de boleto configurado.")) return;
+        alvo.disabled = true;
+        await chamarApi(`/financeiro/boletos/contas-receber/${alvo.dataset.contaId}/gerar`, { method: "POST" });
+        definirFlash("ok", "Boleto gerado.");
+        fecharModais();
+        return renderFinanceiro();
+      }
+      case "consultar-status-boleto": {
+        const boletoAtualizado = await chamarApi(`/financeiro/boletos/${alvo.dataset.id}/consultar-status`, { method: "POST" });
+        definirFlash(
+          "ok",
+          boletoAtualizado.status === "recebido"
+            ? "Pagamento confirmado — a baixa foi registrada automaticamente."
+            : `Status atual: ${boletoAtualizado.status}.`
+        );
+        fecharModais();
+        return renderFinanceiro();
+      }
+      case "abrir-cancelar-boleto":
+        modalCancelarBoleto(alvo.dataset.id);
+        return;
+      case "iniciar-2fa": {
+        const resp = await chamarApi("/auth/2fa/setup", { method: "POST" });
+        modalConfirmar2fa(resp.secret, resp.otpauth_uri);
+        return;
+      }
+      case "encerrar-sessao":
+        await chamarApi(`/auth/sessoes/${alvo.dataset.id}/encerrar`, { method: "POST" });
+        definirFlash("ok", "Sessão encerrada.");
+        return renderMinhaConta();
+
+      // ---- Fase 2: Itens ----
+      case "novo-item":
+        modalNovoItem();
+        return;
+      case "editar-item": {
+        const item = await chamarApi(`/itens/${alvo.dataset.id}`);
+        modalEditarItem(item);
+        return;
+      }
+
+      // ---- Fase 2: Fornecedores ----
+      case "novo-fornecedor":
+        modalNovoFornecedor();
+        return;
+      case "alterar-status-fornecedor": {
+        const fornecedores = await chamarApi("/fornecedores");
+        const fornecedor = fornecedores.find((f) => String(f.id) === alvo.dataset.id);
+        modalAlterarStatusFornecedor(fornecedor);
+        return;
+      }
+      case "homologar-item-fornecedor": {
+        const fornecedores = await chamarApi("/fornecedores");
+        const fornecedor = fornecedores.find((f) => String(f.id) === alvo.dataset.id);
+        modalHomologarItem(fornecedor);
+        return;
+      }
+      case "editar-lead-time-fornecedor": {
+        const fornecedores = await chamarApi("/fornecedores");
+        const fornecedor = fornecedores.find((f) => String(f.id) === alvo.dataset.id);
+        modalEditarLeadTimeFornecedor(fornecedor);
+        return;
+      }
+      // ---- Fase 62: Desempenho de Fornecedor (Scorecard) ----
+      case "ver-desempenho-fornecedor": {
+        const desempenho = await chamarApi(`/fornecedores/${alvo.dataset.id}/desempenho`);
+        modalDesempenhoFornecedor(alvo.dataset.nome, desempenho);
+        return;
+      }
+
+      // ---- Fase 2: Lotes / Análises ----
+      case "ver-lote":
+        return navegarPara(`#/lotes/${alvo.dataset.id}`);
+      case "receber-lote":
+        modalReceberLote();
+        return;
+      case "solicitar-analise": {
+        const lote = await chamarApi(`/lotes/${alvo.dataset.id}`);
+        modalSolicitarAnalise(lote);
+        return;
+      }
+      case "registrar-resultado": {
+        const analise = await chamarApi(`/analises/${alvo.dataset.analiseId}`);
+        const resultado = analise.resultados.find((r) => String(r.id) === alvo.dataset.resultadoId);
+        modalRegistrarResultado(alvo.dataset.analiseId, resultado);
+        return;
+      }
+      case "concluir-analise":
+        if (!confirm("Concluir esta análise? Depois de concluída, os resultados não podem mais ser corrigidos por aqui.")) return;
+        await chamarApi(`/analises/${alvo.dataset.id}/concluir`, { method: "POST" });
+        definirFlash("ok", "Análise concluída.");
+        return montarRota();
+      case "aprovar-lote": {
+        const lote = await chamarApi(`/lotes/${alvo.dataset.id}`);
+        modalAprovarLote(lote);
+        return;
+      }
+      case "reprovar-lote": {
+        const lote = await chamarApi(`/lotes/${alvo.dataset.id}`);
+        modalReprovarLote(lote);
+        return;
+      }
+      case "bloquear-lote": {
+        const lote = await chamarApi(`/lotes/${alvo.dataset.id}`);
+        modalBloquearLote(lote);
+        return;
+      }
+      case "desbloquear-lote":
+        if (!confirm("Desbloquear este lote? Ele volta ao status anterior ao bloqueio.")) return;
+        await chamarApi(`/lotes/${alvo.dataset.id}/desbloquear`, { method: "POST" });
+        definirFlash("ok", "Lote desbloqueado.");
+        return montarRota();
+      case "baixar-coa-pdf":
+        await baixarArquivo(`/lotes/${alvo.dataset.id}/certificado-analise/pdf`, `CoA-${alvo.dataset.codigo}.pdf`);
+        return;
+      case "baixar-recall-pdf":
+        await baixarArquivo(`/rastreabilidade/recalls/${alvo.dataset.id}/pdf`, `Recall-${alvo.dataset.numero}.pdf`);
+        return;
+
+      // ---- Fase 2: Desvios ----
+      case "novo-desvio":
+        modalNovoDesvio();
+        return;
+      case "editar-desvio": {
+        const desvios = await chamarApi("/desvios");
+        const desvio = desvios.find((d) => String(d.id) === alvo.dataset.id);
+        modalEditarDesvio(desvio);
+        return;
+      }
+      case "encerrar-desvio": {
+        const desvios = await chamarApi("/desvios");
+        const desvio = desvios.find((d) => String(d.id) === alvo.dataset.id);
+        modalEncerrarDesvio(desvio);
+        return;
+      }
+
+      // ---- Fase 3: Fórmulas ----
+      case "nova-formula":
+        modalNovaFormula();
+        return;
+      case "ativar-formula":
+        if (!confirm("Ativar esta fórmula? A versão atualmente ativa deste produto (se houver) vai virar obsoleta automaticamente.")) return;
+        await chamarApi(`/formulas/${alvo.dataset.id}/ativar`, { method: "POST" });
+        definirFlash("ok", "Fórmula ativada.");
+        return renderFormulas();
+
+      // ---- Fase 3: Ordens de Produção ----
+      case "nova-ordem":
+        modalNovaOrdem();
+        return;
+      case "ver-ordem":
+        return navegarPara(`#/producao/${alvo.dataset.id}`);
+      case "liberar-ordem":
+        await chamarApi(`/producao/ordens/${alvo.dataset.id}/liberar`, { method: "POST" });
+        definirFlash("ok", "Ordem liberada.");
+        return montarRota();
+      case "registrar-consumo": {
+        const ordem = await chamarApi(`/producao/ordens/${alvo.dataset.id}`);
+        await modalRegistrarConsumo(ordem);
+        return;
+      }
+      case "concluir-ordem": {
+        const ordem = await chamarApi(`/producao/ordens/${alvo.dataset.id}`);
+        modalConcluirOrdem(ordem);
+        return;
+      }
+      // ---- Fase 50: Etapas do processo (perda por etapa) ----
+      case "abrir-nova-etapa-ordem": {
+        const tipos = await chamarApi("/producao/tipos-etapa?apenas_ativos=1");
+        modalNovaEtapaOrdem(Number(alvo.dataset.id), tipos);
+        return;
+      }
+      case "abrir-editar-etapa-ordem": {
+        const ordem = await chamarApi(`/producao/ordens/${alvo.dataset.id}`);
+        const etapa = ordem.etapas.find((e) => e.id === Number(alvo.dataset.etapaId));
+        modalEditarEtapaOrdem(ordem.id, etapa);
+        return;
+      }
+      // ---- Fase 75: início/fim de cada etapa (apontamento em tempo real) ----
+      case "iniciar-etapa-ordem": {
+        const ordemId = Number(alvo.dataset.id);
+        await chamarApi(`/producao/ordens/${ordemId}/etapas/${alvo.dataset.etapaId}/iniciar`, { method: "POST" });
+        definirFlash("ok", "Etapa iniciada.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      case "abrir-concluir-etapa-ordem": {
+        const ordem = await chamarApi(`/producao/ordens/${alvo.dataset.id}`);
+        const etapa = ordem.etapas.find((e) => e.id === Number(alvo.dataset.etapaId));
+        modalConcluirEtapaOrdem(ordem.id, etapa);
+        return;
+      }
+      case "excluir-etapa-ordem": {
+        if (!confirm("Excluir esta etapa? Essa ação não pode ser desfeita.")) return;
+        const ordemId = Number(alvo.dataset.id);
+        await chamarApi(`/producao/ordens/${ordemId}/etapas/${alvo.dataset.etapaId}`, { method: "DELETE" });
+        definirFlash("ok", "Etapa excluída.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      case "cancelar-ordem": {
+        const ordem = await chamarApi(`/producao/ordens/${alvo.dataset.id}`);
+        modalCancelarOrdem(ordem);
+        return;
+      }
+      // ---- Fase 25: APS — agendamento de ordem num centro de trabalho ----
+      case "abrir-agendar-ordem": {
+        const ordemId = Number(alvo.dataset.id);
+        const [ordem, centros, agendamentoAtual] = await Promise.all([
+          chamarApi(`/producao/ordens/${ordemId}`),
+          chamarApi("/aps/centros-trabalho"),
+          chamarApi(`/aps/ordens/${ordemId}/agendamento`),
+        ]);
+        modalAgendarOrdem(ordem, centros, agendamentoAtual);
+        return;
+      }
+      case "desagendar-ordem": {
+        if (!confirm("Remover o agendamento desta ordem? A janela de tempo e o centro de trabalho serão desvinculados (a ordem em si não é afetada).")) return;
+        await chamarApi(`/aps/ordens/${alvo.dataset.id}/agendar`, { method: "DELETE" });
+        definirFlash("ok", "Agendamento removido.");
+        return renderOrdemDetalhe(Number(alvo.dataset.id));
+      }
+      // ---- Fase 54: MRP — Sugestão Automática de Compra ----
+      case "gerar-sugestoes-compra": {
+        const resultado = await chamarApi("/aps/mrp/gerar-sugestoes-compra", { method: "POST" });
+        definirFlash(
+          "ok",
+          `${resultado.total_criadas} sugestão(ões) nova(s) gerada(s)` +
+            (resultado.total_puladas ? `, ${resultado.total_puladas} pulada(s) (já tinha sugestão pendente).` : "."),
+        );
+        // Sempre mostra a aba Pendentes depois de gerar — é onde as
+        // sugestões recém-criadas aparecem, mesmo que o usuário tivesse
+        // deixado outra aba (Atendidas/Descartadas/Todas) selecionada
+        // numa visita anterior a esta tela.
+        state.cache.sugestoesCompraFiltro = "pendente";
+        return navegarPara("#/aps-sugestoes-compra");
+      }
+      case "filtrar-sugestoes-compra":
+        return renderApsSugestoesCompra(alvo.dataset.status);
+      case "atender-sugestao-compra":
+        modalAtenderSugestaoCompra(Number(alvo.dataset.id), alvo.dataset.item);
+        return;
+      case "descartar-sugestao-compra":
+        modalDescartarSugestaoCompra(Number(alvo.dataset.id), alvo.dataset.item);
+        return;
+      case "gerar-pedido-de-sugestao":
+        // Não existe endpoint de GET de uma sugestão isolada (só a lista
+        // com filtro de status) — por isso reconstruímos aqui um objeto
+        // "sugestão-like" a partir dos data-* que renderApsSugestoesCompra
+        // já coloca no próprio botão, em vez de fazer uma chamada extra.
+        modalGerarPedidoDeSugestao({
+          id: Number(alvo.dataset.id),
+          item_codigo: alvo.dataset.itemCodigo,
+          item_unidade: alvo.dataset.itemUnidade,
+          quantidade_sugerida: Number(alvo.dataset.quantidade),
+          fornecedor_sugerido_id: alvo.dataset.fornecedorSugeridoId ? Number(alvo.dataset.fornecedorSugeridoId) : null,
+        });
+        return;
+      // ---- Fase 58: Pedido de Compra formal ----
+      case "novo-pedido-compra":
+        modalNovoPedidoCompra();
+        return;
+      case "filtrar-pedidos-compra":
+        return renderPedidosCompra(alvo.dataset.status);
+      case "enviar-pedido-compra": {
+        if (!confirm("Enviar este pedido ao fornecedor? A partir daí ele passa a aceitar recebimento vinculado.")) return;
+        // Fase 61 — acima da alçada configurada, o backend não envia na
+        // hora: devolve 202 com uma solicitação pendente em vez de 200
+        // com o pedido já 'enviado'. `chamarApi` trata os dois como
+        // sucesso (resp.ok cobre 2xx) — só o texto do flash muda.
+        const resultadoEnvio = await chamarApi(`/compras/pedidos/${alvo.dataset.id}/enviar`, { method: "POST" });
+        if (resultadoEnvio.envio_pendente) {
+          definirFlash("ok", "Valor acima da alçada — envio ao fornecedor registrado como solicitação pendente de aprovação por outro usuário.");
+        } else {
+          definirFlash("ok", "Pedido enviado ao fornecedor.");
+        }
+        return renderPedidoCompraDetalhe(Number(alvo.dataset.id));
+      }
+      case "cancelar-pedido-compra":
+        modalCancelarPedidoCompra(Number(alvo.dataset.id));
+        return;
+      case "aprovar-envio-pedido": {
+        await chamarApi(`/compras/pedidos/envios-pendentes/${alvo.dataset.pendenteId}/aprovar`, { method: "POST" });
+        definirFlash("ok", "Envio aprovado — o pedido foi enviado ao fornecedor.");
+        return renderPedidoCompraDetalhe(Number(alvo.dataset.pedidoId));
+      }
+      case "abrir-rejeitar-envio-pedido":
+        modalRejeitarEnvioPedido(Number(alvo.dataset.pendenteId), Number(alvo.dataset.pedidoId));
+        return;
+      case "abrir-configurar-alcada-pedido": {
+        const configuracaoCompras = await chamarApi("/compras/configuracao");
+        modalConfigurarAlcadaPedido(configuracaoCompras);
+        return;
+      }
+      case "receber-contra-pedido":
+        modalReceberContraPedido(
+          Number(alvo.dataset.pedidoId), Number(alvo.dataset.itemId), alvo.dataset.itemCodigo, alvo.dataset.unidade
+        );
+        return;
+      // ---- Fase 59: Conta a Pagar gerada a partir do Pedido de Compra ----
+      case "gerar-conta-pagar-de-pedido":
+        await modalGerarContaPagarDePedido(Number(alvo.dataset.id), alvo.dataset.numero);
+        return;
+      // ---- Fase 66: Cotação Comparativa de Fornecedores (RFQ) ----
+      case "nova-cotacao":
+        modalNovaCotacao();
+        return;
+      case "filtrar-cotacoes":
+        return renderCotacoes(alvo.dataset.status);
+      case "registrar-resposta-cotacao": {
+        const cotacaoAtual = state.cache.cotacaoAtual;
+        const fornecedorIdResposta = Number(alvo.dataset.fornecedorId);
+        const fornecedorCotacao = (cotacaoAtual && cotacaoAtual.fornecedores.find((f) => f.fornecedor_id === fornecedorIdResposta)) || { respostas: [] };
+        modalRegistrarRespostaCotacao(
+          Number(alvo.dataset.cotacaoId), fornecedorIdResposta, alvo.dataset.fornecedorNome,
+          (cotacaoAtual && cotacaoAtual.itens) || [], fornecedorCotacao.respostas
+        );
+        return;
+      }
+      case "fechar-cotacao": {
+        if (!confirm(`Fechar esta cotação com "${alvo.dataset.fornecedorNome}" como vencedor? Isso gera automaticamente um Pedido de Compra (rascunho) com os preços respondidos por ele.`)) return;
+        await chamarApi(`/compras/cotacoes/${alvo.dataset.id}/fechar`, {
+          method: "POST", body: { fornecedor_vencedor_id: Number(alvo.dataset.fornecedorId) },
+        });
+        definirFlash("ok", "Cotação fechada — Pedido de Compra gerado (rascunho) a partir da resposta do vencedor.");
+        return renderCotacaoDetalhe(Number(alvo.dataset.id));
+      }
+      case "cancelar-cotacao":
+        modalCancelarCotacao(Number(alvo.dataset.id));
+        return;
+      // ---- Fase 25: APS — cadastro de centros de trabalho ----
+      case "novo-centro-trabalho":
+        modalNovoCentroTrabalho();
+        return;
+      case "editar-centro-trabalho": {
+        const centro = await chamarApi(`/aps/centros-trabalho/${alvo.dataset.id}`);
+        modalEditarCentroTrabalho(centro);
+        return;
+      }
+      // ---- Fase 75: catálogo de Tipos de Etapa ----
+      case "novo-tipo-etapa":
+        modalNovoTipoEtapa();
+        return;
+      case "editar-tipo-etapa": {
+        const tipos = await chamarApi("/producao/tipos-etapa");
+        const tipo = tipos.find((t) => t.id === Number(alvo.dataset.id));
+        modalEditarTipoEtapa(tipo);
+        return;
+      }
+      // ---- Fase 75: Painel de Chão de Fábrica em Tempo Real — apontamento
+      // direto pelo tablet do setor, sem precisar abrir a ordem inteira ----
+      case "painel-iniciar-etapa": {
+        await chamarApi(`/producao/ordens/${alvo.dataset.ordemId}/etapas/${alvo.dataset.etapaId}/iniciar`, { method: "POST" });
+        definirFlash("ok", "Etapa iniciada.");
+        return renderPainelTempoReal();
+      }
+      case "painel-concluir-etapa": {
+        modalConcluirEtapaPainel(alvo.dataset.ordemId, alvo.dataset.etapaId, alvo.dataset.nome, alvo.dataset.unidade);
+        return;
+      }
+      // ---- Fase 28: APS — Agenda visual (navegação de semana) ----
+      case "aps-agenda-semana-anterior": {
+        const d = new Date(alvo.dataset.data + "T00:00:00");
+        d.setDate(d.getDate() - 7);
+        return renderApsAgenda({ dataBase: _formatarDataYMD(d), centroId: alvo.dataset.centro });
+      }
+      case "aps-agenda-proxima-semana": {
+        const d = new Date(alvo.dataset.data + "T00:00:00");
+        d.setDate(d.getDate() + 7);
+        return renderApsAgenda({ dataBase: _formatarDataYMD(d), centroId: alvo.dataset.centro });
+      }
+      case "aps-agenda-hoje":
+        return renderApsAgenda({ centroId: alvo.dataset.centro });
+      // ---- Fase 13: alternância entre as abas "Custo de Produção" / "Custo com Perdas" ----
+      case "mostrar-aba-custo": {
+        const container = alvo.closest(".cartao");
+        container.querySelectorAll(".aba-custo-botao").forEach((b) => b.classList.toggle("ativo", b === alvo));
+        container.querySelectorAll(".aba-custo-conteudo").forEach((el) => {
+          el.style.display = el.dataset.aba === alvo.dataset.alvo ? "" : "none";
+        });
+        return;
+      }
+
+      // ---- Fase 4: Estoque (WMS) ----
+      case "nova-posicao-estoque":
+        modalNovaPosicaoEstoque();
+        return;
+      case "enderecar-lote": {
+        const pendentes = await chamarApi("/estoque/lotes-pendentes-enderecamento");
+        const lote = pendentes.find((l) => String(l.id) === alvo.dataset.id);
+        modalEnderecarLote(lote);
+        return;
+      }
+      case "transferir-estoque":
+        modalTransferirEstoque(Number(alvo.dataset.loteId), Number(alvo.dataset.posicaoId), Number(alvo.dataset.saldo));
+        return;
+      case "ajustar-estoque":
+        modalAjustarEstoque(Number(alvo.dataset.loteId), Number(alvo.dataset.posicaoId), Number(alvo.dataset.saldo));
+        return;
+      case "baixa-estoque":
+        modalBaixaEstoque(Number(alvo.dataset.loteId), Number(alvo.dataset.posicaoId), Number(alvo.dataset.saldo));
+        return;
+
+      // ---- Fase 17: Contagem de Inventário ----
+      case "nova-contagem-estoque":
+        modalNovaContagemEstoque();
+        return;
+      // ---- Fase 32: limiar de divergência configurável ----
+      case "abrir-configurar-alcada-divergencia": {
+        const configuracao = await chamarApi("/estoque/configuracao");
+        modalConfigurarAlcadaDivergencia(configuracao);
+        return;
+      }
+      // ---- Fase 35: agendamento/cadência automática de contagens ----
+      case "abrir-novo-agendamento-contagem":
+        modalAgendamentoContagem(null);
+        return;
+      case "abrir-editar-agendamento-contagem": {
+        const agendamento = (state.cache.agendamentosContagem || []).find((a) => String(a.id) === alvo.dataset.id);
+        modalAgendamentoContagem(agendamento);
+        return;
+      }
+      case "excluir-agendamento-contagem": {
+        if (!confirm("Excluir este agendamento de contagem? Contagens já geradas por ele não são afetadas.")) return;
+        await chamarApi(`/estoque/agendamentos/${alvo.dataset.id}`, { method: "DELETE" });
+        definirFlash("ok", "Agendamento excluído.");
+        await renderEstoque();
+        return;
+      }
+      case "ver-detalhe-contagem": {
+        const contagem = await chamarApi(`/estoque/contagens/${alvo.dataset.id}`);
+        modalDetalheContagem(contagem);
+        return;
+      }
+      case "contar-item-contagem":
+        modalContarItemContagem(
+          Number(alvo.dataset.contagemId), Number(alvo.dataset.itemId), Number(alvo.dataset.saldo),
+          alvo.dataset.lote, alvo.dataset.posicao
+        );
+        return;
+      case "abrir-cancelar-contagem":
+        modalCancelarContagem(Number(alvo.dataset.id));
+        return;
+      case "concluir-contagem": {
+        const contagemAtualizada = await chamarApi(`/estoque/contagens/${alvo.dataset.id}/concluir`, { method: "POST" });
+        definirFlash("ok", `Contagem ${contagemAtualizada.numero} concluída.`);
+        fecharModais();
+        await renderEstoque();
+        modalDetalheContagem(contagemAtualizada);
+        return;
+      }
+      // ---- Fase 21: Aprovação de 2º usuário para ajuste de contagem ----
+      case "aprovar-ajuste-contagem": {
+        const contagemAtualizada = await chamarApi(
+          `/estoque/contagens/${alvo.dataset.contagemId}/itens/${alvo.dataset.itemId}/aprovar-ajuste`,
+          { method: "POST" }
+        );
+        definirFlash("ok", "Ajuste aprovado e aplicado ao estoque.");
+        fecharModais();
+        await renderEstoque();
+        modalDetalheContagem(contagemAtualizada);
+        return;
+      }
+      case "abrir-rejeitar-ajuste-contagem":
+        modalRejeitarAjusteContagem(Number(alvo.dataset.contagemId), Number(alvo.dataset.itemId));
+        return;
+
+      // ---- Fase 5: Comercial (CRM + Pedidos de Venda) ----
+      case "novo-cliente":
+        modalNovoCliente();
+        return;
+      case "editar-cliente": {
+        const cliente = await chamarApi(`/comercial/clientes/${alvo.dataset.id}`);
+        modalEditarCliente(cliente);
+        return;
+      }
+      // ---- Fase 64: Desempenho de Cliente (Scorecard) ----
+      case "ver-desempenho-cliente": {
+        const desempenhoCliente = await chamarApi(`/comercial/clientes/${alvo.dataset.id}/desempenho`);
+        modalDesempenhoCliente(alvo.dataset.nome, desempenhoCliente);
+        return;
+      }
+      case "novo-pedido":
+        modalNovoPedido();
+        return;
+      case "ver-pedido":
+        return navegarPara(`#/pedido/${alvo.dataset.id}`);
+      case "adicionar-item-pedido":
+        modalAdicionarItemPedido(alvo.dataset.id);
+        return;
+      case "remover-item-pedido":
+        if (!confirm("Remover este item do pedido?")) return;
+        await chamarApi(`/comercial/pedidos/${alvo.dataset.pedidoId}/itens/${alvo.dataset.linhaId}`, { method: "DELETE" });
+        definirFlash("ok", "Item removido do pedido.");
+        return renderPedidoDetalhe(Number(alvo.dataset.pedidoId));
+      case "confirmar-pedido": {
+        if (!confirm("Confirmar este pedido? O sistema vai tentar reservar estoque (FEFO) para todos os itens — se algum não tiver saldo suficiente, nada é reservado.")) return;
+        // Fase 63 — acima do limite de crédito do cliente, o backend não
+        // confirma na hora: devolve 202 com uma solicitação pendente em
+        // vez de 200 com o pedido já 'confirmado'. `chamarApi` trata os
+        // dois como sucesso (resp.ok cobre 2xx) — só o texto do flash muda.
+        const resultadoConfirmacao = await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/confirmar`, { method: "POST" });
+        if (resultadoConfirmacao.confirmacao_pendente_criada_id) {
+          definirFlash("ok", "Valor acima do limite de crédito do cliente — confirmação registrada como solicitação pendente de aprovação por outro usuário.");
+        } else {
+          definirFlash("ok", "Pedido confirmado — estoque reservado.");
+        }
+        return renderPedidoDetalhe(Number(alvo.dataset.id));
+      }
+      case "expedir-pedido":
+        if (!confirm("Expedir este pedido? Isso vai dar baixa real no estoque físico reservado.")) return;
+        await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/expedir`, { method: "POST" });
+        definirFlash("ok", "Pedido expedido — saída de estoque registrada.");
+        return renderPedidoDetalhe(Number(alvo.dataset.id));
+      case "cancelar-pedido": {
+        const pedido = await chamarApi(`/comercial/pedidos/${alvo.dataset.id}`);
+        modalCancelarPedido(pedido);
+        return;
+      }
+      case "aprovar-confirmacao-pedido": {
+        await chamarApi(`/comercial/pedidos/confirmacoes-pendentes/${alvo.dataset.pendenteId}/aprovar`, { method: "POST" });
+        definirFlash("ok", "Confirmação aprovada — o pedido foi confirmado e o estoque reservado.");
+        return renderPedidoDetalhe(Number(alvo.dataset.pedidoId));
+      }
+      case "abrir-rejeitar-confirmacao-pedido":
+        modalRejeitarConfirmacaoPedido(Number(alvo.dataset.pendenteId), Number(alvo.dataset.pedidoId));
+        return;
+
+      // ---- Fase 6: Financeiro (Contas a Receber e a Pagar) ----
+      case "nova-conta-pagar":
+        modalNovaContaPagar();
+        return;
+      // ---- Fase 33: limite de prazo para estorno configurável ----
+      case "abrir-configurar-limite-estorno": {
+        const configuracao = await chamarApi("/financeiro/configuracao");
+        modalConfigurarLimiteEstorno(configuracao);
+        return;
+      }
+      case "baixar-conta-receber": {
+        const conta = await chamarApi(`/financeiro/contas-receber/${alvo.dataset.id}`);
+        modalBaixarConta("receber", conta);
+        return;
+      }
+      case "cancelar-conta-receber": {
+        const conta = await chamarApi(`/financeiro/contas-receber/${alvo.dataset.id}`);
+        modalCancelarConta("receber", conta);
+        return;
+      }
+      case "baixar-conta-pagar": {
+        const conta = await chamarApi(`/financeiro/contas-pagar/${alvo.dataset.id}`);
+        modalBaixarConta("pagar", conta);
+        return;
+      }
+      case "cancelar-conta-pagar": {
+        const conta = await chamarApi(`/financeiro/contas-pagar/${alvo.dataset.id}`);
+        modalCancelarConta("pagar", conta);
+        return;
+      }
+      case "ver-baixas-conta-receber": {
+        const podeVerBoletos = temPermissao("financeiro", "visualizar");
+        const [conta, boletos] = await Promise.all([
+          chamarApi(`/financeiro/contas-receber/${alvo.dataset.id}`),
+          podeVerBoletos ? chamarApi(`/financeiro/boletos?conta_receber_id=${alvo.dataset.id}`) : Promise.resolve([]),
+        ]);
+        modalBaixasConta("receber", conta, boletos);
+        return;
+      }
+      case "ver-baixas-conta-pagar": {
+        const conta = await chamarApi(`/financeiro/contas-pagar/${alvo.dataset.id}`);
+        modalBaixasConta("pagar", conta);
+        return;
+      }
+      case "estornar-baixa": {
+        modalEstornarBaixa(alvo.dataset.tipo, Number(alvo.dataset.contaId), Number(alvo.dataset.baixaId), Number(alvo.dataset.valor));
+        return;
+      }
+      // ---- Fase 22: Aprovação dupla para estorno de baixa acima do valor de alçada ----
+      case "aprovar-estorno": {
+        const tipo = alvo.dataset.tipo;
+        const recurso = tipo === "receber" ? "contas-receber" : "contas-pagar";
+        await chamarApi(`/financeiro/${recurso}/estornos-pendentes/${alvo.dataset.pendenteId}/aprovar`, { method: "POST" });
+        definirFlash("ok", "Estorno aprovado — a baixa foi revertida e o saldo corrigido.");
+        fecharModais();
+        return renderFinanceiro();
+      }
+      case "abrir-rejeitar-estorno":
+        modalRejeitarEstorno(alvo.dataset.tipo, Number(alvo.dataset.pendenteId));
+        return;
+
+      // ---- Fase 31: Aprovação dupla para o REGISTRO de baixa acima do valor de alçada ----
+      case "aprovar-baixa-registro": {
+        const tipo = alvo.dataset.tipo;
+        const recurso = tipo === "receber" ? "contas-receber" : "contas-pagar";
+        await chamarApi(`/financeiro/${recurso}/baixas-pendentes/${alvo.dataset.pendenteId}/aprovar`, { method: "POST" });
+        definirFlash("ok", "Registro de baixa aprovado — ela foi lançada no ledger e o saldo foi atualizado.");
+        fecharModais();
+        return renderFinanceiro();
+      }
+      case "abrir-rejeitar-baixa-registro":
+        modalRejeitarBaixaRegistro(alvo.dataset.tipo, Number(alvo.dataset.pendenteId));
+        return;
+
+      // ---- Fase 40: Conciliação Bancária ----
+      case "abrir-importar-extrato":
+        modalImportarExtratoBancario();
+        return;
+      case "abrir-conciliar-transacao":
+        await modalConciliarTransacao(Number(alvo.dataset.id), Number(alvo.dataset.valor));
+        return;
+      case "abrir-ignorar-transacao":
+        modalIgnorarTransacaoExtrato(Number(alvo.dataset.id));
+        return;
+      case "desconciliar-transacao": {
+        if (!confirm("Desconciliar esta transação? Ela volta para pendente e a baixa fica livre para ser escolhida de novo (aqui ou por outra transação).")) return;
+        await chamarApi(`/financeiro/extratos/transacoes/${alvo.dataset.id}/desconciliar`, { method: "POST" });
+        definirFlash("ok", "Transação desconciliada.");
+        return renderConciliacaoBancariaDetalhe(state.cache.extratoAtualId);
+      }
+
+      // ---- Fase 55: Conciliação Bancária em lote ----
+      case "conciliar-pendentes-em-massa": {
+        // Com data-extrato-id (tela de detalhe de UM extrato), escopa o
+        // reprocessamento a ele; sem o atributo (tela de lista de
+        // extratos), reprocessa TODAS as transações pendentes do sistema.
+        const extratoId = alvo.dataset.extratoId ? Number(alvo.dataset.extratoId) : null;
+        const resultado = await chamarApi("/financeiro/extratos/conciliar-pendentes-em-massa", {
+          method: "POST", body: extratoId ? { extrato_id: extratoId } : {},
+        });
+        if (resultado.total_processadas === 0) {
+          definirFlash("ok", "Nenhuma transação pendente para reprocessar.");
+        } else {
+          definirFlash(
+            "ok",
+            `${resultado.total_conciliadas} de ${resultado.total_processadas} transação(ões) pendente(s) conciliada(s) automaticamente` +
+              (resultado.total_permanecem_pendentes ? ` — ${resultado.total_permanecem_pendentes} continuam pendente(s) (sem candidato ou ambíguas).` : ".")
+          );
+        }
+        return extratoId ? renderConciliacaoBancariaDetalhe(extratoId) : renderConciliacaoBancaria();
+      }
+
+      // ---- Fase 24: Memorial Técnico ANVISA ----
+      case "nova-memorial-empresa":
+        modalNovaMemorialEmpresa();
+        return;
+      case "editar-memorial-empresa": {
+        const empresa = await chamarApi(`/memorial/empresas/${alvo.dataset.id}`);
+        modalEditarMemorialEmpresa(empresa);
+        return;
+      }
+      case "novo-memorial-produto": {
+        const empresas = state.cache.memorialEmpresas || (await chamarApi("/memorial/empresas"));
+        modalNovoMemorialProduto(empresas);
+        return;
+      }
+      case "editar-memorial-produto": {
+        const produto = await chamarApi(`/memorial/produtos/${alvo.dataset.id}`);
+        modalEditarMemorialProduto(produto);
+        return;
+      }
+      case "novo-memorial":
+        await modalNovoMemorial();
+        return;
+      case "excluir-memorial": {
+        await chamarApi(`/memorial/memoriais/${alvo.dataset.id}`, { method: "DELETE" });
+        definirFlash("ok", "Memorial excluído.");
+        return navegarPara("#/memorial/memoriais");
+      }
+      case "abrir-assinar-memorial":
+        modalAssinarMemorial(Number(alvo.dataset.id));
+        return;
+
+      // ---- Fase 27: abas numeradas + Anexos + Padronização ----
+      case "trocar-aba-memorial": {
+        const aba = alvo.dataset.aba;
+        document.querySelectorAll(".memorial-abas-nav .memorial-aba-botao").forEach((btn) => {
+          btn.classList.toggle("ativa", btn.dataset.aba === aba);
+        });
+        document.querySelectorAll(".memorial-abas [data-aba-conteudo]").forEach((el) => {
+          el.hidden = el.dataset.abaConteudo !== aba;
+        });
+        return;
+      }
+      case "novo-anexo-memorial":
+        modalNovoAnexoMemorial(alvo.dataset.id);
+        return;
+      case "baixar-anexo-memorial":
+        await baixarArquivo(
+          `/memorial/memoriais/${alvo.dataset.memorialId}/anexos/${alvo.dataset.id}/download`,
+          alvo.dataset.nomeArquivo
+        );
+        return;
+      case "excluir-anexo-memorial": {
+        if (!confirm("Excluir este anexo? Esta ação não pode ser desfeita.")) return;
+        await chamarApi(`/memorial/memoriais/${alvo.dataset.memorialId}/anexos/${alvo.dataset.id}`, { method: "DELETE" });
+        definirFlash("ok", "Anexo excluído.");
+        return renderMemorialDetalhe(Number(alvo.dataset.memorialId), "anexos");
+      }
+      case "imprimir-memorial":
+        window.print();
+        return;
+      case "baixar-pdf-completo-memorial":
+        await baixarArquivo(
+          `/memorial/memoriais/${alvo.dataset.id}/pdf-completo`,
+          `Memorial-Tecnico-Completo-${alvo.dataset.codigo}.pdf`
+        );
+        return;
+
+      // ---- Fase 26: Catálogos do Memorial Técnico ----
+      case "novo-catalogo-memorial":
+        modalNovoCatalogoMemorial(alvo.dataset.catalogo);
+        return;
+      case "editar-catalogo-memorial": {
+        const item = await chamarApi(`/memorial/catalogos/${alvo.dataset.catalogo}/${alvo.dataset.id}`);
+        modalEditarCatalogoMemorial(alvo.dataset.catalogo, item);
+        return;
+      }
+      case "excluir-catalogo-memorial": {
+        if (!confirm("Excluir este item do catálogo? Esta ação não pode ser desfeita (para só ocultar, use Editar > Ativo).")) return;
+        await chamarApi(`/memorial/catalogos/${alvo.dataset.catalogo}/${alvo.dataset.id}`, { method: "DELETE" });
+        definirFlash("ok", "Item excluído.");
+        return renderMemorialCatalogo(alvo.dataset.catalogo);
+      }
+
+      // ---- Fase 29: catálogos como seletores dentro do memorial ----
+      case "abrir-catalogo-memorial-campo":
+        await modalCatalogoParaCampo(alvo.dataset.campo, alvo.dataset.catalogo);
+        return;
+      case "usar-item-catalogo-memorial": {
+        const item = await chamarApi(`/memorial/catalogos/${alvo.dataset.catalogo}/${alvo.dataset.id}`);
+        inserirTextoCatalogoNoCampo(alvo.dataset.campo, alvo.dataset.catalogo, item);
+        fecharModais();
+        return;
+      }
+
+      // ---- Fase 36: App de Vendas ----
+      case "abrir-configurar-app-vendas": {
+        const configuracao = await chamarApi("/vendas-app/configuracao");
+        modalConfigurarAppVendas(configuracao);
+        return;
+      }
+      case "abrir-novo-rascunho-vendas":
+        modalNovoRascunhoVendas();
+        return;
+      case "abrir-adicionar-item-rascunho-vendas":
+        modalAdicionarItemRascunhoVendas(alvo.dataset.id);
+        return;
+      case "filtrar-portfolio":
+        state.cache.portfolioFiltroCategoria = alvo.dataset.categoria || "";
+        return renderPortfolioVendas(true);
+      case "selecionar-item-portfolio":
+        modalSelecionarItemPortfolio({
+          id: alvo.dataset.id, codigo: alvo.dataset.codigo,
+          descricao: alvo.dataset.descricao, disponivel: alvo.dataset.disponivel,
+        });
+        return;
+      case "duplicar-pedido-comercial": {
+        if (!confirm(`Duplicar o pedido ${alvo.dataset.numero}? Um novo pedido em rascunho será criado com os mesmos itens.`)) return;
+        const novoPedido = await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/duplicar`, { method: "POST" });
+        if (novoPedido.itens_pulados_da_duplicacao && novoPedido.itens_pulados_da_duplicacao.length > 0) {
+          definirFlash("ok", `Pedido duplicado como ${novoPedido.numero} — ${novoPedido.itens_pulados_da_duplicacao.length} item(ns) não puderam ser copiados (ver detalhes no pedido).`);
+        } else {
+          definirFlash("ok", `Pedido duplicado como ${novoPedido.numero}.`);
+        }
+        return navegarPara(`#/pedido/${novoPedido.id}`);
+      }
+      case "duplicar-pedido-vendas-app": {
+        if (!confirm(`Usar o pedido ${alvo.dataset.numero} como modelo? Um novo rascunho será criado no App de Vendas com os mesmos itens.`)) return;
+        try {
+          await chamarApi(`/vendas-app/pedidos/${alvo.dataset.id}/duplicar`, { method: "POST" });
+          definirFlash("ok", "Novo rascunho criado a partir deste pedido — continue montando em App de Vendas.");
+          return navegarPara("#/app-vendas");
+        } catch (erro) {
+          if (erro.status === 409 && erro.codigo === "rascunho_ja_aberto") {
+            definirFlash("erro", "Você já tem um rascunho aberto — envie-o ou abandone-o antes de duplicar outro pedido.");
+            return;
+          }
+          throw erro;
+        }
+      }
+      case "abrir-aplicar-verba-vendas": {
+        const rascunho = state.cache.rascunhoAppVendas;
+        const verba = await chamarApi(`/vendas-app/clientes/${rascunho.cliente_id}/verba`);
+        modalAplicarVerbaVendas(rascunho, verba);
+        return;
+      }
+      case "remover-item-rascunho-vendas":
+        if (!confirm("Remover este item do rascunho?")) return;
+        await chamarApi(`/vendas-app/rascunhos/${alvo.dataset.pedidoId}/itens/${alvo.dataset.linhaId}`, { method: "DELETE" });
+        definirFlash("ok", "Item removido do rascunho.");
+        return renderAppVendas();
+      case "sincronizar-app-vendas":
+        return renderAppVendas();
+      case "tentar-enviar-pendente-vendas":
+        return tentarEnviarPedidoPendente(Number(alvo.dataset.id));
+      case "enviar-rascunho-vendas": {
+        const pedidoId = Number(alvo.dataset.id);
+        if (!confirm("Enviar este pedido? O sistema vai tentar reservar o estoque de verdade (FEFO) — se outro vendedor já tiver enviado um pedido que consumiu o saldo primeiro, esta tentativa pode falhar.")) return;
+        try {
+          const resultadoEnvioRascunho = await chamarApi(`/vendas-app/rascunhos/${pedidoId}/enviar`, { method: "POST" });
+          limparPedidoPendenteDeEnvio();
+          // Fase 63 — acima do limite de crédito do cliente, o pedido não
+          // vira uma venda confirmada na hora: fica em rascunho aguardando
+          // aprovação de outro usuário (mesma alçada da tela de Comercial
+          // no desktop). O envio em si deu certo — só o texto muda.
+          if (resultadoEnvioRascunho.pedido && resultadoEnvioRascunho.pedido.confirmacao_pendente_criada_id) {
+            definirFlash("ok", "Pedido enviado — como o valor ultrapassa o limite de crédito do cliente, aguarda aprovação de outro usuário antes de virar uma venda confirmada.");
+          } else {
+            definirFlash("ok", "Pedido enviado com sucesso.");
+          }
+          return renderAppVendas();
+        } catch (erro) {
+          if (erro.status === undefined) {
+            // Falha de rede (sem internet), não um erro de negócio — o
+            // rascunho continua montado no servidor exatamente como
+            // estava. Marca como pendente para tentar de novo sozinho
+            // quando a conexão voltar (ver window.addEventListener("online", ...)).
+            marcarPedidoPendenteDeEnvio(pedidoId);
+            definirFlash("erro", "Sem conexão com a internet agora — o pedido ficou marcado como pendente de envio. Vamos tentar enviar de novo automaticamente quando a internet voltar (ou use \"Tentar enviar agora\").");
+            return renderAppVendas();
+          }
+          throw erro;
+        }
+      }
+      case "abandonar-rascunho-vendas":
+        if (!confirm("Abandonar este rascunho? O pedido será cancelado e a reserva temporária dos itens será liberada para outros vendedores.")) return;
+        await chamarApi(`/vendas-app/rascunhos/${alvo.dataset.id}/abandonar`, { method: "POST" });
+        limparPedidoPendenteDeEnvio();
+        definirFlash("ok", "Rascunho abandonado.");
+        return renderAppVendas();
+
+      default:
+        return;
+    }
+  }
+
+  // =======================================================================
+  // Dispatcher de FORMULÁRIOS (submits)
+  // =======================================================================
+  async function tratarFormulario(nomeForm, form) {
+    const dados = new FormData(form);
+
+    switch (nomeForm) {
+      case "login": {
+        const email = dados.get("email");
+        const senha = dados.get("senha");
+        const lembrar = !!dados.get("lembrar");
+        const resp = await chamarApi("/auth/login", { method: "POST", semAuth: true, body: { email, senha } });
+        if (resp.requires_2fa) {
+          ticket2fa = resp.login_ticket;
+          credenciaisPendentes2fa = { email, senha, lembrar };
+          return renderLogin2fa();
+        }
+        state.accessToken = resp.access_token;
+        state.refreshToken = resp.refresh_token;
+        localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
+        state.usuarioAtual = await chamarApi("/auth/me");
+        aplicarLembrarEmail(email, lembrar);
+        await ofertarSalvarSenha(email, senha);
+        return navegarPara("#/dashboard");
+      }
+      case "login-2fa": {
+        const codigo = dados.get("codigo");
+        const resp = await chamarApi("/auth/2fa/verificar", {
+          method: "POST", semAuth: true, body: { login_ticket: ticket2fa, codigo },
+        });
+        state.accessToken = resp.access_token;
+        state.refreshToken = resp.refresh_token;
+        localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
+        state.usuarioAtual = await chamarApi("/auth/me");
+        if (credenciaisPendentes2fa) {
+          aplicarLembrarEmail(credenciaisPendentes2fa.email, credenciaisPendentes2fa.lembrar);
+          await ofertarSalvarSenha(credenciaisPendentes2fa.email, credenciaisPendentes2fa.senha);
+        }
+        ticket2fa = null;
+        credenciaisPendentes2fa = null;
+        return navegarPara("#/dashboard");
+      }
+      case "salvar-preferencia-notificacao": {
+        const resp = await chamarApi("/notificacoes/minhas-preferencias", {
+          method: "PUT",
+          body: { notificar_por_email: !!dados.get("notificar_por_email") },
+        });
+        state.usuarioAtual.notificar_por_email = resp.notificar_por_email;
+        definirFlash("ok", "Preferência salva.");
+        return renderNotificacoes();
+      }
+      case "salvar-configuracao-email": {
+        await chamarApi("/notificacoes/configuracao-email", {
+          method: "PUT",
+          body: {
+            ativo: !!dados.get("ativo"),
+            smtp_host: dados.get("smtp_host") || undefined,
+            smtp_porta: Number(dados.get("smtp_porta")) || undefined,
+            usar_tls: !!dados.get("usar_tls"),
+            smtp_usuario: dados.get("smtp_usuario") || undefined,
+            smtp_senha: dados.get("smtp_senha") || undefined,
+            remetente_nome: dados.get("remetente_nome") || undefined,
+            remetente_email: dados.get("remetente_email") || undefined,
+          },
+        });
+        definirFlash("ok", "Configuração de e-mail salva.");
+        return renderNotificacoes();
+      }
+      case "criar-usuario": {
+        const perfil_ids = dados.getAll("perfil_ids").map(Number);
+        await chamarApi("/usuarios", {
+          method: "POST",
+          body: { nome: dados.get("nome"), email: dados.get("email"), senha: dados.get("senha"), perfil_ids },
+        });
+        fecharModais();
+        definirFlash("ok", "Usuário criado.");
+        return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      }
+      case "editar-usuario": {
+        await chamarApi(`/usuarios/${form.dataset.id}`, {
+          method: "PUT",
+          body: { nome: dados.get("nome"), email: dados.get("email") },
+        });
+        fecharModais();
+        definirFlash("ok", "Usuário atualizado.");
+        return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      }
+      case "definir-perfis-usuario": {
+        const perfil_ids = dados.getAll("perfil_ids").map(Number);
+        await chamarApi(`/usuarios/${form.dataset.id}/perfis`, { method: "PUT", body: { perfil_ids } });
+        fecharModais();
+        definirFlash("ok", "Perfis atualizados.");
+        return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      }
+      case "criar-perfil": {
+        const permissao_ids = dados.getAll("permissao_ids").map(Number);
+        await chamarApi("/perfis", {
+          method: "POST",
+          body: { nome: dados.get("nome"), descricao: dados.get("descricao"), permissao_ids },
+        });
+        fecharModais();
+        definirFlash("ok", "Perfil criado.");
+        return renderPerfis();
+      }
+      case "definir-permissoes-perfil": {
+        const permissao_ids = dados.getAll("permissao_ids").map(Number);
+        await chamarApi(`/perfis/${form.dataset.id}/permissoes`, { method: "PUT", body: { permissao_ids } });
+        fecharModais();
+        definirFlash("ok", "Permissões atualizadas.");
+        return renderPerfis();
+      }
+      case "criar-empresa": {
+        await chamarApi("/empresas", {
+          method: "POST",
+          body: {
+            razao_social: dados.get("razao_social"),
+            nome_fantasia: dados.get("nome_fantasia"),
+            cnpj: dados.get("cnpj"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Empresa criada.");
+        return renderEmpresas();
+      }
+      case "criar-unidade": {
+        await chamarApi(`/empresas/${form.dataset.id}/unidades`, {
+          method: "POST",
+          body: { nome: dados.get("nome"), tipo: dados.get("tipo"), endereco: dados.get("endereco") },
+        });
+        fecharModais();
+        definirFlash("ok", "Unidade criada.");
+        return renderEmpresas();
+      }
+      case "cancelar-boleto": {
+        await chamarApi(`/financeiro/boletos/${form.dataset.id}/cancelar`, {
+          method: "POST", body: { justificativa: dados.get("justificativa") },
+        });
+        fecharModais();
+        definirFlash("ok", "Boleto cancelado.");
+        return renderFinanceiro();
+      }
+      case "salvar-configuracao-boleto": {
+        await chamarApi("/financeiro/boletos/configuracao", {
+          method: "PUT",
+          body: { provedor: dados.get("provedor"), ambiente: dados.get("ambiente"), token_api: dados.get("token_api") || undefined },
+        });
+        definirFlash("ok", "Configuração de boleto salva.");
+        return renderConfiguracaoBoleto();
+      }
+      case "cancelar-nota": {
+        await chamarApi(`/fiscal/notas/${form.dataset.id}/cancelar`, {
+          method: "POST", body: { justificativa: dados.get("justificativa") },
+        });
+        fecharModais();
+        definirFlash("ok", "NF-e cancelada.");
+        return renderNotaFiscalDetalhe(Number(form.dataset.id));
+      }
+      case "salvar-configuracao-nfe": {
+        await chamarApi("/fiscal/configuracao", {
+          method: "PUT",
+          body: {
+            provedor: dados.get("provedor"), ambiente: dados.get("ambiente"),
+            serie: Number(dados.get("serie")) || 1, token_api: dados.get("token_api") || undefined,
+          },
+        });
+        definirFlash("ok", "Configuração de NF-e salva.");
+        return renderFiscalConfiguracao();
+      }
+      case "salvar-dados-fiscais-empresa": {
+        await chamarApi(`/empresas/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            regime_tributario: dados.get("regime_tributario"),
+            inscricao_estadual: dados.get("inscricao_estadual"),
+            logradouro: dados.get("logradouro"),
+            numero_endereco: dados.get("numero_endereco"),
+            complemento_endereco: dados.get("complemento_endereco"),
+            bairro: dados.get("bairro"),
+            municipio: dados.get("municipio"),
+            codigo_ibge_municipio: dados.get("codigo_ibge_municipio"),
+            uf: (dados.get("uf") || "").toUpperCase(),
+            cep: dados.get("cep"),
+          },
+        });
+        fecharModais();
+        state.cache.empresasSeletor = null;
+        definirFlash("ok", "Dados fiscais da empresa salvos.");
+        return renderEmpresas();
+      }
+      case "filtrar-auditoria": {
+        return renderAuditoria({
+          tabela: dados.get("tabela"),
+          usuario_id: dados.get("usuario_id"),
+          data_inicio: dados.get("data_inicio"),
+          data_fim: dados.get("data_fim"),
+        });
+      }
+      case "filtrar-dre": {
+        return renderDre({
+          data_inicio: dados.get("data_inicio"),
+          data_fim: dados.get("data_fim"),
+        });
+      }
+      case "filtrar-painel-periodo": {
+        return renderPainelGerencial({
+          data_inicio: dados.get("data_inicio"),
+          data_fim: dados.get("data_fim"),
+          empresa_id: dados.get("empresa_id") || null,
+          diasTendencia: Number(dados.get("dias_tendencia")) || 30,
+        });
+      }
+      case "filtrar-tendencia-painel": {
+        // Fase 69 — preserva o período/empresa atuais (vieram como campos
+        // ocultos deste mesmo formulário), só troca a janela da Tendência.
+        return renderPainelGerencial({
+          data_inicio: dados.get("data_inicio") || null,
+          data_fim: dados.get("data_fim") || null,
+          empresa_id: dados.get("empresa_id") || null,
+          diasTendencia: Number(dados.get("dias")) || 30,
+        });
+      }
+      case "filtrar-agenda-aps": {
+        return renderApsAgenda({ dataBase: form.dataset.data, centroId: dados.get("centro_id") });
+      }
+      case "trocar-senha": {
+        await chamarApi("/auth/trocar-senha", {
+          method: "POST",
+          body: { senha_atual: dados.get("senha_atual"), senha_nova: dados.get("senha_nova") },
+        });
+        form.reset();
+        definirFlash("ok", "Senha alterada com sucesso.");
+        return renderMinhaConta();
+      }
+      case "confirmar-2fa": {
+        await chamarApi("/auth/2fa/confirmar", { method: "POST", body: { codigo: dados.get("codigo") } });
+        fecharModais();
+        definirFlash("ok", "2FA ativado com sucesso.");
+        return renderMinhaConta();
+      }
+
+      // ---- Fase 2: Itens ----
+      case "criar-item": {
+        const itemCriado = await chamarApi("/itens", {
+          method: "POST",
+          body: {
+            descricao: dados.get("descricao"), tipo: dados.get("tipo"),
+            unidade_medida: dados.get("unidade_medida"),
+            estoque_minimo: dados.get("estoque_minimo") ? Number(dados.get("estoque_minimo")) : null,
+            requer_analise: dados.get("requer_analise") === "on",
+            requer_fornecedor_homologado: dados.get("requer_fornecedor_homologado") === "on",
+            categoria: dados.get("categoria") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", `Item criado com o código ${itemCriado.codigo}.`);
+        return renderItens();
+      }
+      case "editar-item": {
+        await chamarApi(`/itens/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            descricao: dados.get("descricao"),
+            estoque_minimo: dados.get("estoque_minimo") ? Number(dados.get("estoque_minimo")) : null,
+            status: dados.get("status"),
+            categoria: dados.get("categoria") || null,
+            // Fase 70 — dados fiscais.
+            ncm: dados.get("ncm") || null,
+            cfop_padrao: dados.get("cfop_padrao") || null,
+            origem_mercadoria: dados.get("origem_mercadoria") || "0",
+            cest: dados.get("cest") || null,
+            codigo_tributario_icms: dados.get("codigo_tributario_icms") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Item atualizado.");
+        return renderItens();
+      }
+
+      // ---- Fase 2: Fornecedores ----
+      case "criar-fornecedor": {
+        await chamarApi("/fornecedores", {
+          method: "POST",
+          body: {
+            nome: dados.get("nome"), cnpj: dados.get("cnpj"),
+            lead_time_dias: dados.get("lead_time_dias") ? Number(dados.get("lead_time_dias")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Fornecedor criado.");
+        return renderFornecedores();
+      }
+      case "editar-lead-time-fornecedor": {
+        await chamarApi(`/fornecedores/${form.dataset.id}/lead-time`, {
+          method: "PUT",
+          body: { lead_time_dias: dados.get("lead_time_dias") ? Number(dados.get("lead_time_dias")) : null },
+        });
+        fecharModais();
+        definirFlash("ok", "Lead time do fornecedor atualizado.");
+        return renderFornecedores();
+      }
+      case "alterar-status-fornecedor": {
+        await chamarApi(`/fornecedores/${form.dataset.id}/status`, {
+          method: "POST", body: { status: dados.get("status"), observacoes: dados.get("observacoes") },
+        });
+        fecharModais();
+        definirFlash("ok", "Status do fornecedor atualizado.");
+        return renderFornecedores();
+      }
+      case "homologar-item": {
+        await chamarApi(`/fornecedores/${form.dataset.id}/itens`, {
+          method: "POST", body: { item_id: Number(dados.get("item_id")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Item homologado para este fornecedor.");
+        return renderFornecedores();
+      }
+
+      // ---- Fase 2: Lotes / Análises ----
+      case "receber-lote": {
+        await chamarApi("/lotes/recebimento", {
+          method: "POST",
+          body: {
+            item_id: Number(dados.get("item_id")),
+            fornecedor_id: dados.get("fornecedor_id") ? Number(dados.get("fornecedor_id")) : null,
+            quantidade: Number(dados.get("quantidade")), unidade: dados.get("unidade"),
+            lote_fornecedor: dados.get("lote_fornecedor") || null, nota_fiscal: dados.get("nota_fiscal") || null,
+            fabricacao: dados.get("fabricacao") || null, validade: dados.get("validade") || null,
+            custo_unitario: dados.get("custo_unitario") ? Number(dados.get("custo_unitario")) : null,
+            // Fase 52 — opcional; omitir mantém o lote sem empresa, igual a antes desta fase.
+            empresa_id: dados.get("empresa_id") ? Number(dados.get("empresa_id")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Recebimento registrado — lote em quarentena.");
+        return renderLotes();
+      }
+      case "solicitar-analise": {
+        const ensaios = parseEnsaiosTexto(dados.get("ensaios"));
+        if (!ensaios.length) throw new Error("Informe ao menos um ensaio.");
+        await chamarApi("/analises", { method: "POST", body: { lote_id: Number(form.dataset.id), ensaios } });
+        fecharModais();
+        definirFlash("ok", "Análise solicitada.");
+        return renderLoteDetalhe(Number(form.dataset.id));
+      }
+      case "registrar-resultado": {
+        const analiseId = Number(form.dataset.analiseId);
+        const resultadoId = Number(form.dataset.resultadoId);
+        const body = { resultado: Number(dados.get("resultado")) };
+        if (dados.get("motivo")) body.motivo = dados.get("motivo");
+        await chamarApi(`/analises/${analiseId}/resultados/${resultadoId}`, { method: "POST", body });
+        fecharModais();
+        definirFlash("ok", "Resultado registrado.");
+        const analiseAtualizada = await chamarApi(`/analises/${analiseId}`);
+        return renderLoteDetalhe(analiseAtualizada.lote_id);
+      }
+      case "aprovar-lote": {
+        const loteId = Number(form.dataset.id);
+        await chamarApi(`/lotes/${loteId}/aprovar`, {
+          method: "POST",
+          body: { aprovar_com_ressalva: dados.get("aprovar_com_ressalva") === "on", justificativa: dados.get("justificativa") || null },
+        });
+        fecharModais();
+        definirFlash("ok", "Lote aprovado.");
+        return renderLoteDetalhe(loteId);
+      }
+      case "reprovar-lote": {
+        const loteId = Number(form.dataset.id);
+        await chamarApi(`/lotes/${loteId}/reprovar`, { method: "POST", body: { motivo: dados.get("motivo") } });
+        fecharModais();
+        definirFlash("ok", "Lote reprovado.");
+        return renderLoteDetalhe(loteId);
+      }
+      case "bloquear-lote": {
+        const loteId = Number(form.dataset.id);
+        await chamarApi(`/lotes/${loteId}/bloquear`, { method: "POST", body: { motivo: dados.get("motivo") } });
+        fecharModais();
+        definirFlash("ok", "Lote bloqueado.");
+        return renderLoteDetalhe(loteId);
+      }
+
+      // ---- Fase 2: Desvios ----
+      case "criar-desvio": {
+        await chamarApi("/desvios", {
+          method: "POST",
+          body: { origem: dados.get("origem"), descricao: dados.get("descricao"), criticidade: dados.get("criticidade") },
+        });
+        fecharModais();
+        definirFlash("ok", "Desvio aberto.");
+        return renderDesvios();
+      }
+      case "editar-desvio": {
+        await chamarApi(`/desvios/${form.dataset.id}`, {
+          method: "PUT",
+          body: { causa_raiz: dados.get("causa_raiz"), plano_acao: dados.get("plano_acao"), status: dados.get("status") },
+        });
+        fecharModais();
+        definirFlash("ok", "Desvio atualizado.");
+        return renderDesvios();
+      }
+      case "encerrar-desvio": {
+        await chamarApi(`/desvios/${form.dataset.id}/encerrar`, {
+          method: "POST", body: { verificacao_eficacia: dados.get("verificacao_eficacia") },
+        });
+        fecharModais();
+        definirFlash("ok", "Desvio encerrado.");
+        return renderDesvios();
+      }
+
+      // ---- Fase 3: Fórmulas ----
+      case "criar-formula": {
+        const itensPorCodigo = {};
+        (state.cache.itens || []).forEach((i) => { itensPorCodigo[i.codigo] = i; });
+        const composicao = parseComposicaoTexto(dados.get("composicao"), itensPorCodigo);
+        if (!composicao.length) throw new Error("Informe ao menos um item na composição.");
+        await chamarApi("/formulas", {
+          method: "POST",
+          body: {
+            item_produzido_id: Number(dados.get("item_produzido_id")),
+            rendimento_teorico: Number(dados.get("rendimento_teorico")),
+            unidade_rendimento: dados.get("unidade_rendimento"),
+            observacoes: dados.get("observacoes") || null,
+            itens: composicao,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Fórmula criada como rascunho. Ative-a para poder usá-la em uma ordem de produção.");
+        return renderFormulas();
+      }
+
+      // ---- Fase 3: Ordens de Produção ----
+      case "criar-ordem": {
+        await chamarApi("/producao/ordens", {
+          method: "POST",
+          body: {
+            formula_id: Number(dados.get("formula_id")),
+            quantidade_planejada: Number(dados.get("quantidade_planejada")),
+            unidade: dados.get("unidade"),
+            // Fase 52 — opcional; omitir mantém a ordem sem empresa, igual a antes desta fase.
+            empresa_id: dados.get("empresa_id") ? Number(dados.get("empresa_id")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Ordem de produção criada.");
+        return renderOrdensProducao();
+      }
+      case "registrar-consumo": {
+        const ordemId = Number(form.dataset.id);
+        await chamarApi(`/producao/ordens/${ordemId}/consumir`, {
+          method: "POST",
+          body: { lote_id: Number(dados.get("lote_id")), quantidade: Number(dados.get("quantidade")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Consumo registrado.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      case "concluir-ordem": {
+        const ordemId = Number(form.dataset.id);
+        const horasApontadas = dados.get("horas_apontadas");
+        const corpo = {
+          quantidade_produzida: Number(dados.get("quantidade_produzida")),
+          // Fase 30 — opcional: em branco não manda o campo, backend
+          // grava null (mesmo padrão de quantidade_perda abaixo, mas sem
+          // default 0 — 0 horas não é "não apontado", é diferente).
+          horas_apontadas: horasApontadas ? Number(horasApontadas) : undefined,
+        };
+        // Fase 50 — quando a ordem tem etapas cadastradas, o modal nem
+        // mostra os campos de perda (ver modalConcluirOrdem) — e o
+        // backend REJEITA quantidade_perda/motivo_perda nesse caso, então
+        // o corpo da requisição também não pode incluir essas chaves.
+        if (form.dataset.temEtapas !== "1") {
+          const quantidadePerda = dados.get("quantidade_perda");
+          corpo.quantidade_perda = quantidadePerda ? Number(quantidadePerda) : 0;
+          corpo.motivo_perda = dados.get("motivo_perda") || undefined;
+        }
+        await chamarApi(`/producao/ordens/${ordemId}/concluir`, { method: "POST", body: corpo });
+        fecharModais();
+        definirFlash("ok", "Ordem concluída — lote gerado em quarentena.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      // ---- Fase 50: Etapas do processo (perda por etapa) ----
+      case "criar-etapa-ordem": {
+        const ordemId = Number(form.dataset.id);
+        const tipoEtapaId = dados.get("tipo_etapa_id");
+        await chamarApi(`/producao/ordens/${ordemId}/etapas`, {
+          method: "POST",
+          body: { nome: dados.get("nome") || undefined, tipo_etapa_id: tipoEtapaId ? Number(tipoEtapaId) : undefined },
+        });
+        fecharModais();
+        definirFlash("ok", "Etapa cadastrada.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      case "editar-etapa-ordem": {
+        const ordemId = Number(form.dataset.id);
+        await chamarApi(`/producao/ordens/${ordemId}/etapas/${form.dataset.etapaId}`, {
+          method: "PUT", body: { nome: dados.get("nome") },
+        });
+        fecharModais();
+        definirFlash("ok", "Etapa atualizada.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      case "concluir-etapa-ordem": {
+        const ordemId = Number(form.dataset.id);
+        const quantidadePerda = dados.get("quantidade_perda");
+        const valorRegistrado = dados.get("valor_registrado");
+        await chamarApi(`/producao/ordens/${ordemId}/etapas/${form.dataset.etapaId}/concluir`, {
+          method: "POST",
+          body: {
+            quantidade_perda: quantidadePerda ? Number(quantidadePerda) : 0,
+            motivo_perda: dados.get("motivo_perda") || undefined,
+            valor_registrado: valorRegistrado ? Number(valorRegistrado) : undefined,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Etapa concluída.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      case "cancelar-ordem": {
+        const ordemId = Number(form.dataset.id);
+        await chamarApi(`/producao/ordens/${ordemId}/cancelar`, { method: "POST", body: { motivo: dados.get("motivo") } });
+        fecharModais();
+        definirFlash("ok", "Ordem cancelada.");
+        return renderOrdensProducao();
+      }
+
+      // ---- Fase 25: APS — centros de trabalho e agendamento ----
+      case "criar-centro-trabalho": {
+        await chamarApi("/aps/centros-trabalho", {
+          method: "POST",
+          body: {
+            nome: dados.get("nome"), descricao: dados.get("descricao"),
+            capacidade_paralela: Number(dados.get("capacidade_paralela")),
+            // Fase 30 — opcionais: campo em branco vira null (sem taxa cadastrada), não 0.
+            custo_hora_mao_de_obra: dados.get("custo_hora_mao_de_obra") ? Number(dados.get("custo_hora_mao_de_obra")) : null,
+            custo_hora_overhead: dados.get("custo_hora_overhead") ? Number(dados.get("custo_hora_overhead")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Centro de trabalho cadastrado.");
+        return renderCentrosTrabalho();
+      }
+      case "editar-centro-trabalho": {
+        await chamarApi(`/aps/centros-trabalho/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            nome: dados.get("nome"), descricao: dados.get("descricao"),
+            capacidade_paralela: Number(dados.get("capacidade_paralela")), status: dados.get("status"),
+            custo_hora_mao_de_obra: dados.get("custo_hora_mao_de_obra") ? Number(dados.get("custo_hora_mao_de_obra")) : null,
+            custo_hora_overhead: dados.get("custo_hora_overhead") ? Number(dados.get("custo_hora_overhead")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Centro de trabalho atualizado.");
+        return renderCentrosTrabalho();
+      }
+      // ---- Fase 75: catálogo de Tipos de Etapa ----
+      case "criar-tipo-etapa": {
+        await chamarApi("/producao/tipos-etapa", {
+          method: "POST",
+          body: { nome: dados.get("nome"), unidade_valor: dados.get("unidade_valor") || null },
+        });
+        fecharModais();
+        definirFlash("ok", "Tipo de etapa cadastrado.");
+        return renderTiposEtapaProducao();
+      }
+      case "editar-tipo-etapa": {
+        await chamarApi(`/producao/tipos-etapa/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            nome: dados.get("nome"), unidade_valor: dados.get("unidade_valor") || null,
+            ordem_padrao: Number(dados.get("ordem_padrao")), status: dados.get("status"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Tipo de etapa atualizado.");
+        return renderTiposEtapaProducao();
+      }
+      // ---- Fase 75: apontamento direto pelo Painel de Chão de Fábrica ----
+      case "painel-concluir-etapa": {
+        const valorRegistrado = dados.get("valor_registrado");
+        const quantidadePerda = dados.get("quantidade_perda");
+        await chamarApi(
+          `/producao/ordens/${form.dataset.ordemId}/etapas/${form.dataset.etapaId}/concluir`,
+          {
+            method: "POST",
+            body: {
+              quantidade_perda: quantidadePerda ? Number(quantidadePerda) : 0,
+              motivo_perda: dados.get("motivo_perda") || undefined,
+              valor_registrado: valorRegistrado ? Number(valorRegistrado) : undefined,
+            },
+          }
+        );
+        fecharModais();
+        definirFlash("ok", "Etapa concluída.");
+        return renderPainelTempoReal();
+      }
+      case "agendar-ordem": {
+        const ordemId = Number(form.dataset.id);
+        await chamarApi(`/aps/ordens/${ordemId}/agendar`, {
+          method: "POST",
+          body: {
+            centro_trabalho_id: Number(dados.get("centro_trabalho_id")),
+            inicio_planejado: dados.get("inicio_planejado"),
+            fim_planejado: dados.get("fim_planejado"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Ordem agendada.");
+        return renderOrdemDetalhe(ordemId);
+      }
+
+      // ---- Fase 54: MRP — Sugestão Automática de Compra ----
+      case "atender-sugestao-compra": {
+        const sugestaoId = Number(form.dataset.id);
+        const contaPagarId = dados.get("conta_pagar_id");
+        await chamarApi(`/aps/sugestoes-compra/${sugestaoId}/atender`, {
+          method: "POST", body: { conta_pagar_id: contaPagarId ? Number(contaPagarId) : null },
+        });
+        fecharModais();
+        definirFlash("ok", "Sugestão marcada como atendida.");
+        return renderApsSugestoesCompra();
+      }
+      case "descartar-sugestao-compra": {
+        const sugestaoId = Number(form.dataset.id);
+        await chamarApi(`/aps/sugestoes-compra/${sugestaoId}/descartar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Sugestão descartada.");
+        return renderApsSugestoesCompra();
+      }
+      case "gerar-pedido-de-sugestao": {
+        const sugestaoId = Number(form.dataset.id);
+        const precoUnitario = dados.get("preco_unitario");
+        const pedidoGerado = await chamarApi(`/aps/sugestoes-compra/${sugestaoId}/gerar-pedido-compra`, {
+          method: "POST",
+          body: {
+            fornecedor_id: Number(dados.get("fornecedor_id")),
+            preco_unitario: precoUnitario ? Number(precoUnitario) : null,
+            observacoes: dados.get("observacoes") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", `Pedido de compra ${pedidoGerado.numero} gerado (rascunho) a partir da sugestão.`);
+        return navegarPara(`#/compras-pedidos/${pedidoGerado.id}`);
+      }
+
+      // ---- Fase 58: Pedido de Compra formal ----
+      case "novo-pedido-compra": {
+        // Formato "codigo;quantidade;unidade;preco_opcional", um item por
+        // linha — mesmo padrão textual já usado em outras telas do sistema
+        // (ex.: BOM/fórmulas) em vez de uma UI de linhas dinâmicas em JS.
+        const itensPorCodigo = {};
+        for (const it of state.cache.itens || []) itensPorCodigo[it.codigo] = it;
+        const itensPedido = parseItensPedidoCompraTexto(dados.get("itens"), itensPorCodigo);
+        if (!itensPedido.length) throw new Error("Informe ao menos um item.");
+        const pedidoCriado = await chamarApi("/compras/pedidos", {
+          method: "POST",
+          body: {
+            fornecedor_id: Number(dados.get("fornecedor_id")),
+            itens: itensPedido,
+            observacoes: dados.get("observacoes") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", `Pedido de compra ${pedidoCriado.numero} criado (rascunho).`);
+        return navegarPara(`#/compras-pedidos/${pedidoCriado.id}`);
+      }
+      case "cancelar-pedido-compra": {
+        const pedidoId = Number(form.dataset.id);
+        await chamarApi(`/compras/pedidos/${pedidoId}/cancelar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Pedido de compra cancelado.");
+        return renderPedidoCompraDetalhe(pedidoId);
+      }
+      case "receber-contra-pedido": {
+        const pedidoIdRecebimento = Number(form.dataset.pedidoId);
+        await chamarApi("/lotes/recebimento", {
+          method: "POST",
+          body: {
+            item_id: Number(form.dataset.itemId),
+            pedido_compra_id: pedidoIdRecebimento,
+            quantidade: Number(dados.get("quantidade")), unidade: form.dataset.unidade,
+            lote_fornecedor: dados.get("lote_fornecedor") || null, nota_fiscal: dados.get("nota_fiscal") || null,
+            fabricacao: dados.get("fabricacao") || null, validade: dados.get("validade") || null,
+            custo_unitario: dados.get("custo_unitario") ? Number(dados.get("custo_unitario")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Recebimento registrado e vinculado ao pedido de compra — lote em quarentena.");
+        return renderPedidoCompraDetalhe(pedidoIdRecebimento);
+      }
+      case "gerar-conta-pagar-de-pedido": {
+        const pedidoIdContaPagar = Number(form.dataset.id);
+        const pedidoComContaPagar = await chamarApi(`/compras/pedidos/${pedidoIdContaPagar}/gerar-conta-pagar`, {
+          method: "POST",
+          body: {
+            vencimento: dados.get("vencimento"),
+            descricao: dados.get("descricao") || null,
+            empresa_id: dados.get("empresa_id") ? Number(dados.get("empresa_id")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", `Conta a pagar ${pedidoComContaPagar.conta_pagar_numero} gerada a partir deste pedido.`);
+        return renderPedidoCompraDetalhe(pedidoIdContaPagar);
+      }
+
+      // ---- Fase 66: Cotação Comparativa de Fornecedores (RFQ) ----
+      case "nova-cotacao": {
+        const itensPorCodigoCotacao = {};
+        for (const it of state.cache.itens || []) itensPorCodigoCotacao[it.codigo] = it;
+        const itensCotacao = parseItensCotacaoTexto(dados.get("itens"), itensPorCodigoCotacao);
+        if (!itensCotacao.length) throw new Error("Informe ao menos um item.");
+        const fornecedoresConvidados = dados.getAll("fornecedores_convidados").map(Number);
+        if (!fornecedoresConvidados.length) throw new Error("Convide ao menos um fornecedor.");
+        const cotacaoCriada = await chamarApi("/compras/cotacoes", {
+          method: "POST",
+          body: {
+            itens: itensCotacao,
+            fornecedores_convidados: fornecedoresConvidados,
+            observacoes: dados.get("observacoes") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", `Cotação ${cotacaoCriada.numero} criada (aberta).`);
+        return navegarPara(`#/compras-cotacoes/${cotacaoCriada.id}`);
+      }
+      case "registrar-resposta-cotacao": {
+        const cotacaoIdResposta = Number(form.dataset.cotacaoId);
+        const fornecedorIdResposta = Number(form.dataset.fornecedorId);
+        const itensCotacaoAtual = (state.cache.cotacaoAtual && state.cache.cotacaoAtual.itens) || [];
+        const respostas = itensCotacaoAtual.map((it) => {
+          const preco = dados.get(`preco_${it.item_id}`);
+          const prazo = dados.get(`prazo_${it.item_id}`);
+          return {
+            item_id: it.item_id,
+            preco_unitario: Number(preco),
+            prazo_entrega_dias: prazo ? Number(prazo) : null,
+          };
+        });
+        await chamarApi(`/compras/cotacoes/${cotacaoIdResposta}/respostas`, {
+          method: "POST", body: { fornecedor_id: fornecedorIdResposta, respostas },
+        });
+        fecharModais();
+        definirFlash("ok", "Resposta do fornecedor registrada.");
+        return renderCotacaoDetalhe(cotacaoIdResposta);
+      }
+      case "cancelar-cotacao": {
+        const cotacaoIdCancelar = Number(form.dataset.id);
+        await chamarApi(`/compras/cotacoes/${cotacaoIdCancelar}/cancelar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Cotação cancelada.");
+        return renderCotacaoDetalhe(cotacaoIdCancelar);
+      }
+
+      // ---- Fase 61: Alçada por Valor no Envio do Pedido de Compra ----
+      case "rejeitar-envio-pedido": {
+        const pendenteIdRejeicao = Number(form.dataset.pendenteId);
+        const pedidoIdRejeicao = Number(form.dataset.pedidoId);
+        await chamarApi(`/compras/pedidos/envios-pendentes/${pendenteIdRejeicao}/rejeitar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Solicitação de envio rejeitada — o pedido continua em rascunho, nada foi enviado ao fornecedor.");
+        return renderPedidoCompraDetalhe(pedidoIdRejeicao);
+      }
+      case "configurar-alcada-pedido": {
+        await chamarApi("/compras/configuracao", {
+          method: "PUT", body: { limiar_valor_pedido_grande: Number(dados.get("limiar_valor_pedido_grande")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Alçada de envio de pedido de compra atualizada.");
+        return renderPedidosCompra();
+      }
+
+      // ---- Fase 4: Estoque (WMS) ----
+      case "criar-posicao-estoque": {
+        await chamarApi("/estoque/posicoes", {
+          method: "POST",
+          body: {
+            unidade_id: Number(dados.get("unidade_id")),
+            codigo: dados.get("codigo"),
+            descricao: dados.get("descricao") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Posição de armazenagem criada.");
+        return renderEstoque();
+      }
+      case "enderecar-lote": {
+        await chamarApi("/estoque/enderecamentos", {
+          method: "POST",
+          body: {
+            lote_id: Number(form.dataset.id),
+            posicao_id: Number(dados.get("posicao_id")),
+            quantidade: Number(dados.get("quantidade")),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Lote endereçado.");
+        return renderEstoque();
+      }
+      case "transferir-estoque": {
+        await chamarApi("/estoque/transferencias", {
+          method: "POST",
+          body: {
+            lote_id: Number(form.dataset.loteId),
+            posicao_origem_id: Number(form.dataset.posicaoOrigemId),
+            posicao_destino_id: Number(dados.get("posicao_destino_id")),
+            quantidade: Number(dados.get("quantidade")),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Transferência registrada.");
+        return renderEstoque();
+      }
+      case "ajustar-estoque": {
+        await chamarApi("/estoque/ajustes", {
+          method: "POST",
+          body: {
+            lote_id: Number(form.dataset.loteId),
+            posicao_id: Number(form.dataset.posicaoId),
+            quantidade: Number(dados.get("quantidade")),
+            motivo: dados.get("motivo"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Ajuste registrado.");
+        return renderEstoque();
+      }
+      case "baixa-estoque": {
+        await chamarApi("/estoque/baixas", {
+          method: "POST",
+          body: {
+            lote_id: Number(form.dataset.loteId),
+            posicao_id: Number(form.dataset.posicaoId),
+            quantidade: Number(dados.get("quantidade")),
+            motivo: dados.get("motivo"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Baixa registrada.");
+        return renderEstoque();
+      }
+      case "consultar-fefo": {
+        const item_id = dados.get("item_id");
+        const quantidade = dados.get("quantidade");
+        const resultado = await chamarApi(`/estoque/fefo?item_id=${encodeURIComponent(item_id)}&quantidade=${encodeURIComponent(quantidade)}`);
+        return renderEstoque({ item_id, quantidade, resultado });
+      }
+      case "nova-contagem-estoque": {
+        const contagem = await chamarApi("/estoque/contagens", {
+          method: "POST",
+          body: {
+            unidade_id: Number(dados.get("unidade_id")),
+            tipo: dados.get("tipo"),
+            observacao: dados.get("observacao") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", `Contagem ${contagem.numero} iniciada.`);
+        await renderEstoque();
+        modalDetalheContagem(contagem);
+        return;
+      }
+      case "configurar-alcada-divergencia": {
+        await chamarApi("/estoque/configuracao", {
+          method: "PUT",
+          body: {
+            limiar_percentual_divergencia_grande: Number(dados.get("limiar_percentual_divergencia_grande")),
+            limiar_valor_ajuste_divergencia_grande: Number(dados.get("limiar_valor_ajuste_divergencia_grande")),
+          },
+        });
+        fecharModais();
+        // Mensagem mantida idêntica à da Fase 32 de propósito — o
+        // teste e2e daquela fase (teste_fase32_navegador.js) já verifica
+        // este texto exato, e o formulário continua sendo o mesmo, só
+        // com um campo novo.
+        definirFlash("ok", "Limiar de divergência atualizado.");
+        return renderEstoque();
+      }
+      case "salvar-agendamento-contagem": {
+        const agendamentoId = form.dataset.id ? Number(form.dataset.id) : null;
+        const corpo = {
+          unidade_id: Number(dados.get("unidade_id")),
+          tipo: dados.get("tipo"),
+          cadencia: dados.get("cadencia"),
+          percentual_itens: dados.get("percentual_itens") ? Number(dados.get("percentual_itens")) : null,
+          dia_semana: dados.get("dia_semana") ? Number(dados.get("dia_semana")) : null,
+          dia_mes: dados.get("dia_mes") ? Number(dados.get("dia_mes")) : null,
+          observacao: dados.get("observacao") || null,
+        };
+        if (agendamentoId) {
+          corpo.ativo = dados.get("ativo") === "on";
+          await chamarApi(`/estoque/agendamentos/${agendamentoId}`, { method: "PUT", body: corpo });
+        } else {
+          await chamarApi("/estoque/agendamentos", { method: "POST", body: corpo });
+        }
+        fecharModais();
+        definirFlash("ok", agendamentoId ? "Agendamento de contagem atualizado." : "Agendamento de contagem criado.");
+        return renderEstoque();
+      }
+      case "adicionar-item-contagem": {
+        const contagemId = Number(form.dataset.id);
+        const contagem = await chamarApi(`/estoque/contagens/${contagemId}/itens`, {
+          method: "POST",
+          body: { lote_id: Number(dados.get("lote_id")), posicao_id: Number(dados.get("posicao_id")) },
+        });
+        modalDetalheContagem(contagem);
+        return;
+      }
+      case "contar-item-contagem": {
+        const contagemId = Number(form.dataset.contagemId);
+        const itemId = Number(form.dataset.itemId);
+        const contagem = await chamarApi(`/estoque/contagens/${contagemId}/itens/${itemId}/contar`, {
+          method: "POST",
+          body: { quantidade_contada: Number(dados.get("quantidade_contada")) },
+        });
+        fecharModais();
+        await renderEstoque();
+        modalDetalheContagem(contagem);
+        return;
+      }
+      case "cancelar-contagem": {
+        const contagem = await chamarApi(`/estoque/contagens/${form.dataset.id}/cancelar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        definirFlash("ok", `Contagem ${contagem.numero} cancelada.`);
+        fecharModais();
+        return renderEstoque();
+      }
+      case "rejeitar-ajuste-contagem": {
+        const contagemId = Number(form.dataset.contagemId);
+        const itemId = Number(form.dataset.itemId);
+        const contagem = await chamarApi(`/estoque/contagens/${contagemId}/itens/${itemId}/rejeitar-ajuste`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        definirFlash("ok", "Ajuste rejeitado — nenhuma alteração foi feita no estoque.");
+        fecharModais();
+        await renderEstoque();
+        modalDetalheContagem(contagem);
+        return;
+      }
+
+      // ---- Fase 5: Comercial (CRM + Pedidos de Venda) ----
+      case "criar-cliente": {
+        await chamarApi("/comercial/clientes", {
+          method: "POST",
+          body: {
+            razao_social: dados.get("razao_social"), nome_fantasia: dados.get("nome_fantasia") || null,
+            cnpj: dados.get("cnpj"), endereco: dados.get("endereco") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Cliente cadastrado.");
+        return renderComercial();
+      }
+      case "editar-cliente": {
+        await chamarApi(`/comercial/clientes/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            nome_fantasia: dados.get("nome_fantasia") || null, endereco: dados.get("endereco") || null, status: dados.get("status"),
+            // Fase 63 — campo em branco limpa o limite (envia null); com valor, converte para número.
+            limite_credito: dados.get("limite_credito") ? Number(dados.get("limite_credito")) : null,
+            // Fase 70 — dados fiscais (destinatário da NF-e).
+            inscricao_estadual: dados.get("inscricao_estadual") || null,
+            logradouro: dados.get("logradouro") || null,
+            numero_endereco: dados.get("numero_endereco") || null,
+            complemento_endereco: dados.get("complemento_endereco") || null,
+            bairro: dados.get("bairro") || null,
+            municipio: dados.get("municipio") || null,
+            codigo_ibge_municipio: dados.get("codigo_ibge_municipio") || null,
+            uf: (dados.get("uf") || "").toUpperCase() || null,
+            cep: dados.get("cep") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Cliente atualizado.");
+        return renderComercial();
+      }
+      case "criar-pedido": {
+        const pedido = await chamarApi("/comercial/pedidos", {
+          method: "POST",
+          body: {
+            cliente_id: Number(dados.get("cliente_id")),
+            itens: [{
+              item_id: Number(dados.get("item_id")), quantidade: Number(dados.get("quantidade")),
+              unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
+            }],
+            // Fase 52 — opcional; a conta a receber gerada na expedição herda
+            // este empresa_id automaticamente (nunca perguntado de novo).
+            empresa_id: dados.get("empresa_id") ? Number(dados.get("empresa_id")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Pedido criado como rascunho.");
+        return navegarPara(`#/pedido/${pedido.id}`);
+      }
+      case "adicionar-item-pedido": {
+        await chamarApi(`/comercial/pedidos/${form.dataset.id}/itens`, {
+          method: "POST",
+          body: {
+            item_id: Number(dados.get("item_id")), quantidade: Number(dados.get("quantidade")),
+            unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Item adicionado ao pedido.");
+        return renderPedidoDetalhe(Number(form.dataset.id));
+      }
+      case "cancelar-pedido": {
+        const pedidoId = Number(form.dataset.id);
+        await chamarApi(`/comercial/pedidos/${pedidoId}/cancelar`, { method: "POST", body: { motivo: dados.get("motivo") } });
+        fecharModais();
+        definirFlash("ok", "Pedido cancelado.");
+        return renderPedidoDetalhe(pedidoId);
+      }
+
+      // ---- Fase 63: Limite de Crédito do Cliente (Alçada na Confirmação do Pedido de Venda) ----
+      case "rejeitar-confirmacao-pedido": {
+        const pendenteIdRejeicaoConfirmacao = Number(form.dataset.pendenteId);
+        const pedidoIdRejeicaoConfirmacao = Number(form.dataset.pedidoId);
+        await chamarApi(`/comercial/pedidos/confirmacoes-pendentes/${pendenteIdRejeicaoConfirmacao}/rejeitar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Solicitação de confirmação rejeitada — o pedido continua em rascunho, nada foi reservado.");
+        return renderPedidoDetalhe(pedidoIdRejeicaoConfirmacao);
+      }
+
+      // ---- Fase 6: Financeiro ----
+      case "filtrar-contas-receber":
+        state.cache.filtroReceberStatus = dados.get("status") || "";
+        return renderFinanceiro();
+      case "filtrar-contas-pagar":
+        state.cache.filtroPagarStatus = dados.get("status") || "";
+        return renderFinanceiro();
+      case "criar-conta-pagar": {
+        const loteId = dados.get("lote_id");
+        await chamarApi("/financeiro/contas-pagar", {
+          method: "POST",
+          body: {
+            fornecedor_id: Number(dados.get("fornecedor_id")),
+            descricao: dados.get("descricao"),
+            valor_total: Number(dados.get("valor_total")),
+            vencimento: dados.get("vencimento"),
+            categoria: dados.get("categoria") || "compra",
+            lote_id: loteId ? Number(loteId) : null,
+            // Fase 52 — opcional; omitir mantém a conta sem empresa, igual a antes desta fase.
+            empresa_id: dados.get("empresa_id") ? Number(dados.get("empresa_id")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Conta a pagar lançada.");
+        return renderFinanceiro();
+      }
+      case "configurar-limite-estorno": {
+        await chamarApi("/financeiro/configuracao", {
+          method: "PUT",
+          body: {
+            limite_dias_estorno_baixa: Number(dados.get("limite_dias_estorno_baixa")),
+            percentual_imposto_venda: Number(dados.get("percentual_imposto_venda")),
+            tolerancia_dias_conciliacao: Number(dados.get("tolerancia_dias_conciliacao")),
+            percentual_pis: Number(dados.get("percentual_pis")),
+            percentual_cofins: Number(dados.get("percentual_cofins")),
+            percentual_icms: Number(dados.get("percentual_icms")),
+            percentual_iss: Number(dados.get("percentual_iss")),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Configurações do Financeiro atualizadas.");
+        return renderFinanceiro();
+      }
+      case "baixar-conta-receber": {
+        const contaId = Number(form.dataset.id);
+        const dataPagamento = dados.get("data_pagamento");
+        const resultado = await chamarApi(`/financeiro/contas-receber/${contaId}/baixas`, {
+          method: "POST",
+          body: {
+            valor: Number(dados.get("valor")), forma_pagamento: dados.get("forma_pagamento"),
+            data_pagamento: dataPagamento || null, observacao: dados.get("observacao") || null,
+          },
+        });
+        fecharModais();
+        if (resultado.baixa_pendente_criada_id) {
+          // Fase 31: valor acima do limiar de alçada — não entrou no
+          // ledger na hora, ficou pendente de aprovação de um segundo
+          // usuário. O saldo em aberto não muda até lá.
+          definirFlash("ok", "Solicitação de recebimento registrada — como o valor está acima do limite de alçada, ela fica pendente até um segundo usuário aprovar. O saldo em aberto não foi alterado.");
+        } else {
+          definirFlash("ok", "Recebimento registrado.");
+        }
+        return renderFinanceiro();
+      }
+      case "baixar-conta-pagar": {
+        const contaId = Number(form.dataset.id);
+        const dataPagamento = dados.get("data_pagamento");
+        const resultado = await chamarApi(`/financeiro/contas-pagar/${contaId}/baixas`, {
+          method: "POST",
+          body: {
+            valor: Number(dados.get("valor")), forma_pagamento: dados.get("forma_pagamento"),
+            data_pagamento: dataPagamento || null, observacao: dados.get("observacao") || null,
+          },
+        });
+        fecharModais();
+        if (resultado.baixa_pendente_criada_id) {
+          definirFlash("ok", "Solicitação de pagamento registrada — como o valor está acima do limite de alçada, ela fica pendente até um segundo usuário aprovar. O saldo em aberto não foi alterado.");
+        } else {
+          definirFlash("ok", "Pagamento registrado.");
+        }
+        return renderFinanceiro();
+      }
+      case "cancelar-conta-receber": {
+        const contaId = Number(form.dataset.id);
+        await chamarApi(`/financeiro/contas-receber/${contaId}/cancelar`, { method: "POST", body: { motivo: dados.get("motivo") } });
+        fecharModais();
+        definirFlash("ok", "Conta a receber cancelada.");
+        return renderFinanceiro();
+      }
+      case "cancelar-conta-pagar": {
+        const contaId = Number(form.dataset.id);
+        await chamarApi(`/financeiro/contas-pagar/${contaId}/cancelar`, { method: "POST", body: { motivo: dados.get("motivo") } });
+        fecharModais();
+        definirFlash("ok", "Conta a pagar cancelada.");
+        return renderFinanceiro();
+      }
+      case "estornar-baixa": {
+        const tipo = form.dataset.tipo;
+        const contaId = Number(form.dataset.contaId);
+        const baixaId = Number(form.dataset.baixaId);
+        const recurso = tipo === "receber" ? "contas-receber" : "contas-pagar";
+        const resultado = await chamarApi(`/financeiro/${recurso}/${contaId}/baixas/${baixaId}/estornar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        if (resultado.estorno_pendente_criado_id) {
+          // Fase 22: valor acima do limiar de alçada — não reverteu na
+          // hora, ficou pendente de aprovação de um segundo usuário.
+          definirFlash("ok", "Solicitação de estorno registrada — como o valor está acima do limite de alçada, ela fica pendente até um segundo usuário aprovar. O saldo não foi alterado.");
+        } else {
+          definirFlash("ok", "Baixa estornada com sucesso.");
+        }
+        return renderFinanceiro();
+      }
+      case "rejeitar-estorno": {
+        const tipo = form.dataset.tipo;
+        const pendenteId = Number(form.dataset.pendenteId);
+        const recurso = tipo === "receber" ? "contas-receber" : "contas-pagar";
+        await chamarApi(`/financeiro/${recurso}/estornos-pendentes/${pendenteId}/rejeitar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        definirFlash("ok", "Solicitação de estorno rejeitada — nenhuma alteração foi feita no saldo.");
+        fecharModais();
+        return renderFinanceiro();
+      }
+      case "rejeitar-baixa-registro": {
+        const tipo = form.dataset.tipo;
+        const pendenteId = Number(form.dataset.pendenteId);
+        const recurso = tipo === "receber" ? "contas-receber" : "contas-pagar";
+        await chamarApi(`/financeiro/${recurso}/baixas-pendentes/${pendenteId}/rejeitar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        definirFlash("ok", "Solicitação de registro de baixa rejeitada — nada foi lançado, o saldo em aberto não mudou.");
+        fecharModais();
+        return renderFinanceiro();
+      }
+
+      // ---- Fase 40: Conciliação Bancária ----
+      case "importar-extrato-bancario": {
+        const arquivo = form.querySelector('input[type="file"]').files[0];
+        if (!arquivo) throw new Error("Selecione um arquivo .ofx.");
+        const conteudo = await lerArquivoComoBase64(arquivo);
+        const extrato = await chamarApi("/financeiro/extratos/importar", {
+          method: "POST", body: { nome_arquivo: arquivo.name, dados: conteudo },
+        });
+        fecharModais();
+        definirFlash(
+          "ok",
+          `Extrato importado: ${extrato.total_importadas} transação(ões) nova(s)` +
+            (extrato.total_duplicadas_ignoradas ? `, ${extrato.total_duplicadas_ignoradas} já importada(s) antes (ignorada(s))` : "") +
+            ` — ${extrato.total_conciliadas_automaticamente} conciliada(s) automaticamente, ${extrato.total_pendentes_revisao} pendente(s) de revisão.`
+        );
+        return renderConciliacaoBancariaDetalhe(extrato.id);
+      }
+      case "conciliar-transacao-extrato": {
+        const transacaoId = Number(form.dataset.id);
+        const tipo = form.dataset.tipo;
+        await chamarApi(`/financeiro/extratos/transacoes/${transacaoId}/conciliar`, {
+          method: "POST", body: { tipo, baixa_id: Number(dados.get("baixa_id")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Transação conciliada.");
+        return renderConciliacaoBancariaDetalhe(state.cache.extratoAtualId);
+      }
+      case "ignorar-transacao-extrato": {
+        const transacaoId = Number(form.dataset.id);
+        await chamarApi(`/financeiro/extratos/transacoes/${transacaoId}/ignorar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Transação ignorada.");
+        return renderConciliacaoBancariaDetalhe(state.cache.extratoAtualId);
+      }
+      case "buscar-lote-rastreabilidade": {
+        const busca = (dados.get("busca") || "").trim();
+        state.cache.rastreabilidadeBusca = busca;
+        state.cache.rastreabilidadeResultadosBusca = busca
+          ? await chamarApi(`/rastreabilidade/lotes?busca=${encodeURIComponent(busca)}`)
+          : [];
+        return renderRastreabilidade();
+      }
+      case "simular-recall": {
+        const loteId = Number(form.dataset.id);
+        const simulacao = await chamarApi(`/rastreabilidade/lotes/${loteId}/simular-recall`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", `Simulação de recall ${simulacao.numero} registrada.`);
+        return renderRastreabilidade();
+      }
+      case "bloquear-em-massa": {
+        const simulacaoId = Number(form.dataset.id);
+        const resultado = await chamarApi(`/rastreabilidade/recalls/${simulacaoId}/bloquear-em-massa`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        definirFlash(
+          "ok",
+          `Bloqueio em massa concluído: ${resultado.lotes_bloqueados.length} lote(s) bloqueado(s) agora` +
+            (resultado.lotes_ja_bloqueados.length ? `, ${resultado.lotes_ja_bloqueados.length} já estava(m) bloqueado(s).` : ".")
+        );
+        fecharModais();
+        // Recarrega a página por trás (mostra o flash acima) e reabre o
+        // modal já com o status atualizado de cada lote afetado.
+        await renderRastreabilidade();
+        const [simulacaoAtualizada, decisoesAtualizadas] = await Promise.all([
+          chamarApi(`/rastreabilidade/recalls/${simulacaoId}`),
+          chamarApi(`/rastreabilidade/recalls/${simulacaoId}/decisoes`),
+        ]);
+        modalDetalheRecall(simulacaoAtualizada, decisoesAtualizadas);
+        return;
+      }
+      case "registrar-decisao-recall-pedido": {
+        const simulacaoId = Number(form.dataset.simulacaoId);
+        const pedidoId = Number(form.dataset.pedidoId);
+        await chamarApi(`/rastreabilidade/recalls/${simulacaoId}/pedidos/${pedidoId}/decisoes`, {
+          method: "POST",
+          body: {
+            tipo_decisao: dados.get("tipo_decisao"), motivo: dados.get("motivo"),
+            observacao: dados.get("observacao") || null,
+          },
+        });
+        definirFlash("ok", "Decisão registrada.");
+        fecharModais();
+        // Mesmo padrão do bloqueio em massa: recarrega a lista por trás e
+        // reabre o modal de detalhe já com o histórico atualizado.
+        await renderRastreabilidade();
+        const [simulacaoAtual, decisoesAtual] = await Promise.all([
+          chamarApi(`/rastreabilidade/recalls/${simulacaoId}`),
+          chamarApi(`/rastreabilidade/recalls/${simulacaoId}/decisoes`),
+        ]);
+        modalDetalheRecall(simulacaoAtual, decisoesAtual);
+        return;
+      }
+
+      // ---- Fase 24: Memorial Técnico ANVISA ----
+      case "criar-memorial-empresa": {
+        await chamarApi("/memorial/empresas", {
+          method: "POST",
+          body: {
+            nome_fantasia: dados.get("nome_fantasia"), razao_social: dados.get("razao_social"),
+            cnpj: dados.get("cnpj"), ie: dados.get("ie"), responsavel_tecnico: dados.get("responsavel_tecnico"),
+            crf: dados.get("crf"), endereco: dados.get("endereco"), cidade: dados.get("cidade"),
+            estado: dados.get("estado"), cep: dados.get("cep"), telefone: dados.get("telefone"),
+            email: dados.get("email"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Empresa cadastrada.");
+        return renderMemorialEmpresas();
+      }
+      case "editar-memorial-empresa": {
+        await chamarApi(`/memorial/empresas/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            nome_fantasia: dados.get("nome_fantasia"), razao_social: dados.get("razao_social"),
+            ie: dados.get("ie"), responsavel_tecnico: dados.get("responsavel_tecnico"), crf: dados.get("crf"),
+            endereco: dados.get("endereco"), cidade: dados.get("cidade"), estado: dados.get("estado"),
+            cep: dados.get("cep"), telefone: dados.get("telefone"), email: dados.get("email"),
+            status: dados.get("status"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Empresa atualizada.");
+        return renderMemorialEmpresas();
+      }
+      case "criar-memorial-produto": {
+        const corpo = {
+          empresa_id: Number(dados.get("empresa_id")), nome: dados.get("nome"), categoria: dados.get("categoria"),
+          forma_farmaceutica: dados.get("forma_farmaceutica"), porcao_gramas: Number(dados.get("porcao_gramas")),
+          quantidade_porcoes: Number(dados.get("quantidade_porcoes")),
+        };
+        CAMPOS_MEMORIAL_PRODUTO_EXTRA.forEach(([campo]) => (corpo[campo] = dados.get(campo)));
+        await chamarApi("/memorial/produtos", { method: "POST", body: corpo });
+        fecharModais();
+        definirFlash("ok", "Produto cadastrado.");
+        return renderMemorialProdutos();
+      }
+      case "editar-memorial-produto": {
+        const corpo = {
+          nome: dados.get("nome"), categoria: dados.get("categoria"),
+          forma_farmaceutica: dados.get("forma_farmaceutica"), porcao_gramas: Number(dados.get("porcao_gramas")),
+          quantidade_porcoes: Number(dados.get("quantidade_porcoes")), status: dados.get("status"),
+        };
+        CAMPOS_MEMORIAL_PRODUTO_EXTRA.forEach(([campo]) => (corpo[campo] = dados.get(campo)));
+        await chamarApi(`/memorial/produtos/${form.dataset.id}`, { method: "PUT", body: corpo });
+        fecharModais();
+        definirFlash("ok", "Produto atualizado.");
+        return renderMemorialProdutos();
+      }
+      case "filtrar-memoriais":
+        return renderMemoriais(dados.get("status") || undefined);
+      case "criar-memorial": {
+        const corpo = {
+          produto_id: Number(dados.get("produto_id")), data_inicio: dados.get("data_inicio"),
+          data_fim: dados.get("data_fim"), objetivo: dados.get("objetivo"),
+        };
+        const numeroCertificado = (dados.get("numero_certificado") || "").trim();
+        if (numeroCertificado) corpo.numero_certificado = numeroCertificado;
+        const memorial = await chamarApi("/memorial/memoriais", { method: "POST", body: corpo });
+        fecharModais();
+        definirFlash("ok", `Memorial ${memorial.codigo} criado como Rascunho.`);
+        return navegarPara(`#/memorial/memoriais/${memorial.id}`);
+      }
+      case "editar-memorial": {
+        const corpo = { data_inicio: dados.get("data_inicio"), data_fim: dados.get("data_fim") };
+        ABAS_MEMORIAL.flatMap((a) => a.campos).forEach(([campo]) => (corpo[campo] = dados.get(campo)));
+        await chamarApi(`/memorial/memoriais/${form.dataset.id}`, { method: "PUT", body: corpo });
+        definirFlash("ok", "Conteúdo do memorial salvo.");
+        return renderMemorialDetalhe(Number(form.dataset.id));
+      }
+      case "alterar-status-memorial": {
+        await chamarApi(`/memorial/memoriais/${form.dataset.id}/status`, {
+          method: "POST", body: { status: dados.get("status") },
+        });
+        definirFlash("ok", "Status do memorial atualizado.");
+        return renderMemorialDetalhe(Number(form.dataset.id));
+      }
+      case "assinar-memorial": {
+        await chamarApi(`/memorial/memoriais/${form.dataset.id}/assinaturas`, {
+          method: "POST", body: { cargo: dados.get("cargo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Assinatura registrada.");
+        return renderMemorialDetalhe(Number(form.dataset.id), "assinaturas");
+      }
+
+      // ---- Fase 27: Anexos e Padronização ----
+      case "enviar-anexo-memorial": {
+        const arquivo = form.querySelector('input[type="file"]').files[0];
+        if (!arquivo) throw new Error("Selecione um arquivo.");
+        const conteudo = await lerArquivoComoBase64(arquivo);
+        await chamarApi(`/memorial/memoriais/${form.dataset.id}/anexos`, {
+          method: "POST",
+          body: {
+            nome: (dados.get("nome") || "").trim() || arquivo.name,
+            nome_arquivo: arquivo.name, tipo_mime: arquivo.type, dados: conteudo,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Anexo enviado.");
+        return renderMemorialDetalhe(Number(form.dataset.id), "anexos");
+      }
+
+      // ---- Fase 46: Administração — Snapshots & Restauração ----
+      case "restaurar-snapshot-memorial": {
+        const arquivo = form.querySelector('input[type="file"]').files[0];
+        if (!arquivo) throw new Error("Selecione um arquivo de snapshot.");
+        const texto = await lerArquivoComoTexto(arquivo);
+        let snapshot;
+        try {
+          snapshot = JSON.parse(texto);
+        } catch (e) {
+          throw new Error("Arquivo inválido: não é um JSON válido.");
+        }
+        // Resumo do que o arquivo contém, mostrado no confirm() abaixo —
+        // não basta um aviso genérico numa ação deste tamanho (substitui
+        // por completo os dados atuais do módulo): o usuário precisa ver
+        // quantos registros de cada tabela ele está prestes a restaurar
+        // antes de confirmar de verdade.
+        const tabelas = (snapshot && snapshot.tabelas) || {};
+        const ROTULOS_TABELAS_SNAPSHOT = [
+          ["memorial_empresas", "empresas"], ["memorial_produtos", "produtos"], ["memoriais", "memoriais"],
+          ["memorial_assinaturas", "assinaturas"], ["memorial_historico", "eventos de histórico"],
+          ["memorial_anexos", "anexos"], ["memorial_padronizacoes", "padronizações"],
+          ["memorial_catalogo_itens", "itens de catálogo"],
+        ];
+        const resumo = ROTULOS_TABELAS_SNAPSHOT
+          .map(([chave, rotulo]) => `${Array.isArray(tabelas[chave]) ? tabelas[chave].length : 0} ${rotulo}`)
+          .join(", ");
+        const confirmado = confirm(
+          `Restaurar este snapshot vai APAGAR os dados atuais do Memorial Técnico e substituir por: ${resumo}. ` +
+            "Qualquer empresa, produto, memorial, anexo ou item de catálogo cadastrado DEPOIS deste snapshot " +
+            "será perdido. Esta ação não pode ser desfeita. Deseja continuar?"
+        );
+        if (!confirmado) return;
+        const resultado = await chamarApi("/memorial/administracao/snapshot/restaurar", {
+          method: "POST", body: snapshot,
+        });
+        const totalRestaurado = Object.values(resultado.contagens || {}).reduce((a, b) => a + b, 0);
+        definirFlash("ok", `Snapshot restaurado com sucesso — ${totalRestaurado} registro(s) no total.`);
+        return renderMemorialSnapshots();
+      }
+
+      // ---- Fase 67: Backup Automático Agendado, Nuvem/E-mail, Restauração ----
+      case "salvar-configuracao-backup": {
+        await chamarApi("/sistema/backup/configuracao", {
+          method: "PUT",
+          body: {
+            ativo: dados.get("ativo") === "on",
+            nuvem_ativo: dados.get("nuvem_ativo") === "on",
+            nuvem_endpoint_url: dados.get("nuvem_endpoint_url") || null,
+            nuvem_regiao: dados.get("nuvem_regiao") || null,
+            nuvem_bucket: dados.get("nuvem_bucket") || null,
+            nuvem_prefixo: dados.get("nuvem_prefixo") || null,
+            nuvem_access_key: dados.get("nuvem_access_key") || null,
+            nuvem_secret_key: dados.get("nuvem_secret_key") || null,
+            email_ativo: dados.get("email_ativo") === "on",
+            email_destinatarios: dados.get("email_destinatarios") || null,
+          },
+        });
+        definirFlash("ok", "Configuração de backup automático salva.");
+        return renderMemorialBackups();
+      }
+      case "novo-horario-backup": {
+        await chamarApi("/sistema/backup/horarios", { method: "POST", body: { hora: dados.get("hora") } });
+        definirFlash("ok", "Horário de backup adicionado.");
+        return renderMemorialBackups();
+      }
+      case "restaurar-backup": {
+        const arquivo = form.querySelector('input[type="file"]').files[0];
+        if (!arquivo) throw new Error("Selecione um arquivo de backup (.db).");
+        const confirmado = confirm(
+          "Enviar este arquivo para restauração? A troca de verdade só acontece na PRÓXIMA VEZ que o Alphafitus " +
+            "OS for iniciado — uma cópia de segurança do banco atual será guardada automaticamente antes da troca. " +
+            "Deseja continuar?"
+        );
+        if (!confirmado) return;
+        // Upload binário de verdade (multipart/form-data) — diferente de
+        // chamarApi(), que sempre manda JSON — por isso um fetch() direto
+        // aqui, no mesmo espírito de baixarArquivo() para o sentido
+        // contrário (download).
+        const formData = new FormData();
+        formData.append("arquivo", arquivo);
+        const resp = await fetch(API + "/sistema/backup/restaurar", {
+          method: "POST",
+          headers: state.accessToken ? { Authorization: "Bearer " + state.accessToken } : {},
+          body: formData,
+        });
+        const corpo = await resp.json().catch(() => ({}));
+        if (!resp.ok) throw new Error(corpo.mensagem || `Erro ${resp.status} ao enviar o backup.`);
+        definirFlash("ok", corpo.mensagem || "Backup recebido — restauração pendente para o próximo início.");
+        return renderMemorialBackups();
+      }
+
+      case "configurar-memorial": {
+        await chamarApi("/memorial/administracao/configuracao", {
+          method: "PUT",
+          body: {
+            numero_assinaturas_aprovacao: Number(dados.get("numero_assinaturas_aprovacao")),
+            tamanho_maximo_anexo_mb: Number(dados.get("tamanho_maximo_anexo_mb")),
+          },
+        });
+        definirFlash("ok", "Configurações do Memorial Técnico atualizadas.");
+        return renderMemorialConfiguracoes();
+      }
+      case "salvar-padronizacao-memorial": {
+        const corpo = {};
+        Array.from(form.elements).forEach((el) => {
+          if (el.name) corpo[el.name] = dados.get(el.name);
+        });
+        await chamarApi(`/memorial/memoriais/${form.dataset.id}/padronizacao`, { method: "PUT", body: corpo });
+        definirFlash("ok", "Padronização salva.");
+        return renderMemorialDetalhe(Number(form.dataset.id), "padronizacao");
+      }
+
+      // ---- Fase 26: Catálogos do Memorial Técnico ----
+      case "criar-catalogo-memorial": {
+        const chave = form.dataset.catalogo;
+        const config = configCatalogoMemorial(chave);
+        const corpo = {};
+        config.campos.forEach((c) => {
+          corpo[c.nome] = c.tipo === "checkbox" ? dados.get(c.nome) === "on" : dados.get(c.nome);
+        });
+        await chamarApi(`/memorial/catalogos/${chave}`, { method: "POST", body: corpo });
+        fecharModais();
+        definirFlash("ok", "Item cadastrado.");
+        return renderMemorialCatalogo(chave);
+      }
+      case "editar-catalogo-memorial": {
+        const chave = form.dataset.catalogo;
+        const config = configCatalogoMemorial(chave);
+        const corpo = { ativo: dados.get("ativo") === "on" };
+        config.campos.forEach((c) => {
+          corpo[c.nome] = c.tipo === "checkbox" ? dados.get(c.nome) === "on" : dados.get(c.nome);
+        });
+        await chamarApi(`/memorial/catalogos/${chave}/${form.dataset.id}`, { method: "PUT", body: corpo });
+        fecharModais();
+        definirFlash("ok", "Item atualizado.");
+        return renderMemorialCatalogo(chave);
+      }
+
+      // ---- Fase 36: App de Vendas ----
+      case "configurar-app-vendas": {
+        await chamarApi("/vendas-app/configuracao", {
+          method: "PUT",
+          body: {
+            percentual_verba_gerada: Number(dados.get("percentual_verba_gerada")),
+            percentual_comissao_padrao: Number(dados.get("percentual_comissao_padrao")),
+            minutos_expiracao_rascunho: Number(dados.get("minutos_expiracao_rascunho")),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Configuração do App de Vendas atualizada.");
+        return renderComercial();
+      }
+      case "criar-rascunho-vendas": {
+        await chamarApi("/vendas-app/rascunhos", { method: "POST", body: { cliente_id: Number(dados.get("cliente_id")) } });
+        fecharModais();
+        definirFlash("ok", "Rascunho iniciado — os itens que você adicionar ficam reservados só para você.");
+        return renderAppVendas();
+      }
+      case "adicionar-item-rascunho-vendas": {
+        await chamarApi(`/vendas-app/rascunhos/${form.dataset.id}/itens`, {
+          method: "POST",
+          body: {
+            item_id: Number(dados.get("item_id")), quantidade: Number(dados.get("quantidade")),
+            unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Item adicionado ao rascunho.");
+        return renderAppVendas();
+      }
+      case "selecionar-item-portfolio": {
+        await chamarApi(`/vendas-app/rascunhos/${state.cache.rascunhoAppVendas.id}/itens`, {
+          method: "POST",
+          body: {
+            item_id: Number(form.dataset.id), quantidade: Number(dados.get("quantidade")),
+            unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Item adicionado ao pedido — continue selecionando no portfólio.");
+        // Limpa o cache (saldo disponível e total do pedido mudaram) para a
+        // próxima renderização buscar os dados atualizados do servidor,
+        // continuando na MESMA tela de portfólio em vez de ir para o carrinho.
+        state.cache.portfolioVendas = null;
+        return renderPortfolioVendas();
+      }
+      case "aplicar-verba-vendas": {
+        await chamarApi(`/vendas-app/rascunhos/${form.dataset.id}/verba`, {
+          method: "POST", body: { valor: Number(dados.get("valor")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Verba aplicada ao rascunho.");
+        return renderAppVendas();
+      }
+      case "filtrar-minhas-comissoes":
+        return renderMinhasComissoes(Number(dados.get("ano")), Number(dados.get("mes")));
+      case "filtrar-painel-executivo":
+        return renderPainelExecutivo(Number(dados.get("ano")), dados.get("mes") ? Number(dados.get("mes")) : "");
+
+      default:
+        return;
+    }
+  }
+
+  // ---------------------------------------------------------------------
+  // Fase 38 — registra o service worker (app shell instalável no
+  // celular/tablet, ver frontend/sw.js). Feito depois do "load" da
+  // página (nunca compete com o carregamento inicial) e sempre dentro de
+  // um try/catch silencioso: a instalação como app é um extra — em
+  // navegadores sem suporte (ou em `http://` puro fora de localhost, que
+  // a maioria dos navegadores recusa por segurança) o sistema continua
+  // funcionando 100% normal pela aba comum, só sem o ícone/instalação.
+  // ---------------------------------------------------------------------
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch(() => { /* PWA é um extra, nunca bloqueia o uso normal */ });
+    });
+  }
+
+  // ---------------------------------------------------------------------
+  // Inicialização
+  // ---------------------------------------------------------------------
+  montarRota();
+})();

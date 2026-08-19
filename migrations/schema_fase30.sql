@@ -1,0 +1,42 @@
+-- Fase 30 — Custo de Mão de Obra e Overhead na Produção.
+--
+-- A Fase 13 entregou custeio real de uma ordem a partir do custo de
+-- MATERIAL apenas (matéria-prima e embalagem, via custo médio de
+-- compra) — documentado desde então como uma lacuna conhecida: "não há
+-- apontamento de horas/turno nem rateio de custo fixo de fábrica". Esta
+-- fase entrega os dois, na mesma filosofia de "campo opcional, sem
+-- quebrar o que já existe" já usada pela Fase 9 (apontamento de perda
+-- também é opcional, informado ao concluir a ordem):
+--
+--   - `centros_trabalho` (Fase 25) ganha uma taxa de custo por HORA de
+--     mão de obra e uma taxa de custo por HORA de overhead (rateio de
+--     custo fixo de fábrica: energia, depreciação de equipamento,
+--     manutenção etc.) — cada centro de trabalho tem seu próprio custo
+--     operacional por hora, porque uma linha automatizada custa
+--     diferente de uma envasadeira manual. As duas colunas são
+--     OPCIONAIS (nula = não informada) — um centro sem taxa cadastrada
+--     continua funcionando normalmente para agendamento (Fase 25/28), só
+--     não contribui com custo de mão de obra/overhead no custeio.
+--   - `ordens_producao` ganha `horas_apontadas`, informado
+--     OPCIONALMENTE ao concluir a ordem (mesmo padrão de
+--     `quantidade_perda`/`motivo_perda` da Fase 9). Decisão deliberada:
+--     NÃO tenta inferir horas a partir de `liberado_em`/`concluido_em` —
+--     esse intervalo incluiria qualquer tempo ocioso entre liberar a
+--     ordem e efetivamente começar a produzir, o que superestimaria o
+--     custo real; melhor pedir a informação (como já se faz com a
+--     quantidade de perda) do que inventar um número a partir de um
+--     timestamp que mede outra coisa.
+--
+-- O custo de mão de obra/overhead de uma ordem depende de qual CENTRO DE
+-- TRABALHO a produziu. Em vez de pedir isso de novo na conclusão, o
+-- custeio (Fase 13, `custo_ordem_producao()`) reaproveita o agendamento
+-- da Fase 25 (`ordem_producao_agendamentos`, já é 1 linha por ordem): se
+-- a ordem não foi agendada em nenhum centro, ou o centro não tem as
+-- taxas cadastradas, o custo de mão de obra/overhead fica "indisponível"
+-- para aquela ordem — mesma transparência já usada desde a Fase 13 para
+-- custo de material sem preço informado (nunca inventa um número,
+-- sinaliza quando falta informação).
+
+ALTER TABLE centros_trabalho ADD COLUMN custo_hora_mao_de_obra REAL CHECK (custo_hora_mao_de_obra IS NULL OR custo_hora_mao_de_obra >= 0);
+ALTER TABLE centros_trabalho ADD COLUMN custo_hora_overhead REAL CHECK (custo_hora_overhead IS NULL OR custo_hora_overhead >= 0);
+ALTER TABLE ordens_producao ADD COLUMN horas_apontadas REAL CHECK (horas_apontadas IS NULL OR horas_apontadas >= 0);

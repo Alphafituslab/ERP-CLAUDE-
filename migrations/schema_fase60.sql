@@ -1,0 +1,28 @@
+-- ============================================================
+-- FASE 60 — Pedido de Compra: Alerta de Atraso (Lead Time do Fornecedor)
+-- ============================================================
+-- A Fase 57 ensinou o MRP a calcular uma data-limite de compra usando
+-- `fornecedores.lead_time_dias` — mas isso só ajudava ANTES de comprar
+-- (quando decidir gerar a sugestão). Depois que o Pedido de Compra
+-- (Fase 58) é enviado ao fornecedor, nada dizia se ele estava demorando
+-- mais do que o prometido. Esta fase fecha essa ponta: ao enviar um
+-- pedido, se o fornecedor tiver `lead_time_dias` configurado, calcula e
+-- CONGELA a data prevista de entrega (enviado_em + lead_time_dias dias)
+-- em `data_prevista_entrega` — mesmo princípio de snapshot já usado em
+-- `sugestoes_compra_mrp.data_limite_compra` desde a Fase 57: se o lead
+-- time do fornecedor mudar depois, um pedido já enviado não recalcula
+-- sozinho.
+--
+-- Fornecedor sem lead time configurado continua funcionando exatamente
+-- como antes desta fase: `data_prevista_entrega` fica NULL, nenhuma
+-- data é inventada, e o pedido nunca é marcado como atrasado (não dá
+-- pra atrasar um prazo que nunca foi informado).
+--
+-- "Atrasado" em si NÃO é uma coluna — é calculado on-the-fly na API
+-- (`_pedido_detalhado`/`listar_pedidos` em app/routes/compras.py), o
+-- MESMO padrão já usado por `contas_pagar.vencida`/`contas_receber.vencida`
+-- desde a Fase 6: pedido com status 'enviado' ou 'parcialmente_recebido'
+-- (ainda não fechou), com data_prevista_entrega preenchida, e já no
+-- passado. Isso evita qualquer job em segundo plano — o mesmo motivo
+-- pelo qual "vencida" nunca precisou de um.
+ALTER TABLE pedidos_compra ADD COLUMN data_prevista_entrega TEXT;

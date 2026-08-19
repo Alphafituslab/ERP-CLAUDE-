@@ -1,0 +1,40 @@
+-- ============================================================
+-- FASE 59 — Conta a Pagar gerada a partir do Pedido de Compra
+-- ============================================================
+-- A Fase 6 documenta que Conta a Pagar é lançada MANUALMENTE (ver a nota
+-- no topo de schema_fase6.sql: "Diferente da conta a receber, é lançada
+-- MANUALMENTE") — e isso continua verdadeiro depois desta fase. Ela NÃO
+-- gera a conta a pagar sozinha quando um lote é recebido contra um
+-- Pedido de Compra (Fase 58): isso seria automático demais — o valor da
+-- nota fiscal pode divergir do preço negociado no pedido, o fornecedor
+-- pode faturar em partes diferentes do combinado, o item pode ter menos
+-- de 30 dias de vencimento negociado no boleto, etc. — decisões que só
+-- quem está com a NF em mãos pode tomar.
+--
+-- O que esta fase faz é dar a quem recebe a NF um botão na tela do
+-- Pedido de Compra (rota nova `POST
+-- /compras/pedidos/<id>/gerar-conta-pagar`, permissão reaproveitada
+-- `financeiro.criar_conta_pagar` — a MESMA já exigida pela criação
+-- direta em Financeiro, porque é exatamente a mesma ação sensível,
+-- só chegando por um caminho mais rápido) que PRÉ-CALCULA o valor a
+-- partir do que já foi efetivamente recebido (quantidade_recebida x
+-- preco_unitario de cada linha, não a quantidade pedida) e pré-preenche
+-- o fornecedor — poupando redigitação manual — mas continua exigindo
+-- vencimento informado por quem lança, e continua sendo uma ação
+-- explícita (nada roda sozinho no recebimento).
+--
+-- pedidos_compra.conta_pagar_id trava geração duplicada pela ROTA NOVA:
+-- um pedido só pode gerar UMA conta a pagar por este caminho. Se o
+-- fornecedor faturar em partes (uma NF por remessa, por exemplo), ou se
+-- o pedido precisar de mais de uma conta por qualquer outro motivo, o
+-- caminho de sempre — lançar manualmente em Financeiro (Fase 6), várias
+-- vezes se preciso — continua disponível e não é afetado em nada por
+-- esta trava; ela só impede reduplicar o clique do botão novo.
+ALTER TABLE pedidos_compra ADD COLUMN conta_pagar_id INTEGER REFERENCES contas_pagar(id);
+
+-- contas_pagar.pedido_compra_id é o inverso do vínculo acima — permite
+-- responder "esta conta a pagar veio de qual pedido de compra?" direto
+-- na tela de Financeiro sem depender só do ponteiro de pedidos_compra
+-- (mais barato de consultar dali, e continua correto mesmo se um dia
+-- esta trava de "um pedido, uma conta" for revista).
+ALTER TABLE contas_pagar ADD COLUMN pedido_compra_id INTEGER REFERENCES pedidos_compra(id);

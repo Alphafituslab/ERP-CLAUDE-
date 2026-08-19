@@ -1,0 +1,709 @@
+:root {
+  --azul: #1f3a5f;
+  --azul-claro: #2c5282;
+  --dourado: #9c7a2e;
+  --fundo: #f4f6f8;
+  --superficie: #ffffff;
+  --texto: #1a202c;
+  --texto-suave: #5a6472;
+  --borda: #e2e6ea;
+  --verde: #1e7a3d;
+  --vermelho: #b3261e;
+  --amarelo: #8a6d00;
+  --sombra: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  --raio: 8px;
+}
+
+[data-tema="escuro"] {
+  --fundo: #10161f;
+  --superficie: #1a2230;
+  --texto: #e8ecf1;
+  --texto-suave: #a2acb8;
+  --borda: #2a3444;
+  --azul: #4f7bb0;
+  --azul-claro: #6c98cf;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  background: var(--fundo);
+  color: var(--texto);
+  font-size: 14px;
+}
+
+button, input, select {
+  font-family: inherit;
+  font-size: 14px;
+}
+
+#app { min-height: 100vh; }
+
+/* ---------- Tela de login ---------- */
+.tela-login {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--azul) 0%, #0f2137 100%);
+}
+
+.cartao-login {
+  background: var(--superficie);
+  border-radius: var(--raio);
+  box-shadow: var(--sombra);
+  padding: 40px;
+  width: 380px;
+}
+
+.cartao-login h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+  color: var(--azul);
+}
+
+.cartao-login .subtitulo {
+  color: var(--texto-suave);
+  margin: 0 0 24px;
+  font-size: 13px;
+}
+
+.campo { margin-bottom: 16px; }
+
+/* Fase 74 — "Lembrar meu email" na tela de login: mesmo espírito visual
+   do `.campo-checkbox` já usado em formulários normais (rótulo e caixa
+   lado a lado, não empilhados como os outros `.campo`), só com uma
+   margem inferior maior pra separar bem do botão "Entrar" logo abaixo. */
+.campo-lembrar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  color: var(--texto-suave);
+  cursor: pointer;
+}
+.campo-lembrar input[type="checkbox"] { width: auto; margin: 0; }
+
+.campo label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.campo input, .campo select, .campo textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  background: var(--superficie);
+  color: var(--texto);
+  font-family: inherit;
+}
+
+.campo textarea { resize: vertical; min-height: 64px; }
+
+.campo input:focus, .campo select:focus, .campo textarea:focus {
+  outline: 2px solid var(--azul-claro);
+  outline-offset: 1px;
+}
+
+.campo .dica { font-size: 12px; color: var(--texto-suave); margin-top: 4px; }
+
+.botao {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  background: var(--azul);
+  color: #fff;
+  cursor: pointer;
+  font-weight: 600;
+}
+.botao:hover { background: var(--azul-claro); }
+.botao:disabled { opacity: 0.6; cursor: default; }
+.botao.secundario { background: transparent; color: var(--azul); border-color: var(--azul); }
+.botao.perigo { background: var(--vermelho); }
+.botao.pequeno { padding: 5px 10px; font-size: 12px; }
+.botao.largura-total { width: 100%; }
+/* Fase 13 — abas "Custo de Produção" / "Custo com Perdas" no detalhe da
+   ordem: o botão da aba ativa fica com o preenchimento normal do botão
+   primário; os inativos ficam com a aparência "secundario" (contorno). */
+.aba-custo-botao.ativo { background: var(--azul); color: #fff; border-color: var(--azul); }
+
+/* Fase 75 — Painel de Chão de Fábrica em Tempo Real: alvo de toque maior
+   que `.botao` normal, pensado para um tablet fixado na parede/bancada de
+   um setor, apontado com o dedo em vez de mouse+teclado. */
+.botao-tablet { padding: 14px 20px; font-size: 15px; min-height: 48px; }
+
+.painel-grade-ordens {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+}
+.painel-card-ordem {
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: var(--superficie);
+}
+.painel-card-ordem-cabecalho {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.painel-etapa-linha {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--borda);
+}
+.painel-etapa-linha:first-of-type { border-top: none; }
+.painel-etapa-nome { font-weight: 600; flex: 1 1 auto; min-width: 100px; }
+
+.mensagem-erro {
+  background: #fdecea;
+  color: var(--vermelho);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  border: 1px solid #f5c6c2;
+}
+[data-tema="escuro"] .mensagem-erro { background: #3a1f1e; border-color: #5c2b28; }
+
+.mensagem-ok {
+  background: #eaf6ec;
+  color: var(--verde);
+  padding: 10px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  margin-bottom: 16px;
+  border: 1px solid #c3e6cb;
+}
+[data-tema="escuro"] .mensagem-ok { background: #14301d; border-color: #1f4a2a; }
+
+/* ---------- Layout principal ---------- */
+.layout { display: flex; min-height: 100vh; }
+
+.barra-lateral {
+  width: 240px;
+  background: var(--azul);
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+.barra-lateral .marca {
+  padding: 20px;
+  font-weight: 700;
+  font-size: 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.15);
+}
+.barra-lateral .marca small { display: block; font-weight: 400; font-size: 11px; opacity: 0.75; }
+
+.barra-lateral nav { flex: 1; padding: 12px 0; overflow-y: auto; }
+
+.link-nav {
+  display: block;
+  padding: 10px 20px;
+  color: rgba(255,255,255,0.85);
+  text-decoration: none;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  font-size: 13px;
+}
+.link-nav:hover { background: rgba(255,255,255,0.08); }
+.link-nav.ativo { background: rgba(255,255,255,0.12); border-left-color: var(--dourado); color: #fff; font-weight: 600; }
+
+/* Fase 51 — grupos recolhíveis por módulo no menu lateral PRINCIPAL (não
+   confundir com `.memorial-nav-grupo`, que é o mesmo padrão só que dentro
+   do menu interno do Memorial Técnico desde a Fase 26) — mesma ideia:
+   `<details>/<summary>` nativo, sem JS nenhum para abrir/fechar, só para
+   lembrar a escolha do usuário entre uma visita e outra (ver app.js). */
+.barra-lateral-grupo { margin: 2px 0; }
+.barra-lateral-grupo summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 20px; color: rgba(255,255,255,0.85); font-size: 13px;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.barra-lateral-grupo summary::-webkit-details-marker { display: none; }
+.barra-lateral-grupo summary::after {
+  content: "▸"; font-size: 10px; opacity: 0.7; transition: transform 0.15s ease-out; flex-shrink: 0;
+}
+.barra-lateral-grupo[open] summary::after { transform: rotate(90deg); }
+.barra-lateral-grupo summary:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.barra-lateral-grupo[open] summary { color: #fff; font-weight: 600; }
+.barra-lateral-subitens { display: flex; flex-direction: column; }
+.barra-lateral-subitem { padding-left: 34px !important; font-size: 12.5px !important; }
+
+.conteudo-principal { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+
+.barra-superior {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 24px;
+  background: var(--superficie);
+  border-bottom: 1px solid var(--borda);
+}
+.espacador-barra-superior { flex: 1; }
+
+/* Fase 38 — o botão de hambúrguer só existe visualmente em telas
+   estreitas (ver media query mais abaixo); em telas largas a barra
+   lateral já fica sempre visível, então ele não tem função nenhuma ali. */
+.botao-menu-mobile { display: none; font-size: 20px; }
+.fundo-menu-mobile { display: none; }
+
+/* =========================================================================
+   FASE 38 — Responsividade para celular/tablet.
+
+   Só UMA faixa (<= 900px, cobre celular e tablet em retrato — o mesmo
+   ponto de corte que a Fase 27 já usava para a navegação do Memorial
+   Técnico) muda o layout de verdade: a barra lateral, que em telas
+   largas fica sempre visível ocupando 240px fixos, passa a ser uma
+   "gaveta" (off-canvas) escondida por padrão, aberta pelo botão de
+   hambúrguer novo na barra superior (ver `alternar-menu-mobile` em
+   app.js) e fechada tocando fora dela ou navegando para qualquer link —
+   sem isso, numa tela de celular (~375px) a barra sozinha já tomaria
+   quase 2/3 da largura disponível.
+
+   As outras mudanças desta faixa (tabelas com rolagem própria, modais
+   ocupando quase a tela toda, botões maiores) valem tanto para celular
+   quanto para tablet em retrato — não são exclusivas da barra lateral.
+   ========================================================================= */
+@media (max-width: 900px) {
+  .botao-menu-mobile { display: inline-block; }
+
+  .barra-lateral {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 100%;
+    width: 260px;
+    max-width: 82vw;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease-out;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.25);
+  }
+  .barra-lateral.aberta { transform: translateX(0); }
+
+  .fundo-menu-mobile.visivel {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 55;
+  }
+
+  /* Sem a barra lateral ocupando espaço no fluxo (ela virou `position:
+     fixed`, fora do `flex` de `.layout`), o conteúdo já fica com a
+     largura toda sozinho — não precisa de nenhum ajuste adicional aqui. */
+
+  .nome-usuario-barra { display: none; } /* nome completo não cabe bem ao lado do sino/tema/sair numa tela estreita */
+
+  /* `table` normalmente é `width: 100%` (preenche o cartão) — isso por
+     si só IMPEDE a tabela de crescer mais do que o container e precisar
+     de rolagem. Aqui ela pode crescer além de 100% quando o conteúdo
+     exigir (`min-width` mantém a aparência de sempre quando cabe). */
+  .tabela-scroll table { width: auto; min-width: 100%; }
+  .tabela-scroll th, .tabela-scroll td { white-space: nowrap; }
+
+  /* Toque: botões e campos um pouco mais altos, mais fáceis de acertar
+     com o dedo do que com o cursor do mouse. */
+  .botao, input, select, textarea { min-height: 40px; }
+  .botao.pequeno { min-height: 34px; }
+
+  .barra-acoes { align-items: stretch; }
+}
+
+.pagina { padding: 24px; flex: 1; overflow-y: auto; }
+.pagina h2 { margin-top: 0; color: var(--azul); }
+[data-tema="escuro"] .pagina h2 { color: var(--azul-claro); }
+
+.cartao {
+  background: var(--superficie);
+  border: 1px solid var(--borda);
+  border-radius: var(--raio);
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: var(--sombra);
+}
+
+/* Fase 38 — todo <table> da tela é envolvido em tempo de execução por um
+   destes (ver `envolverTabelasComRolagem` em app.js), sem precisar editar
+   nenhuma das dezenas de telas que já desenham uma tabela: em qualquer
+   largura, se a tabela precisar de mais espaço do que o container tem
+   disponível, ela ganha rolagem horizontal PRÓPRIA em vez de espremer o
+   conteúdo ilegível ou estourar a largura da página inteira. */
+.tabela-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--borda); }
+th { color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.03em; }
+tr:hover td { background: rgba(0,0,0,0.02); }
+[data-tema="escuro"] tr:hover td { background: rgba(255,255,255,0.03); }
+
+.selo {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.selo.ativo { background: #eaf6ec; color: var(--verde); }
+.selo.inativo { background: #f1f1f1; color: var(--texto-suave); }
+.selo.bloqueado { background: #fdecea; color: var(--vermelho); }
+.selo.amarelo { background: #fdf6e3; color: var(--amarelo); }
+.selo.azul { background: #e6eef7; color: var(--azul-claro); }
+[data-tema="escuro"] .selo.ativo { background: #14301d; }
+[data-tema="escuro"] .selo.inativo { background: #232b38; }
+[data-tema="escuro"] .selo.bloqueado { background: #3a1f1e; }
+[data-tema="escuro"] .selo.amarelo { background: #3a2f10; }
+[data-tema="escuro"] .selo.azul { background: #1c2c40; }
+
+/* Fase 6 — realça linhas de conta a receber/pagar vencida numa tabela */
+tr.linha-alerta td { background: #fdecea; }
+[data-tema="escuro"] tr.linha-alerta td { background: #3a1f1e; }
+
+.linha-detalhe { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 8px; }
+.linha-detalhe .rotulo { color: var(--texto-suave); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.subcartao { border: 1px solid var(--borda); border-radius: 6px; padding: 14px; margin-top: 12px; }
+
+/* Fase 77 — Portfólio dinâmico do App de Vendas. */
+.portfolio-resumo-pedido { position: sticky; top: 8px; z-index: 5; }
+.portfolio-filtros { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
+.portfolio-titulo-categoria { margin: 20px 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .4px; color: var(--texto-suave); }
+.portfolio-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-bottom: 8px; }
+.portfolio-card {
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio);
+  padding: 14px; box-shadow: var(--sombra); display: flex; flex-direction: column;
+}
+.portfolio-card-topo { display: flex; justify-content: space-between; align-items: center; }
+.portfolio-card h4 { flex: 1; font-size: 14px; line-height: 1.3; }
+.link-voltar { color: var(--azul); text-decoration: none; font-size: 13px; display: inline-block; margin-bottom: 12px; cursor: pointer; }
+[data-tema="escuro"] .link-voltar { color: var(--azul-claro); }
+
+.barra-acoes { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
+
+.grade-checkbox {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 16px;
+}
+.grade-checkbox label { display: flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 400; }
+
+/* Fase 7 — grade de indicadores (KPIs) do Painel Gerencial */
+.grade-kpi {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+.kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  padding: 12px 14px;
+  background: rgba(0,0,0,0.015);
+}
+[data-tema="escuro"] .kpi { background: rgba(255,255,255,0.02); }
+.kpi-rotulo { color: var(--texto-suave); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.kpi-valor { font-size: 22px; font-weight: 700; color: var(--azul); }
+[data-tema="escuro"] .kpi-valor { color: var(--azul-claro); }
+.kpi-extra { font-size: 12px; }
+
+/* Fase 8 — árvore de genealogia (rastreabilidade / recall) */
+.arvore-genealogia {
+  margin: 4px 0 4px 18px;
+  padding-left: 14px;
+  border-left: 2px solid var(--borda);
+  list-style: none;
+  font-size: 13px;
+}
+.arvore-genealogia li { margin: 6px 0; }
+tr.linha-selecionada td { background: #e6eef7; }
+[data-tema="escuro"] tr.linha-selecionada td { background: #1c2c40; }
+
+.fundo-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal {
+  background: var(--superficie); border-radius: var(--raio); padding: 24px;
+  width: 480px; max-width: 92vw; max-height: 88vh; overflow-y: auto;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+}
+/* Fase 22 — algumas telas (ex.: "Ver baixas", que agora pode mostrar um
+   selo + motivo + dois botões de decisão na última coluna) não cabem
+   direito nos 480px padrão — usada via abrirModal(html, { largo: true }). */
+.modal.modal-largo { width: 760px; }
+.modal h3 { margin-top: 0; color: var(--azul); }
+[data-tema="escuro"] .modal h3 { color: var(--azul-claro); }
+
+.rodape-modal { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+.texto-suave { color: var(--texto-suave); }
+.mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; word-break: break-all; }
+
+.botao-icone {
+  background: transparent; border: none; cursor: pointer; color: var(--texto-suave); font-size: 16px;
+}
+.botao-icone:hover { color: var(--texto); }
+
+/* Fase 37 — sino de notificações na barra superior */
+.botao-icone-com-badge { position: relative; }
+.badge-notificacoes {
+  position: absolute; top: -4px; right: -6px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: var(--vermelho); color: #fff; font-size: 10px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; line-height: 1;
+}
+/* Sem isso, o atributo HTML "hidden" não escondia o badge: uma regra de
+   autor com "display" explícito (a de cima) vence a regra do navegador
+   para [hidden], mesmo com a mesma especificidade — a origem "autor"
+   sempre tem prioridade sobre a folha de estilo padrão do navegador. */
+.badge-notificacoes[hidden] { display: none; }
+.linha-nao-lida { font-weight: 600; }
+[data-tema="escuro"] .linha-nao-lida { font-weight: 600; }
+
+
+.chip-modulo {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700;
+  color: var(--texto-suave); margin: 14px 0 4px;
+}
+
+.rodape-tabela { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 12px; color: var(--texto-suave); }
+
+.grade-filtros { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; align-items: flex-end; }
+.grade-filtros .campo { margin-bottom: 0; min-width: 160px; }
+
+.carregando { padding: 40px; text-align: center; color: var(--texto-suave); }
+
+/* =========================================================================
+   Memorial Técnico ANVISA — navegação aninhada e cartões do painel
+   (Fase 24/25/…) — o visual (cores, cartões com barra colorida no topo,
+   barra de progresso) espelha de propósito o sistema original do cliente
+   (Node/React, rodava no Replit), a pedido dele; as cores abaixo vêm
+   diretamente do tema desse sistema original (convertidas de HSL para
+   hex), não são um estilo novo inventado aqui.
+   ========================================================================= */
+.memorial-shell { display: flex; gap: 20px; align-items: flex-start; }
+.memorial-nav {
+  width: 220px; flex-shrink: 0; background: #192434; border-radius: var(--raio);
+  padding: 12px 0; position: sticky; top: 24px;
+}
+.memorial-nav a {
+  display: flex; align-items: center; gap: 10px; padding: 10px 18px;
+  color: #b7c2d0; text-decoration: none; font-size: 13px; border-radius: 6px; margin: 2px 10px;
+}
+.memorial-nav a svg { flex-shrink: 0; opacity: .85; }
+.memorial-nav a:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.memorial-nav a.ativo { background: #24354c; color: #fff; font-weight: 600; }
+.memorial-content { flex: 1; min-width: 0; }
+/* Grupo colapsável "Catálogos" dentro da navMemorial (Fase 26) — mesmo
+   espaçamento/cor dos links soltos acima, só com um <details> nativo em
+   vez de JS próprio para abrir/fechar. */
+.memorial-nav-grupo { margin: 2px 10px; }
+.memorial-nav-grupo summary {
+  display: flex; align-items: center; gap: 10px; padding: 10px 8px;
+  color: #b7c2d0; font-size: 13px; border-radius: 6px; cursor: pointer; list-style: none;
+}
+.memorial-nav-grupo summary::-webkit-details-marker { display: none; }
+.memorial-nav-grupo summary:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.memorial-nav-grupo[open] summary { color: #fff; font-weight: 600; }
+.memorial-nav-subitens { display: flex; flex-direction: column; padding-left: 10px; }
+.memorial-nav-subitens a { padding: 8px 18px 8px 24px; font-size: 12.5px; }
+@media (max-width: 760px) {
+  .memorial-shell { flex-direction: column; }
+  .memorial-nav { width: 100%; position: static; display: flex; overflow-x: auto; padding: 8px; }
+  .memorial-nav a { margin: 0 4px; white-space: nowrap; }
+  .memorial-nav-grupo { margin: 0 4px; }
+}
+
+.campo-checkbox label { display: flex; align-items: center; gap: 8px; font-weight: 500; }
+.campo-checkbox input[type="checkbox"] { width: auto; }
+
+/* Abas numeradas + sub-abas com nome da tela de edição do memorial
+   (Fase 27) — mesmo layout de "0. Identificação" a "9. Referências" +
+   Assinaturas/Anexos/Padronização/Exportar do sistema original. */
+.memorial-abas-nav {
+  display: flex; flex-wrap: wrap; gap: 4px; margin: 16px 0 12px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--borda);
+}
+.memorial-aba-botao {
+  background: transparent; border: 1px solid transparent; border-radius: 6px;
+  padding: 7px 12px; font-size: 12.5px; color: var(--texto-suave); cursor: pointer;
+}
+.memorial-aba-botao:hover { background: var(--fundo-suave, rgba(0,0,0,0.04)); color: var(--texto); }
+.memorial-aba-botao.ativa { background: var(--azul); color: #fff; font-weight: 600; }
+.memorial-abas-separador { width: 1px; background: var(--borda); margin: 4px 6px; }
+.memorial-aba-conteudo[hidden] { display: none; }
+@media print {
+  .memorial-abas-nav, .barra-lateral, .barra-superior, .rodape-modal, [data-acao] { display: none !important; }
+  .memorial-aba-conteudo[hidden] { display: block !important; }
+}
+
+.grade-stat { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 16px; margin-bottom: 20px; }
+.cartao-stat {
+  background: var(--superficie); border: 1px solid var(--borda); border-top: 4px solid var(--stat-cor, var(--azul));
+  border-radius: var(--raio); padding: 18px 20px; box-shadow: var(--sombra); text-decoration: none; color: inherit;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; transition: box-shadow .15s;
+}
+.cartao-stat:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.12); }
+.cartao-stat .stat-rotulo { color: var(--texto-suave); font-size: 12px; font-weight: 600; margin: 0 0 4px; }
+.cartao-stat .stat-valor { font-size: 26px; font-weight: 700; margin: 0; color: var(--stat-cor, var(--azul)); }
+.cartao-stat .stat-icone {
+  width: 42px; height: 42px; border-radius: 999px; display: flex; align-items: center; justify-content: center;
+  /* tom claro (~14%) da cor do cartão, não a cor sólida — senão o ícone (que usa
+     a mesma cor no traço) fica invisível sobre o próprio fundo */
+  background: color-mix(in srgb, var(--stat-cor, var(--azul)) 14%, transparent);
+  flex-shrink: 0;
+}
+.cartao-stat .stat-icone svg { stroke: var(--stat-cor, var(--azul)); }
+.cartao-stat.stat-larga { grid-column: 1 / -1; }
+
+.cartao-resumo-links a { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; text-decoration: none; color: var(--texto); border-bottom: 1px solid var(--borda); }
+.cartao-resumo-links a:last-child { border-bottom: none; }
+.cartao-resumo-links a:hover { color: var(--azul); }
+[data-tema="escuro"] .cartao-resumo-links a:hover { color: var(--azul-claro); }
+
+.lista-progresso { border: 1px solid var(--borda); border-radius: var(--raio); overflow: hidden; background: var(--superficie); }
+.linha-progresso { display: flex; align-items: center; gap: 12px; padding: 12px 16px; text-decoration: none; color: inherit; border-bottom: 1px solid var(--borda); }
+.linha-progresso:last-child { border-bottom: none; }
+.linha-progresso:hover { background: rgba(0,0,0,0.02); }
+[data-tema="escuro"] .linha-progresso:hover { background: rgba(255,255,255,0.03); }
+.linha-progresso .progresso-info { flex: 1; min-width: 0; }
+.linha-progresso .progresso-titulo { font-weight: 600; font-size: 13px; margin: 0; }
+.linha-progresso .progresso-codigo { font-size: 11px; color: var(--texto-suave); margin: 2px 0 0; font-family: ui-monospace, monospace; }
+.barra-progresso { width: 100px; height: 6px; border-radius: 999px; background: var(--borda); overflow: hidden; flex-shrink: 0; }
+.barra-progresso > div { height: 100%; border-radius: 999px; }
+.progresso-pct { font-size: 12px; font-weight: 700; width: 36px; text-align: right; flex-shrink: 0; }
+.legenda-progresso { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 10px; font-size: 11px; color: var(--texto-suave); }
+.legenda-progresso span { display: inline-flex; align-items: center; gap: 6px; }
+.legenda-progresso i { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
+
+/* Agenda visual (calendário/Gantt) do APS — Fase 28 */
+.aps-agenda { border: 1px solid var(--borda); border-radius: var(--raio); overflow: hidden; margin-top: 12px; }
+.aps-agenda-linha { display: flex; border-bottom: 1px solid var(--borda); }
+.aps-agenda-linha:last-child { border-bottom: none; }
+.aps-agenda-linha.aps-agenda-cabecalho { background: rgba(0,0,0,0.02); }
+[data-tema="escuro"] .aps-agenda-linha.aps-agenda-cabecalho { background: rgba(255,255,255,0.03); }
+.aps-agenda-nome-centro {
+  width: 220px; flex-shrink: 0; padding: 10px 12px; font-weight: 600; font-size: 13px;
+  display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--borda);
+}
+.aps-agenda-dias-grade { flex: 1; display: grid; grid-template-columns: repeat(7, 1fr); }
+.aps-agenda-dia-cabecalho {
+  padding: 8px 6px; text-align: center; font-size: 12px; border-right: 1px solid var(--borda);
+  display: flex; flex-direction: column; gap: 2px;
+}
+.aps-agenda-dia-cabecalho:last-child { border-right: none; }
+.aps-agenda-dia-cabecalho.aps-agenda-hoje { background: color-mix(in srgb, var(--azul) 8%, transparent); }
+.aps-agenda-dia-celula {
+  min-height: 56px; padding: 4px; border-right: 1px solid var(--borda);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.aps-agenda-dia-celula:last-child { border-right: none; }
+.aps-agenda-barra {
+  display: block; padding: 4px 6px; border-radius: 6px; font-size: 11px; line-height: 1.3;
+  text-decoration: none; color: inherit;
+}
+.aps-agenda-barra:hover { filter: brightness(0.95); }
+
+/* ============================================================
+   Painel Executivo (Fase 76) — tema escuro FIXO, no estilo de um
+   dashboard "Power BI" pendurado num telão/tablet de parede. Usa cores
+   próprias (não as variáveis --azul/--dourado do resto do sistema) de
+   propósito: é uma tela pensada para ser vista de longe, sempre no mesmo
+   visual, independente do usuário estar no tema claro ou escuro do resto
+   do Alphafitus OS.
+   ============================================================ */
+.pe-shell {
+  background: linear-gradient(160deg, #0b1226 0%, #131b3a 45%, #1b1440 100%);
+  border-radius: 16px;
+  padding: 20px;
+  color: #e7ecff;
+}
+.pe-topo { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-bottom: 16px; }
+.pe-titulo { font-size: 20px; font-weight: 700; letter-spacing: .3px; }
+.pe-filtros select {
+  background: #1b2450; color: #e7ecff; border: 1px solid #33407a; border-radius: 8px; padding: 6px 10px;
+}
+.pe-grid-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.pe-kpi {
+  background: linear-gradient(145deg, rgba(255,255,255,0.07), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 14px;
+  padding: 14px 16px;
+  position: relative;
+  overflow: hidden;
+}
+.pe-kpi::before {
+  content: ""; position: absolute; top: -30px; right: -30px; width: 90px; height: 90px;
+  border-radius: 50%; background: var(--pe-cor, #4f7cff); opacity: .25; filter: blur(22px);
+}
+.pe-kpi-icone { font-size: 20px; }
+.pe-kpi-valor { font-size: 21px; font-weight: 700; margin-top: 6px; position: relative; }
+.pe-kpi-rotulo { font-size: 11px; opacity: .75; text-transform: uppercase; letter-spacing: .5px; margin-top: 2px; position: relative; }
+.pe-grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.pe-card {
+  background: rgba(255,255,255,0.045);
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 14px;
+  padding: 16px;
+}
+.pe-card h3 { margin: 0 0 12px 0; font-size: 13px; text-transform: uppercase; letter-spacing: .4px; opacity: .85; }
+.pe-barra-h { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pe-barra-h .rotulo { width: 120px; flex-shrink: 0; font-size: 12px; opacity: .85; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pe-barra-h .trilha { flex: 1; background: rgba(255,255,255,0.09); border-radius: 6px; height: 14px; overflow: hidden; }
+.pe-barra-h .preenchido { display: block; height: 100%; border-radius: 6px; transition: width .3s ease; }
+.pe-barra-h .valor { width: 92px; flex-shrink: 0; text-align: right; font-size: 12px; font-weight: 600; }
+.pe-tendencia-subindo { color: #3ddc97; }
+.pe-tendencia-caindo { color: #ff6b81; }
+.pe-tendencia-estavel { color: #c8ccdb; }
+.pe-tabela-simples { width: 100%; border-collapse: collapse; }
+.pe-tabela-simples td, .pe-tabela-simples th {
+  color: #e7ecff; border-bottom: 1px solid rgba(255,255,255,.08); padding: 6px 8px; font-size: 13px; text-align: left;
+}
+.pe-linha-tempo { display: flex; flex-direction: column; gap: 0; }
+.pe-evento {
+  padding: 8px 0 8px 18px;
+  border-left: 2px solid rgba(255,255,255,.18);
+  margin-left: 6px;
+  position: relative;
+}
+.pe-evento:last-child { border-left-color: transparent; }
+.pe-evento::before {
+  content: ""; position: absolute; left: -6px; top: 12px; width: 10px; height: 10px; border-radius: 50%; background: #4f7cff;
+}
+.pe-evento-quando { font-size: 11px; opacity: .65; margin-top: 2px; }
+.pe-evento-duracao { font-size: 11px; opacity: .55; }
+.pe-shell .texto-suave { color: #b7c0e0; }
+.pe-shell a.pe-card:hover { border-color: rgba(255,255,255,0.25); }
+/* Botões/links dentro do painel executivo herdam o tema claro/escuro do
+   resto do sistema por padrão — como este painel tem fundo escuro FIXO
+   (ver `.pe-shell` acima), sobrescrevemos aqui para não ficarem
+   ilegíveis/deslocados visualmente (ex.: botão branco sobre fundo azul-marinho). */
+.pe-shell .botao.secundario {
+  background: rgba(255,255,255,0.08); color: #e7ecff; border-color: rgba(255,255,255,0.25);
+}
+.pe-shell .botao.secundario:hover { background: rgba(255,255,255,0.16); color: #ffffff; }
+.pe-shell label { color: #cdd4ee; }
+
+@media (max-width: 720px) {
+  .pe-grid-cards { grid-template-columns: 1fr; }
+  .pe-grid-cards .pe-card { grid-column: span 1 !important; }
+}
