@@ -120,6 +120,7 @@ SCHEMA_FILES = [
     # (Fase 76 — Painel Executivo não tem arquivo de schema: reaproveita
     # tabelas e permissões já existentes, sem nenhuma tabela ou coluna nova.)
     "schema_fase77.sql",  # Fase 77 — Portfólio dinâmico no App de Vendas + Duplicar Pedido (Comercial e App de Vendas)
+    "schema_fase78.sql",  # Fase 78 — SPED Fiscal (1/5): Notas Fiscais de Entrada (captura estruturada)
 ]
 
 

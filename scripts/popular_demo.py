@@ -142,7 +142,9 @@ def aprovar_lote_qms(lote_id, codigo_lote=""):
     qualquer resultado numérico conclui 'conforme'), registra o resultado,
     conclui a análise como admin e aprova como o usuário de qualidade
     (pessoa diferente de quem concluiu, exigido pela segregação de
-    função)."""
+    função). Em seguida ENDEREÇA o lote inteiro na posição de demonstração
+    — sem isso o lote fica 'aprovado' mas invisível para o FEFO de vendas/
+    produção, que só enxerga saldo já endereçado numa posição (Fase 4)."""
     analise = admin.post("/analises", {
         "lote_id": lote_id, "tipo": "liberacao",
         "ensaios": [{"ensaio": "Aspecto visual (demo)"}],
@@ -151,7 +153,45 @@ def aprovar_lote_qms(lote_id, codigo_lote=""):
     admin.post(f"/analises/{analise['id']}/resultados/{resultado_id}", {"resultado": 1})
     admin.post(f"/analises/{analise['id']}/concluir")
     qualidade.post(f"/lotes/{lote_id}/aprovar")
-    log(f"  lote {codigo_lote or lote_id} aprovado (QMS)")
+
+    lote = admin.get(f"/lotes/{lote_id}")
+    admin.post("/estoque/enderecamentos", {
+        "lote_id": lote_id, "posicao_id": posicao_demo["id"], "quantidade": lote["quantidade"],
+    })
+    log(f"  lote {codigo_lote or lote_id} aprovado e endereçado (QMS + WMS)")
+
+
+def obter_ou_criar_empresa(razao_social, cnpj):
+    existentes = admin.get("/empresas")
+    achado = next((e for e in existentes if e["cnpj"] == cnpj), None)
+    if achado:
+        return achado
+    empresa = admin.post("/empresas", {"razao_social": razao_social, "cnpj": cnpj})
+    log(f"empresa criada: {razao_social}")
+    return empresa
+
+
+empresa_demo = obter_ou_criar_empresa("Alphafitus Nutracêuticos Demo Ltda", "56789012000105")
+unidades_existentes = admin.get(f"/empresas/{empresa_demo['id']}/unidades")
+unidade_demo = next((u for u in unidades_existentes if u["nome"] == "Fábrica Central (Demo)"), None)
+if unidade_demo is None:
+    unidade_demo = admin.post(f"/empresas/{empresa_demo['id']}/unidades", {"nome": "Fábrica Central (Demo)", "tipo": "deposito"})
+    log("unidade 'Fábrica Central (Demo)' criada")
+
+posicao_demo = admin.post("/estoque/posicoes", {"unidade_id": unidade_demo["id"], "codigo": "GERAL-01", "descricao": "Posição única de demonstração"}, esperar_falha_ok=True)
+if posicao_demo is None:
+    # Já existe de uma execução anterior (409) — não há endpoint de busca
+    # de posição por código, então reaproveitamos via /estoque/saldo (que
+    # lista qualquer posição com saldo endereçado) ou, se ainda vazia,
+    # criamos com um código novo (nunca falha, sempre único por timestamp).
+    saldo_atual = admin.get("/estoque/saldo")
+    achada = next((s for s in saldo_atual if s["posicao_codigo"] == "GERAL-01"), None)
+    if achada:
+        posicao_demo = {"id": achada["posicao_id"], "codigo": "GERAL-01"}
+    else:
+        import time as _time
+        posicao_demo = admin.post("/estoque/posicoes", {"unidade_id": unidade_demo["id"], "codigo": f"GERAL-{int(_time.time())}", "descricao": "Posição única de demonstração"})
+log(f"posição de estoque pronta: {posicao_demo['codigo']}")
 
 
 # ============================================================
@@ -363,12 +403,29 @@ pedido_compra = admin.post("/compras/pedidos", {
 })
 admin.post(f"/compras/pedidos/{pedido_compra['id']}/enviar")
 receber_e_aprovar(materias_primas["whey_concentrado"], fornecedor_insumos, 50, "kg", pedido_compra_id=pedido_compra["id"])
-conta_pagar = admin.post(f"/compras/pedidos/{pedido_compra['id']}/gerar-conta-pagar", {"vencimento": "2026-09-15"})
+pedido_compra_atualizado = admin.post(f"/compras/pedidos/{pedido_compra['id']}/gerar-conta-pagar", {"vencimento": "2026-09-15"})
+conta_pagar = admin.get(f"/financeiro/contas-pagar/{pedido_compra_atualizado['conta_pagar_id']}")
 admin.post(f"/financeiro/contas-pagar/{conta_pagar['id']}/baixas", {
     "valor": round(conta_pagar["valor_total"] * 0.5, 2), "forma_pagamento": "boleto",
     "observacao": "Pagamento parcial de demonstração.",
 })
 log("pedido de compra recebido, com conta a pagar gerada e baixa parcial registrada")
+
+# ============================================================
+# 8b) Nota Fiscal de Entrada de exemplo (Fase 78 — SPED Fiscal 1/5)
+# ============================================================
+admin.put(f"/fornecedores/{fornecedor_insumos['id']}/dados-fiscais", {"uf": "SP", "municipio": "São Paulo"})
+admin.post("/fiscal/notas-entrada", {
+    "fornecedor_id": fornecedor_insumos["id"], "serie": "1", "numero": "10001", "modelo": "55",
+    "data_emissao": "2026-08-05", "data_entrada": "2026-08-06",
+    "valor_frete": 25.0,
+    "itens": [{
+        "item_id": materias_primas["creatina"]["id"], "cfop": "1102", "cst_csosn": "000",
+        "quantidade": 30, "unidade": "kg", "valor_unitario": 42.0, "valor_icms": 75.6,
+    }],
+    "observacoes": "Nota de demonstração (Fase 78).",
+})
+log("nota fiscal de entrada de exemplo lançada")
 
 # ============================================================
 # 9) Desvio de Qualidade de exemplo

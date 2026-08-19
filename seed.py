@@ -408,6 +408,16 @@ PERMISSOES_PADRAO = [
     # Produção — não faria sentido alguém ver a ordem mas não o catálogo
     # que a alimenta.
     ("producao", "configurar_etapas", "Cadastrar/editar os tipos de etapa do processo produtivo (Pesagem, Mistura, etc.)", 0),
+    # ---- Fase 78 (SPED Fiscal 1/5 — Notas Fiscais de Entrada) ----
+    # Reaproveita o módulo "fiscal" já existente (mesmo módulo da NF-e de
+    # saída, Fase 70) em vez de criar um módulo à parte — é o mesmo domínio
+    # de negócio (documentos fiscais), só que do lado de ENTRADA (compra) em
+    # vez de saída (venda). Separada de "fiscal.emitir"/"fiscal.cancelar"
+    # porque é uma ação diferente (lançamento manual de dados de uma nota
+    # que já chegou, não emissão via provedor) — "fiscal.cancelar" já
+    # existente é reaproveitada para cancelar um lançamento de entrada
+    # também, mesmo raciocínio de "é a ação mais arriscada do módulo".
+    ("fiscal", "registrar_entrada", "Lançar os dados de uma nota fiscal de entrada (compra) recebida de um fornecedor", 0),
 ]
 
 PERFIS_PADRAO = [
@@ -494,6 +504,12 @@ PERFIS_PADRAO = [
         # as respostas recebidas e fechar escolhendo o vencedor.
         "compras.criar_cotacao", "compras.registrar_resposta_cotacao", "compras.fechar_cotacao",
         "compras.cancelar_cotacao",
+        # Fase 78 — mesmo perfil que já lida com o fornecedor e a NF de
+        # compra (para lançar a conta a pagar, acima) lança também os dados
+        # fiscais da nota — "fiscal.cancelar" fica de propósito fora daqui,
+        # mesma régua do resto do módulo (ação mais arriscada, só
+        # Administrador).
+        "fiscal.visualizar", "fiscal.registrar_entrada",
     ]),
     ("Comercial", "CRM e força de vendas interna", 1, [
         "itens.visualizar", "estoque.visualizar", "comercial.visualizar", "comercial.cadastrar_cliente",

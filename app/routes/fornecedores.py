@@ -160,6 +160,46 @@ def criar():
     return jsonify(dict(row)), 201
 
 
+CAMPOS_FISCAIS_FORNECEDOR_EDITAVEIS = (
+    "inscricao_estadual", "logradouro", "numero_endereco", "complemento_endereco",
+    "bairro", "municipio", "codigo_ibge_municipio", "uf", "cep",
+)
+
+
+@bp.put("/<int:fornecedor_id>/dados-fiscais")
+@requires_permission("fornecedores", "cadastrar")
+def editar_dados_fiscais(fornecedor_id):
+    """Fase 78 — mesmos campos que a Fase 70 já adicionou em
+    empresas/clientes, agora em fornecedores: necessários para saber se uma
+    compra é operação interna ou interestadual (usado nas fases seguintes
+    do projeto de SPED Fiscal). Rota dedicada e de escopo único, mesmo
+    raciocínio de `configurar_lead_time` abaixo — é dado de cadastro, não
+    uma decisão de homologação (`fornecedores.homologar`), por isso
+    reaproveita `fornecedores.cadastrar`."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+
+    anterior = conn.execute("SELECT * FROM fornecedores WHERE id = ?", (fornecedor_id,)).fetchone()
+    if anterior is None:
+        raise ApiError("Fornecedor não encontrado.", status=404)
+    anterior = dict(anterior)
+
+    valores = {campo: dados.get(campo, anterior[campo]) for campo in CAMPOS_FISCAIS_FORNECEDOR_EDITAVEIS}
+    conn.execute(
+        f"""
+        UPDATE fornecedores SET {', '.join(f'{c} = ?' for c in CAMPOS_FISCAIS_FORNECEDOR_EDITAVEIS)}
+        WHERE id = ?
+        """,
+        (*[valores[c] for c in CAMPOS_FISCAIS_FORNECEDOR_EDITAVEIS], fornecedor_id),
+    )
+    novo_row = conn.execute("SELECT * FROM fornecedores WHERE id = ?", (fornecedor_id,)).fetchone()
+    audit.registrar(conn, tabela="fornecedores", registro_id=fornecedor_id, usuario_id=usuario_atual["id"],
+                     acao="fornecedor_dados_fiscais_editados", valor_anterior=anterior, valor_novo=dict(novo_row),
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(dict(novo_row))
+
+
 @bp.put("/<int:fornecedor_id>/lead-time")
 @requires_permission("fornecedores", "cadastrar")
 def configurar_lead_time(fornecedor_id):

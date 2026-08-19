@@ -329,6 +329,7 @@
           case "minhas-comissoes": return renderMinhasComissoes();
           case "financeiro": return renderFinanceiro();
           case "fiscal": return param ? renderNotaFiscalDetalhe(Number(param)) : renderNotasFiscais();
+          case "fiscal-entrada": return param ? renderNotaFiscalEntradaDetalhe(Number(param)) : renderNotasFiscaisEntrada();
           case "fiscal-configuracao": return renderFiscalConfiguracao();
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "conciliacao-bancaria": return param ? renderConciliacaoBancariaDetalhe(Number(param)) : renderConciliacaoBancaria();
@@ -445,6 +446,8 @@
         { rota: "#/minhas-comissoes", chave: "minhas-comissoes", label: "Minhas Comissões", permissao: ["vendas_app", "usar"] },
         // Fase 70 — Fiscal (NF-e).
         { rota: "#/fiscal", chave: "fiscal", label: "Notas Fiscais (NF-e)", permissao: ["fiscal", "visualizar"] },
+        // Fase 78 — SPED Fiscal (1/5).
+        { rota: "#/fiscal-entrada", chave: "fiscal-entrada", label: "Notas Fiscais de Entrada", permissao: ["fiscal", "visualizar"] },
         { rota: "#/fiscal-configuracao", chave: "fiscal-configuracao", label: "Configuração NF-e", permissao: ["fiscal", "configurar"] },
       ],
     },
@@ -1561,6 +1564,7 @@
             ${podeHomologar ? `<button class="botao secundario pequeno" data-acao="alterar-status-fornecedor" data-id="${f.id}">Status</button>` : ""}
             ${podeHomologar ? `<button class="botao secundario pequeno" data-acao="homologar-item-fornecedor" data-id="${f.id}">Homologar item</button>` : ""}
             ${podeCadastrar ? `<button class="botao secundario pequeno" data-acao="editar-lead-time-fornecedor" data-id="${f.id}">Lead time</button>` : ""}
+            ${podeCadastrar ? `<button class="botao secundario pequeno" data-acao="editar-dados-fiscais-fornecedor" data-id="${f.id}">Dados fiscais</button>` : ""}
           </td>
         </tr>`
       )
@@ -1610,6 +1614,34 @@
       <form data-form="editar-lead-time-fornecedor" data-id="${fornecedor.id}">
         <div class="campo"><label>Lead time de entrega (dias)</label>
           <input name="lead_time_dias" type="number" step="1" min="0" value="${fornecedor.lead_time_dias != null ? fornecedor.lead_time_dias : ""}">
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarDadosFiscaisFornecedor(fornecedor) {
+    abrirModal(`
+      <h3>Dados fiscais de ${escapeHtml(fornecedor.nome)}</h3>
+      <p class="texto-suave">Fase 78 — usados para saber se uma compra deste fornecedor é operação interna ou
+      interestadual (necessário para as próximas fases do SPED Fiscal); não afetam nenhuma tela existente.</p>
+      <form data-form="editar-dados-fiscais-fornecedor" data-id="${fornecedor.id}">
+        <div class="campo"><label>Inscrição Estadual</label><input name="inscricao_estadual" value="${escapeHtml(fornecedor.inscricao_estadual || "")}"></div>
+        <div class="campo"><label>Logradouro</label><input name="logradouro" value="${escapeHtml(fornecedor.logradouro || "")}"></div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>Número</label><input name="numero_endereco" value="${escapeHtml(fornecedor.numero_endereco || "")}"></div>
+          <div class="campo"><label>Complemento</label><input name="complemento_endereco" value="${escapeHtml(fornecedor.complemento_endereco || "")}"></div>
+        </div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>Bairro</label><input name="bairro" value="${escapeHtml(fornecedor.bairro || "")}"></div>
+          <div class="campo"><label>Município</label><input name="municipio" value="${escapeHtml(fornecedor.municipio || "")}"></div>
+          <div class="campo"><label>Código IBGE do município</label><input name="codigo_ibge_municipio" value="${escapeHtml(fornecedor.codigo_ibge_municipio || "")}"></div>
+        </div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>UF</label><input name="uf" maxlength="2" style="text-transform:uppercase;" value="${escapeHtml(fornecedor.uf || "")}"></div>
+          <div class="campo"><label>CEP</label><input name="cep" value="${escapeHtml(fornecedor.cep || "")}"></div>
         </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
@@ -6881,6 +6913,191 @@
     );
   }
 
+  // =======================================================================
+  // FASE 78 — SPED Fiscal (1/5): Notas Fiscais de Entrada
+  // =======================================================================
+  // Captura estruturada dos dados de uma nota de COMPRA (fornecedor) — só
+  // digitação do que já está na nota em papel/PDF, nenhum cálculo de
+  // imposto acontece aqui (isso é responsabilidade das fases seguintes do
+  // projeto de SPED Fiscal, com parâmetros confirmados pelo contador).
+  function seloNotaEntrada(status) {
+    return status === "cancelada"
+      ? '<span class="selo bloqueado">Cancelada</span>'
+      : '<span class="selo ativo">Lançada</span>';
+  }
+
+  function parseItensNotaFiscalEntradaTexto(texto, itensPorCodigo) {
+    return (texto || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((linha) => {
+        const partes = linha.split(";").map((p) => (p || "").trim());
+        const [codigo, quantidade, unidade, valorUnitario, cfop, cstCsosn, valorIcms, valorIcmsSt, valorIpi] = partes;
+        const item = itensPorCodigo[codigo];
+        if (!item) throw new Error(`Item de código "${codigo}" não encontrado. Confira o código na tela de Itens.`);
+        if (!quantidade || !unidade || !valorUnitario || !cfop || !cstCsosn) {
+          throw new Error(
+            `Linha "${linha}" incompleta — formato mínimo: codigo;quantidade;unidade;valor_unitario;cfop;cst_csosn ` +
+            `(mais valor_icms;valor_icms_st;valor_ipi opcionais no final).`
+          );
+        }
+        return {
+          item_id: item.id, ncm: item.ncm || null, quantidade: Number(quantidade), unidade,
+          valor_unitario: Number(valorUnitario), cfop, cst_csosn: cstCsosn,
+          valor_icms: valorIcms ? Number(valorIcms) : 0,
+          valor_icms_st: valorIcmsSt ? Number(valorIcmsSt) : 0,
+          valor_ipi: valorIpi ? Number(valorIpi) : 0,
+        };
+      });
+  }
+
+  async function renderNotasFiscaisEntrada() {
+    app.innerHTML = '<div class="carregando">Carregando notas fiscais de entrada…</div>';
+    const [notas, fornecedores, itens] = await Promise.all([
+      chamarApi("/fiscal/notas-entrada"),
+      chamarApi("/fornecedores"),
+      chamarApi("/itens"),
+    ]);
+    state.cache.fornecedores = fornecedores;
+    state.cache.itens = itens;
+    const podeRegistrar = temPermissao("fiscal", "registrar_entrada");
+
+    const linhas = notas.map((n) => `<tr>
+      <td class="mono"><a href="#/fiscal-entrada/${n.id}">${escapeHtml(n.numero)}/${escapeHtml(n.serie)}</a></td>
+      <td>${escapeHtml(n.fornecedor_nome || "")}</td>
+      <td>${seloNotaEntrada(n.status)}</td>
+      <td>${fmtData(n.data_entrada)}</td>
+      <td>R$ ${Number(n.valor_total_nota).toFixed(2)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Notas Fiscais de Entrada</h2>
+       <p class="dica">
+         Captura estruturada das notas de compra recebidas dos fornecedores — primeira etapa do projeto de
+         SPED Fiscal (EFD ICMS/IPI). Só registra o que já está na nota do fornecedor; nenhum imposto é
+         calculado aqui.
+       </p>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span></span>
+           ${podeRegistrar ? `<button class="botao" data-acao="nova-nota-fiscal-entrada">+ Nova nota de entrada</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nº/Série</th><th>Fornecedor</th><th>Status</th><th>Data entrada</th><th>Valor total</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhuma nota fiscal de entrada lançada ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "fiscal-entrada"
+    );
+  }
+
+  function modalNovaNotaFiscalEntrada() {
+    const fornecedores = state.cache.fornecedores || [];
+    const opcoesFornecedor = fornecedores.map((f) => `<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Nova nota fiscal de entrada</h3>
+      <form data-form="nova-nota-fiscal-entrada">
+        <div class="campo"><label>Fornecedor</label><select name="fornecedor_id" required>${opcoesFornecedor}</select></div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>Série</label><input name="serie" required></div>
+          <div class="campo"><label>Número</label><input name="numero" required></div>
+          <div class="campo"><label>Modelo</label>
+            <select name="modelo">
+              <option value="55">55 — NF-e</option>
+              <option value="65">65 — NFC-e</option>
+              <option value="01">01 — Modelo 1/1-A</option>
+            </select>
+          </div>
+        </div>
+        <div class="campo"><label>Chave de acesso (opcional)</label><input name="chave_acesso" maxlength="44" placeholder="44 dígitos, se disponível"></div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>Data de emissão</label><input name="data_emissao" type="date" required></div>
+          <div class="campo"><label>Data de entrada</label><input name="data_entrada" type="date" required></div>
+        </div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>Frete (R$)</label><input name="valor_frete" type="number" step="0.01" min="0" value="0"></div>
+          <div class="campo"><label>Seguro (R$)</label><input name="valor_seguro" type="number" step="0.01" min="0" value="0"></div>
+          <div class="campo"><label>Desconto (R$)</label><input name="valor_desconto" type="number" step="0.01" min="0" value="0"></div>
+          <div class="campo"><label>Outras despesas (R$)</label><input name="valor_outras_despesas" type="number" step="0.01" min="0" value="0"></div>
+        </div>
+        <div class="campo">
+          <label>Itens (um por linha: <span class="mono">codigo;quantidade;unidade;valor_unitario;cfop;cst_csosn;valor_icms;valor_icms_st;valor_ipi</span>)</label>
+          <textarea name="itens" required placeholder="MP001;100;kg;5.50;1102;000;12.10;0;0"></textarea>
+          <div class="dica">O código é o mesmo cadastrado na tela de Itens. Os três últimos valores (ICMS, ICMS-ST, IPI)
+          são opcionais — copie exatamente o que está destacado na nota do fornecedor; deixe em branco (ou 0) se a nota
+          não destacar algum deles.</div>
+        </div>
+        <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Lançar nota</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarNotaFiscalEntrada(notaId) {
+    abrirModal(`
+      <h3>Cancelar nota fiscal de entrada</h3>
+      <form data-form="cancelar-nota-fiscal-entrada" data-id="${notaId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Cancelar nota</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderNotaFiscalEntradaDetalhe(notaId) {
+    app.innerHTML = '<div class="carregando">Carregando nota fiscal de entrada…</div>';
+    const nota = await chamarApi(`/fiscal/notas-entrada/${notaId}`);
+    const podeCancelar = temPermissao("fiscal", "cancelar");
+
+    const itensHtml = nota.itens.map((it) => `<tr>
+      <td>${escapeHtml(it.item_codigo)} — ${escapeHtml(it.item_descricao)}</td>
+      <td class="mono">${escapeHtml(it.cfop)}</td>
+      <td class="mono">${escapeHtml(it.cst_csosn)}</td>
+      <td>${it.quantidade} ${escapeHtml(it.unidade)}</td>
+      <td>R$ ${Number(it.valor_unitario).toFixed(2)}</td>
+      <td>R$ ${Number(it.valor_total).toFixed(2)}</td>
+      <td>R$ ${Number(it.valor_icms).toFixed(2)}</td>
+      <td>R$ ${Number(it.valor_icms_st).toFixed(2)}</td>
+      <td>R$ ${Number(it.valor_ipi).toFixed(2)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<a class="link-voltar" href="#/fiscal-entrada">← Voltar para Notas Fiscais de Entrada</a>
+       <h2>Nota de entrada ${escapeHtml(nota.numero)}/${escapeHtml(nota.serie)}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><span class="rotulo">Status</span><br>${seloNotaEntrada(nota.status)}</div>
+           <div><span class="rotulo">Fornecedor</span><br>${escapeHtml(nota.fornecedor_nome)} — ${escapeHtml(nota.fornecedor_cnpj)}</div>
+           <div><span class="rotulo">Data emissão</span><br>${escapeHtml(nota.data_emissao)}</div>
+           <div><span class="rotulo">Data entrada</span><br>${escapeHtml(nota.data_entrada)}</div>
+           <div><span class="rotulo">Chave de acesso</span><br><span class="mono">${escapeHtml(nota.chave_acesso || "—")}</span></div>
+           <div><span class="rotulo">Valor total da nota</span><br>R$ ${Number(nota.valor_total_nota).toFixed(2)}</div>
+         </div>
+         ${nota.status === "cancelada" ? `<p class="mensagem-erro">Cancelada em ${fmtData(nota.cancelada_em)}: ${escapeHtml(nota.motivo_cancelamento || "")}</p>` : ""}
+         ${nota.status === "lancada" && podeCancelar
+           ? `<div class="barra-acoes"><span></span><button class="botao perigo" data-acao="abrir-cancelar-nota-entrada" data-id="${nota.id}">Cancelar nota</button></div>` : ""}
+       </div>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Itens</h3>
+         <table>
+           <thead><tr><th>Item</th><th>CFOP</th><th>CST/CSOSN</th><th>Quantidade</th><th>Vl. unitário</th><th>Vl. total</th><th>ICMS</th><th>ICMS-ST</th><th>IPI</th></tr></thead>
+           <tbody>${itensHtml}</tbody>
+         </table>
+         <p class="texto-suave">
+           Frete: R$ ${Number(nota.valor_frete).toFixed(2)} —
+           Seguro: R$ ${Number(nota.valor_seguro).toFixed(2)} —
+           Desconto: R$ ${Number(nota.valor_desconto).toFixed(2)} —
+           Outras despesas: R$ ${Number(nota.valor_outras_despesas).toFixed(2)}
+         </p>
+       </div>`,
+      "fiscal-entrada"
+    );
+  }
+
   function modalCancelarBoleto(boletoId) {
     abrirModal(`
       <h3>Cancelar boleto</h3>
@@ -9133,6 +9350,14 @@
         modalCancelarNota(alvo.dataset.id);
         return;
 
+      // ---- Fase 78: SPED Fiscal (1/5) — Notas Fiscais de Entrada ----
+      case "nova-nota-fiscal-entrada":
+        modalNovaNotaFiscalEntrada();
+        return;
+      case "abrir-cancelar-nota-entrada":
+        modalCancelarNotaFiscalEntrada(Number(alvo.dataset.id));
+        return;
+
       // ---- Fase 71: Financeiro — Boleto Bancário ----
       case "gerar-boleto": {
         // Fase 72 (auditoria de segurança): mesmo raciocínio de
@@ -9201,6 +9426,12 @@
         const fornecedores = await chamarApi("/fornecedores");
         const fornecedor = fornecedores.find((f) => String(f.id) === alvo.dataset.id);
         modalEditarLeadTimeFornecedor(fornecedor);
+        return;
+      }
+      case "editar-dados-fiscais-fornecedor": {
+        const fornecedores = await chamarApi("/fornecedores");
+        const fornecedor = fornecedores.find((f) => String(f.id) === alvo.dataset.id);
+        modalEditarDadosFiscaisFornecedor(fornecedor);
         return;
       }
       // ---- Fase 62: Desempenho de Fornecedor (Scorecard) ----
@@ -10264,6 +10495,25 @@
         definirFlash("ok", "Fornecedor criado.");
         return renderFornecedores();
       }
+      case "editar-dados-fiscais-fornecedor": {
+        await chamarApi(`/fornecedores/${form.dataset.id}/dados-fiscais`, {
+          method: "PUT",
+          body: {
+            inscricao_estadual: dados.get("inscricao_estadual") || null,
+            logradouro: dados.get("logradouro") || null,
+            numero_endereco: dados.get("numero_endereco") || null,
+            complemento_endereco: dados.get("complemento_endereco") || null,
+            bairro: dados.get("bairro") || null,
+            municipio: dados.get("municipio") || null,
+            codigo_ibge_municipio: dados.get("codigo_ibge_municipio") || null,
+            uf: dados.get("uf") ? dados.get("uf").toUpperCase() : null,
+            cep: dados.get("cep") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Dados fiscais do fornecedor atualizados.");
+        return renderFornecedores();
+      }
       case "editar-lead-time-fornecedor": {
         await chamarApi(`/fornecedores/${form.dataset.id}/lead-time`, {
           method: "PUT",
@@ -10639,6 +10889,38 @@
         fecharModais();
         definirFlash("ok", `Pedido de compra ${pedidoCriado.numero} criado (rascunho).`);
         return navegarPara(`#/compras-pedidos/${pedidoCriado.id}`);
+      }
+
+      // ---- Fase 78: SPED Fiscal (1/5) — Notas Fiscais de Entrada ----
+      case "nova-nota-fiscal-entrada": {
+        const itensPorCodigo = {};
+        for (const it of state.cache.itens || []) itensPorCodigo[it.codigo] = it;
+        const itensNota = parseItensNotaFiscalEntradaTexto(dados.get("itens"), itensPorCodigo);
+        if (!itensNota.length) throw new Error("Informe ao menos um item.");
+        const notaCriada = await chamarApi("/fiscal/notas-entrada", {
+          method: "POST",
+          body: {
+            fornecedor_id: Number(dados.get("fornecedor_id")),
+            serie: dados.get("serie"), numero: dados.get("numero"), modelo: dados.get("modelo"),
+            chave_acesso: dados.get("chave_acesso") || null,
+            data_emissao: dados.get("data_emissao"), data_entrada: dados.get("data_entrada"),
+            valor_frete: Number(dados.get("valor_frete") || 0), valor_seguro: Number(dados.get("valor_seguro") || 0),
+            valor_desconto: Number(dados.get("valor_desconto") || 0), valor_outras_despesas: Number(dados.get("valor_outras_despesas") || 0),
+            observacoes: dados.get("observacoes") || null,
+            itens: itensNota,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", `Nota fiscal de entrada ${notaCriada.numero}/${notaCriada.serie} lançada.`);
+        return navegarPara(`#/fiscal-entrada/${notaCriada.id}`);
+      }
+      case "cancelar-nota-fiscal-entrada": {
+        const notaAtualizada = await chamarApi(`/fiscal/notas-entrada/${form.dataset.id}/cancelar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Nota fiscal de entrada cancelada.");
+        return renderNotaFiscalEntradaDetalhe(notaAtualizada.id);
       }
       case "cancelar-pedido-compra": {
         const pedidoId = Number(form.dataset.id);
