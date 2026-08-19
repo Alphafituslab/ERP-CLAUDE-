@@ -3500,6 +3500,27 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   suporte a mais de um provedor (hoje só Focus NFe), NF-e de devolução/
   complementar, e recebimento de webhook do provedor em vez de consulta
   manual de status (hoje "Consultar status" é um botão, não automático).
+- (Entregue na Fase 78) Notas Fiscais de Entrada — primeira etapa de um
+  projeto maior (SPED Fiscal / EFD ICMS/IPI, a escrituração fiscal digital
+  mensal exigida de empresas do Lucro Presumido/Real). Antes desta fase,
+  uma nota de compra de fornecedor só existia como o campo de texto livre
+  `lotes.nota_fiscal` — sem CFOP, CST/CSOSN, chave de acesso ou imposto
+  destacado. Agora há um lançamento estruturado (`notas_fiscais_entrada` +
+  `notas_fiscais_entrada_itens`, tela "Notas Fiscais de Entrada" no menu
+  Comercial & Vendas), com fornecedores ganhando os mesmos campos fiscais
+  que empresas/clientes já tinham desde a Fase 70 (Inscrição Estadual,
+  endereço estruturado, UF — editáveis pelo botão "Dados fiscais" na tela
+  de Fornecedores). **Escopo desta fase, de propósito:** só CAPTURA os
+  valores exatamente como aparecem na nota do fornecedor — nenhum imposto é
+  calculado, nenhuma alíquota é sugerida. A apuração de ICMS/IPI de verdade
+  (débito das saídas × crédito das entradas, por alíquota/UF/CST — o motivo
+  do SPED Fiscal existir) é um motor à parte, ainda não construído, que
+  depende de parâmetros reais (alíquota interna do estado, substituição
+  tributária, DIFAL) confirmados por um contador — nunca inventados no
+  código. Lançamento pelo formulário aceita itens num formato de linha só
+  (`codigo;quantidade;unidade;valor_unitario;cfop;cst_csosn;valor_icms;
+  valor_icms_st;valor_ipi`, os três últimos opcionais), mesmo padrão já
+  usado no Pedido de Compra (Fase 58) em vez de uma UI de linhas dinâmicas.
 - (Entregue na Fase 71) Emissão de Boleto Bancário via provedor
   terceirizado (Asaas) — a partir de uma conta a receber em aberto,
   gera-se um boleto de verdade (linha digitável, código de barras, link
