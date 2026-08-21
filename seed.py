@@ -693,14 +693,23 @@ def rodar_seed(conn=None, admin_email=None, admin_senha=None, imprimir=True):
 
     senha_gerada = None
     if not ja_existe_admin:
-        senha = admin_senha or os.environ.get("ALPHAFITUS_ADMIN_SENHA")
+        senha_informada = admin_senha or os.environ.get("ALPHAFITUS_ADMIN_SENHA")
+        senha = senha_informada
         if not senha:
             senha = _gerar_senha_forte()
             senha_gerada = senha
         senha_hash = security.hash_password(senha)
+        # Uma senha ALEATÓRIA gerada aqui (não escolhida por ninguém)
+        # sempre força troca no primeiro login (senha_deve_trocar=1) — é
+        # só uma senha de uso único para destravar o primeiro acesso. Já
+        # uma senha INFORMADA de propósito (ex.: definida na tela do
+        # instalador) é a senha real que a pessoa escolheu usar — fica
+        # valendo até quem usa decidir trocar por conta própria, sem essa
+        # troca forçada logo de cara.
+        deve_trocar = 0 if senha_informada else 1
         cur = conn.execute(
-            "INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar) VALUES (?, ?, ?, 1)",
-            ("Administrador Inicial", email, senha_hash),
+            "INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar) VALUES (?, ?, ?, ?)",
+            ("Administrador Inicial", email, senha_hash, deve_trocar),
         )
         admin_id = cur.lastrowid
         conn.execute(

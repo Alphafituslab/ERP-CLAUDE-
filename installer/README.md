@@ -7,11 +7,15 @@ interpretador Python + todas as dependências dentro dos próprios `.exe`.
 
 ## Como gerar (nesta máquina de desenvolvimento)
 
-Pré-requisitos (uma vez só):
+Pré-requisitos (uma vez só, só nesta máquina de desenvolvimento — não
+entra em `requirements.txt` do projeto principal, que descreve o que o
+Alphafitus OS em si precisa, não a ferramenta de build do instalador):
 ```powershell
-venv\Scripts\pip install pyinstaller
+venv\Scripts\pip install pyinstaller pystray
 winget install --id JRSoftware.InnoSetup -e
 ```
+`pystray` é usado só pelo `app_launcher_tray.py` (o modo "sem janela",
+ícone na bandeja do Windows) — nunca importado pelo resto do sistema.
 
 Build completo:
 ```powershell
