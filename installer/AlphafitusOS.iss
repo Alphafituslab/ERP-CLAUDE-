@@ -207,6 +207,14 @@ begin
   if CurStep = ssPostInstall then
   begin
     ConfigFile := ExpandConstant('{app}\config_ambiente.bat');
+    // Reinstalar/atualizar por cima de uma instalação já existente (ex.:
+    // uma versão nova do instalador) NUNCA deve mexer num
+    // config_ambiente.bat que já existe — regenerar a chave de segurança
+    // desloga todo mundo à toa, e sobrescrever apagaria a senha que a
+    // pessoa definiu na instalação original. Mesmo raciocínio de "gera
+    // só se necessário" que app_launcher.py/app_launcher_tray.py já usam
+    // do lado do aplicativo.
+    if FileExists(ConfigFile) then Exit;
     DbPath := ExpandConstant('{app}\data\alphafitus.db');
     Email := Trim(AdminPage.Values[0]);
     if Email = '' then Email := 'admin@alphafitus.com.br';

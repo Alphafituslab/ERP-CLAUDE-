@@ -27,7 +27,9 @@ from app_launcher import (
 )
 
 MB_ICONERROR = 0x10
+MB_ICONINFORMATION = 0x40
 MB_OK = 0x0
+ERROR_ALREADY_EXISTS = 183
 
 
 def mostrar_erro_windows(titulo, mensagem):
@@ -35,6 +37,16 @@ def mostrar_erro_windows(titulo, mensagem):
         ctypes.windll.user32.MessageBoxW(None, mensagem, titulo, MB_OK | MB_ICONERROR)
     except Exception:
         pass
+
+
+def ja_esta_rodando():
+    """Mutex nomeado do Windows — forma padrão de detectar 'já existe uma
+    cópia rodando' sem depender de olhar a porta 5000 (que pode estar
+    ocupada por outro motivo). Clicar o atalho de novo enquanto o
+    Alphafitus OS já está na bandeja não deve abrir um segundo servidor
+    brigando pela mesma porta — só reabre o navegador."""
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, "Global\\AlphafitusOS_InstanciaUnica")
+    return handle != 0 and ctypes.windll.kernel32.GetLastError() == ERROR_ALREADY_EXISTS
 
 
 def configurar_log(pasta):
@@ -50,6 +62,16 @@ def configurar_log(pasta):
 def main():
     pasta = pasta_instalacao()
     os.chdir(pasta)
+
+    # Precisa vir ANTES de qualquer outra coisa: clicar o atalho de novo
+    # com o Alphafitus OS já rodando (esquecendo que ele fica só na
+    # bandeja, sem janela visível) não deve abrir um segundo processo
+    # disputando a porta 5000 — só reabre o navegador na instância que já
+    # está no ar.
+    if ja_esta_rodando():
+        webbrowser.open("http://localhost:5000")
+        return
+
     caminho_log = configurar_log(pasta)
     logging.info("Alphafitus OS (modo bandeja) iniciando...")
 
@@ -83,6 +105,12 @@ def main():
             daemon=True,
         )
         thread_servidor.start()
+
+        # Abre o navegador sozinho no primeiro início — sem isso, clicar o
+        # atalho não parece fazer nada visível (o servidor sobe em
+        # segundo plano, só o ícone aparece na bandeja), o que já
+        # confundiu um usuário real achando que "não abriu".
+        threading.Timer(1.5, lambda: webbrowser.open("http://localhost:5000")).start()
     except Exception:
         logging.exception("Erro fatal ao iniciar")
         mostrar_erro_windows(
