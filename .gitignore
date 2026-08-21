@@ -12,3 +12,10 @@ server_log*.txt
 demo_log*.txt
 
 *.log
+
+# Saída de build do instalador (gerada por installer/alphafitus.spec +
+# installer/AlphafitusOS.iss) — grande e 100% reproduzível a partir do
+# código-fonte, nunca precisa ir pro controle de versão.
+installer/dist/
+installer/build/
+installer/saida/

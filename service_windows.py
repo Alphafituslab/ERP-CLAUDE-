@@ -81,8 +81,17 @@ def ler_variaveis_de_config_ambiente(caminho_config_ambiente_bat):
             if "=" not in resto:
                 continue
             chave, _, valor = resto.partition("=")
-            chave = chave.strip()
-            valor = valor.strip()
+            # `_ambiente.bat`/o instalador geram linhas no formato
+            # `set "CHAVE=valor"` (aspas envolvendo o par inteiro, sintaxe
+            # padrão do cmd.exe para lidar com valores com espaço/caracteres
+            # especiais) — sem este strip, a aspa de abertura ficava colada
+            # no início da CHAVE e a de fechamento no fim do VALOR,
+            # nunca batendo com o nome real da variável de ambiente
+            # (bug real: o Serviço do Windows sempre caía nos valores
+            # padrão do código, silenciosamente, em vez de ler o que
+            # `set "ALPHAFITUS_JWT_SECRET=..."` realmente gravou).
+            chave = chave.strip().strip('"')
+            valor = valor.strip().strip('"')
             if chave:
                 variaveis[chave] = valor
     return variaveis
