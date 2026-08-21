@@ -418,6 +418,13 @@ PERMISSOES_PADRAO = [
     # existente é reaproveitada para cancelar um lançamento de entrada
     # também, mesmo raciocínio de "é a ação mais arriscada do módulo".
     ("fiscal", "registrar_entrada", "Lançar os dados de uma nota fiscal de entrada (compra) recebida de um fornecedor", 0),
+    # ---- Fase 79 (SPED Fiscal 2/5 — Configuração Fiscal) ----
+    # Mesmo raciocínio de "fiscal.configurar" (Fase 70, token do provedor de
+    # NF-e): são parâmetros de infraestrutura fiscal, não uma ação de
+    # negócio do dia a dia — errar aqui afeta toda apuração futura, por
+    # isso fica só com o Administrador (não entra em nenhum PERFIS_PADRAO
+    # abaixo além dele).
+    ("fiscal", "configurar_sped", "Configurar os parâmetros de apuração do SPED Fiscal (alíquotas de ICMS/IPI/PIS/COFINS)", 0),
 ]
 
 PERFIS_PADRAO = [

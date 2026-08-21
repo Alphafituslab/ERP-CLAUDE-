@@ -569,3 +569,121 @@ def cancelar_nota_entrada(nota_id):
         valor_novo={"status": "cancelada", "motivo": motivo}, ip=client_ip(), dispositivo=client_device(),
     )
     return jsonify(_nota_entrada_detalhada(conn, nota_id))
+
+
+# ============================================================
+# CONFIGURAÇÃO FISCAL (Fase 79 — SPED Fiscal 2/5)
+#
+# "Livro de regras" para a apuração de ICMS/IPI/PIS/COFINS — NENHUM cálculo
+# roda a partir daqui ainda (isso é a Fase 80, o motor do Bloco E). Valores
+# padrão baseados em Santa Catarina (estado da empresa) e nas regras
+# federais estáveis de ICMS interestadual (Resolução do Senado 22/89 +
+# 13/2012); todos editáveis, nunca fixos no código. Segue o mesmo padrão
+# obter/salvar de app/nfe_service.py, mas direto aqui (sem módulo de
+# serviço próprio) porque não existe nenhuma chamada a provedor externo —
+# é só leitura/escrita de uma linha de configuração.
+# ============================================================
+PADRAO_CONFIGURACAO_FISCAL_SPED = {
+    "id": 1, "uf_empresa": "SC", "aliquota_icms_interna": 17.0,
+    "aliquota_icms_interestadual_sul_sudeste": 12.0, "aliquota_icms_interestadual_norte_nordeste_co": 7.0,
+    "aliquota_icms_interestadual_importado": 4.0, "regime_pis_cofins": "nao_cumulativo",
+    "aliquota_pis": 1.65, "aliquota_cofins": 7.6, "contribuinte_ipi": 1,
+    "ha_vendas_consumidor_final_fora_estado": 0, "observacoes": None,
+    "atualizado_em": None, "atualizado_por": None,
+}
+
+
+def _obter_configuracao_fiscal_sped(conn):
+    row = conn.execute("SELECT * FROM configuracoes_fiscais_sped WHERE id = 1").fetchone()
+    if row is None:
+        # Defensivo — mesmo espírito de `_configuracao_comercial` em
+        # vendas_app.py: nunca deveria acontecer num banco que passou pela
+        # migration, mas devolve o padrão em vez de um 500.
+        return dict(PADRAO_CONFIGURACAO_FISCAL_SPED)
+    return dict(row)
+
+
+@bp.get("/configuracao-sped")
+@requires_permission("fiscal", "configurar_sped")
+def obter_configuracao_sped():
+    conn = get_db()
+    return jsonify(_obter_configuracao_fiscal_sped(conn))
+
+
+@bp.put("/configuracao-sped")
+@requires_permission("fiscal", "configurar_sped")
+def atualizar_configuracao_sped():
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+    anterior = _obter_configuracao_fiscal_sped(conn)
+
+    def _num(campo, minimo=0, maximo=100):
+        valor = dados.get(campo, anterior[campo])
+        try:
+            valor = float(valor)
+        except (TypeError, ValueError):
+            raise ApiError(f"{campo} deve ser numérico.", status=400)
+        if not (minimo <= valor <= maximo):
+            raise ApiError(f"{campo} deve estar entre {minimo} e {maximo}.", status=400)
+        return valor
+
+    uf_empresa = (dados.get("uf_empresa", anterior["uf_empresa"]) or "").strip().upper()
+    if len(uf_empresa) != 2:
+        raise ApiError("uf_empresa deve ser a sigla de 2 letras do estado (ex.: SC).", status=400)
+    regime_pis_cofins = dados.get("regime_pis_cofins", anterior["regime_pis_cofins"])
+    if regime_pis_cofins not in ("cumulativo", "nao_cumulativo"):
+        raise ApiError("regime_pis_cofins deve ser 'cumulativo' ou 'nao_cumulativo'.", status=400)
+    contribuinte_ipi = 1 if dados.get("contribuinte_ipi", anterior["contribuinte_ipi"]) else 0
+    ha_vendas_fora_estado = 1 if dados.get("ha_vendas_consumidor_final_fora_estado", anterior["ha_vendas_consumidor_final_fora_estado"]) else 0
+
+    nova = {
+        "uf_empresa": uf_empresa,
+        "aliquota_icms_interna": _num("aliquota_icms_interna"),
+        "aliquota_icms_interestadual_sul_sudeste": _num("aliquota_icms_interestadual_sul_sudeste"),
+        "aliquota_icms_interestadual_norte_nordeste_co": _num("aliquota_icms_interestadual_norte_nordeste_co"),
+        "aliquota_icms_interestadual_importado": _num("aliquota_icms_interestadual_importado"),
+        "regime_pis_cofins": regime_pis_cofins,
+        "aliquota_pis": _num("aliquota_pis"),
+        "aliquota_cofins": _num("aliquota_cofins"),
+        "contribuinte_ipi": contribuinte_ipi,
+        "ha_vendas_consumidor_final_fora_estado": ha_vendas_fora_estado,
+        "observacoes": dados.get("observacoes", anterior["observacoes"]),
+    }
+
+    conn.execute(
+        """
+        INSERT INTO configuracoes_fiscais_sped
+            (id, uf_empresa, aliquota_icms_interna, aliquota_icms_interestadual_sul_sudeste,
+             aliquota_icms_interestadual_norte_nordeste_co, aliquota_icms_interestadual_importado,
+             regime_pis_cofins, aliquota_pis, aliquota_cofins, contribuinte_ipi,
+             ha_vendas_consumidor_final_fora_estado, observacoes, atualizado_em, atualizado_por)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            uf_empresa = excluded.uf_empresa,
+            aliquota_icms_interna = excluded.aliquota_icms_interna,
+            aliquota_icms_interestadual_sul_sudeste = excluded.aliquota_icms_interestadual_sul_sudeste,
+            aliquota_icms_interestadual_norte_nordeste_co = excluded.aliquota_icms_interestadual_norte_nordeste_co,
+            aliquota_icms_interestadual_importado = excluded.aliquota_icms_interestadual_importado,
+            regime_pis_cofins = excluded.regime_pis_cofins,
+            aliquota_pis = excluded.aliquota_pis,
+            aliquota_cofins = excluded.aliquota_cofins,
+            contribuinte_ipi = excluded.contribuinte_ipi,
+            ha_vendas_consumidor_final_fora_estado = excluded.ha_vendas_consumidor_final_fora_estado,
+            observacoes = excluded.observacoes,
+            atualizado_em = excluded.atualizado_em,
+            atualizado_por = excluded.atualizado_por
+        """,
+        (
+            nova["uf_empresa"], nova["aliquota_icms_interna"], nova["aliquota_icms_interestadual_sul_sudeste"],
+            nova["aliquota_icms_interestadual_norte_nordeste_co"], nova["aliquota_icms_interestadual_importado"],
+            nova["regime_pis_cofins"], nova["aliquota_pis"], nova["aliquota_cofins"], nova["contribuinte_ipi"],
+            nova["ha_vendas_consumidor_final_fora_estado"], nova["observacoes"], _now_iso(), usuario_atual["id"],
+        ),
+    )
+    audit.registrar(
+        conn, tabela="configuracoes_fiscais_sped", registro_id=1, usuario_id=usuario_atual["id"],
+        acao="configuracao_sped_atualizada", valor_anterior=anterior, valor_novo=nova,
+        ip=client_ip(), dispositivo=client_device(),
+    )
+    return jsonify(_obter_configuracao_fiscal_sped(conn))

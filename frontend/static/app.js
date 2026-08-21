@@ -331,6 +331,7 @@
           case "fiscal": return param ? renderNotaFiscalDetalhe(Number(param)) : renderNotasFiscais();
           case "fiscal-entrada": return param ? renderNotaFiscalEntradaDetalhe(Number(param)) : renderNotasFiscaisEntrada();
           case "fiscal-configuracao": return renderFiscalConfiguracao();
+          case "fiscal-configuracao-sped": return renderConfiguracaoSped();
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "conciliacao-bancaria": return param ? renderConciliacaoBancariaDetalhe(Number(param)) : renderConciliacaoBancaria();
           case "painel-gerencial": return renderPainelGerencial();
@@ -449,6 +450,7 @@
         // Fase 78 — SPED Fiscal (1/5).
         { rota: "#/fiscal-entrada", chave: "fiscal-entrada", label: "Notas Fiscais de Entrada", permissao: ["fiscal", "visualizar"] },
         { rota: "#/fiscal-configuracao", chave: "fiscal-configuracao", label: "Configuração NF-e", permissao: ["fiscal", "configurar"] },
+        { rota: "#/fiscal-configuracao-sped", chave: "fiscal-configuracao-sped", label: "Configuração Fiscal (SPED)", permissao: ["fiscal", "configurar_sped"] },
       ],
     },
     {
@@ -7212,6 +7214,60 @@
     );
   }
 
+  async function renderConfiguracaoSped() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const config = await chamarApi("/fiscal/configuracao-sped");
+
+    renderShell(
+      `<h2>Configuração Fiscal (SPED)</h2>
+       <div class="cartao">
+         <p class="dica">
+           "Livro de regras" usado pela apuração de ICMS/IPI/PIS/COFINS do projeto de SPED Fiscal (EFD ICMS/IPI)
+           — nenhum cálculo roda a partir daqui ainda, isto só guarda os parâmetros que as próximas fases vão usar.
+           Valores padrão baseados em Santa Catarina e nas regras federais estáveis de ICMS interestadual
+           (Resolução do Senado 22/89 + 13/2012).
+         </p>
+         <p class="mensagem-erro" style="margin-top:0;">
+           <strong>Aviso importante:</strong> isto não é aconselhamento fiscal. Alíquotas estaduais mudam por lei —
+           confirme os valores vigentes com o contador antes de usar qualquer apuração gerada a partir daqui em
+           produção.
+         </p>
+         <form data-form="salvar-configuracao-sped">
+           <div class="campo"><label>UF da empresa</label>
+             <input name="uf_empresa" maxlength="2" style="text-transform:uppercase;width:80px;" value="${escapeHtml(config.uf_empresa)}">
+           </div>
+           <h4>ICMS</h4>
+           <div class="linha-detalhe">
+             <div class="campo"><label>Alíquota interna (%)</label><input name="aliquota_icms_interna" type="number" step="0.01" min="0" max="100" value="${config.aliquota_icms_interna}"></div>
+             <div class="campo"><label>Interestadual — Sul/Sudeste (%)</label><input name="aliquota_icms_interestadual_sul_sudeste" type="number" step="0.01" min="0" max="100" value="${config.aliquota_icms_interestadual_sul_sudeste}"></div>
+             <div class="campo"><label>Interestadual — Norte/Nordeste/CO (%)</label><input name="aliquota_icms_interestadual_norte_nordeste_co" type="number" step="0.01" min="0" max="100" value="${config.aliquota_icms_interestadual_norte_nordeste_co}"></div>
+             <div class="campo"><label>Interestadual — produto importado (%)</label><input name="aliquota_icms_interestadual_importado" type="number" step="0.01" min="0" max="100" value="${config.aliquota_icms_interestadual_importado}"></div>
+           </div>
+           <div class="campo"><label><input type="checkbox" name="ha_vendas_consumidor_final_fora_estado" ${config.ha_vendas_consumidor_final_fora_estado ? "checked" : ""}> Há vendas a consumidor final fora do estado (sinaliza necessidade de DIFAL — cálculo ainda não implementado)</label></div>
+           <h4>PIS/COFINS</h4>
+           <div class="linha-detalhe">
+             <div class="campo"><label>Regime</label>
+               <select name="regime_pis_cofins">
+                 <option value="nao_cumulativo" ${config.regime_pis_cofins === "nao_cumulativo" ? "selected" : ""}>Não-cumulativo (Lucro Real)</option>
+                 <option value="cumulativo" ${config.regime_pis_cofins === "cumulativo" ? "selected" : ""}>Cumulativo (Lucro Presumido)</option>
+               </select>
+             </div>
+             <div class="campo"><label>Alíquota PIS (%)</label><input name="aliquota_pis" type="number" step="0.01" min="0" max="100" value="${config.aliquota_pis}"></div>
+             <div class="campo"><label>Alíquota COFINS (%)</label><input name="aliquota_cofins" type="number" step="0.01" min="0" max="100" value="${config.aliquota_cofins}"></div>
+           </div>
+           <h4>IPI</h4>
+           <div class="campo"><label><input type="checkbox" name="contribuinte_ipi" ${config.contribuinte_ipi ? "checked" : ""}> Empresa é contribuinte de IPI (industrializa)</label></div>
+           <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes">${escapeHtml(config.observacoes || "")}</textarea></div>
+           ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
+           <div class="rodape-modal" style="padding:0;">
+             <button type="submit" class="botao">Salvar configuração</button>
+           </div>
+         </form>
+       </div>`,
+      "fiscal-configuracao-sped"
+    );
+  }
+
   // =======================================================================
   // APP DE VENDAS — Fase 36 (rascunho com reserva temporária, verbas
   // comerciais e comissão do vendedor)
@@ -10371,6 +10427,26 @@
         });
         definirFlash("ok", "Configuração de NF-e salva.");
         return renderFiscalConfiguracao();
+      }
+      case "salvar-configuracao-sped": {
+        await chamarApi("/fiscal/configuracao-sped", {
+          method: "PUT",
+          body: {
+            uf_empresa: dados.get("uf_empresa"),
+            aliquota_icms_interna: Number(dados.get("aliquota_icms_interna")),
+            aliquota_icms_interestadual_sul_sudeste: Number(dados.get("aliquota_icms_interestadual_sul_sudeste")),
+            aliquota_icms_interestadual_norte_nordeste_co: Number(dados.get("aliquota_icms_interestadual_norte_nordeste_co")),
+            aliquota_icms_interestadual_importado: Number(dados.get("aliquota_icms_interestadual_importado")),
+            ha_vendas_consumidor_final_fora_estado: dados.get("ha_vendas_consumidor_final_fora_estado") === "on",
+            regime_pis_cofins: dados.get("regime_pis_cofins"),
+            aliquota_pis: Number(dados.get("aliquota_pis")),
+            aliquota_cofins: Number(dados.get("aliquota_cofins")),
+            contribuinte_ipi: dados.get("contribuinte_ipi") === "on",
+            observacoes: dados.get("observacoes") || null,
+          },
+        });
+        definirFlash("ok", "Configuração fiscal (SPED) salva.");
+        return renderConfiguracaoSped();
       }
       case "salvar-dados-fiscais-empresa": {
         await chamarApi(`/empresas/${form.dataset.id}`, {
