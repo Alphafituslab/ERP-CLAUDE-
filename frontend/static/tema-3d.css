@@ -292,27 +292,90 @@ body {
   cursor: help;
 }
 
-.barra-lateral nav { padding: 10px 10px; }
+.barra-lateral nav { padding: 10px 8px; }
+
+/* ---------- Itens de topo (fora de grupo) — "chip" elevado, não mais uma
+   linha plana — é o que dá a sensação de 3D/separação pedida: cada item
+   parece um botão flutuando, não texto colado no fundo azul. ---------- */
 .link-nav {
   border-radius: 10px;
-  margin: 2px 0;
+  margin: 3px 0;
   border-left: none !important;
   position: relative;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: var(--brilho-topo-fraco);
   transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
-.link-nav:hover { background: rgba(255, 255, 255, 0.08); transform: translateX(2px); }
+.link-nav:hover { background: rgba(255, 255, 255, 0.1); transform: translateX(2px) translateY(-1px); box-shadow: var(--elev-1), var(--brilho-topo-fraco); }
 .link-nav.ativo {
   background: linear-gradient(90deg, color-mix(in srgb, var(--dourado) 32%, transparent), transparent);
   box-shadow: inset 3px 0 0 var(--dourado), var(--elev-1);
   font-weight: 700;
 }
+
+/* ---------- Grupos do menu (Qualidade, Produção, Estoque...) — cada um
+   ganha uma cor própria (--cor-grupo) e vira um bloco "cartão" com
+   contorno/sombra próprios, em vez de linhas soltas na mesma cor azul de
+   todo o resto da barra — é isso que separa visualmente uma seção da
+   outra ao abrir o menu. A cor é só decorativa/organizacional (não tem
+   nenhum significado de status, diferente de --verde/--vermelho etc. já
+   usados nos selos do sistema), por isso usa uma paleta própria em vez de
+   reaproveitar os tokens semânticos existentes. */
+:root {
+  --menu-qualidade: #2bb3c0;
+  --menu-producao: #e0923c;
+  --menu-estoque: #9a7fe0;
+  --menu-comercial: #3fbf7f;
+  --menu-financeiro: #d8b23a;
+  --menu-relatorios: #6c8ef2;
+  --menu-administracao: #94a3b8;
+}
+[data-grupo="grupo-qualidade"] { --cor-grupo: var(--menu-qualidade); }
+[data-grupo="grupo-producao"] { --cor-grupo: var(--menu-producao); }
+[data-grupo="grupo-estoque"] { --cor-grupo: var(--menu-estoque); }
+[data-grupo="grupo-comercial"] { --cor-grupo: var(--menu-comercial); }
+[data-grupo="grupo-financeiro"] { --cor-grupo: var(--menu-financeiro); }
+[data-grupo="grupo-relatorios"] { --cor-grupo: var(--menu-relatorios); }
+[data-grupo="grupo-administracao"] { --cor-grupo: var(--menu-administracao); }
+
+.barra-lateral-grupo {
+  margin: 6px 2px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--cor-grupo, #fff) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cor-grupo, #fff) 20%, transparent);
+  box-shadow: var(--elev-1), var(--brilho-topo-fraco);
+  overflow: hidden;
+  transition: background 0.15s ease, box-shadow 0.15s ease;
+}
+.barra-lateral-grupo[open] {
+  background: color-mix(in srgb, var(--cor-grupo, #fff) 13%, transparent);
+  box-shadow: var(--elev-2), var(--brilho-topo-fraco);
+}
 .barra-lateral-grupo summary {
-  border-radius: 10px; margin: 2px 0; transition: background 0.15s ease;
+  border-radius: 0; margin: 0; transition: background 0.15s ease;
   justify-content: flex-start;
 }
-.barra-lateral-grupo summary:hover { background: rgba(255, 255, 255, 0.08); }
+.barra-lateral-grupo summary:hover { background: color-mix(in srgb, var(--cor-grupo, #fff) 14%, transparent); }
 .barra-lateral-grupo summary::after { margin-left: auto; }
-.barra-lateral-subitem { border-radius: 8px; }
+.barra-lateral-grupo summary::before {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px; border-radius: 7px; margin-right: 10px; font-size: 13px;
+  background: color-mix(in srgb, var(--cor-grupo, #fff) 28%, transparent);
+  box-shadow: var(--brilho-topo-fraco);
+  flex-shrink: 0;
+}
+.barra-lateral-subitens {
+  background: rgba(0, 0, 0, 0.1);
+  padding: 4px 6px 6px;
+}
+.barra-lateral-subitem {
+  border-radius: 8px;
+  margin: 2px 0;
+}
+.barra-lateral-subitem.ativo {
+  background: color-mix(in srgb, var(--cor-grupo, var(--dourado)) 30%, transparent);
+  box-shadow: inset 3px 0 0 var(--cor-grupo, var(--dourado));
+}
 
 /* Ícones por rota — puramente decorativo, não depende de nenhum dado. */
 .link-nav[href="#/dashboard"]::before { content: "🏠"; margin-right: 9px; }
