@@ -50,6 +50,11 @@
     // quer mais espaço de tela mesmo com o computador). Persistido do
     // mesmo jeito que tema/grupos acima.
     menuLateralOculto: localStorage.getItem("alphafitus_menu_oculto") === "1",
+    // Pedido do usuário: mostrar a versão instalada no rodapé do menu,
+    // pra saber na hora se uma atualização já "pegou" numa máquina —
+    // buscado uma única vez (rota sem autenticação) e reaproveitado em
+    // toda renderShell daqui pra frente.
+    versaoSistema: null,
   };
 
   document.documentElement.setAttribute("data-tema", state.tema);
@@ -564,6 +569,7 @@
         <aside class="barra-lateral">
           <div class="marca">ALPHAFITUS OS<small>Sistema Integrado de Gestão</small></div>
           <nav>${linksHtml}</nav>
+          <div class="versao-sistema-rodape">${state.versaoSistema ? `v${escapeHtml(state.versaoSistema)}` : ""}</div>
         </aside>
         <div class="conteudo-principal">
           <div class="barra-superior">
@@ -13057,5 +13063,14 @@
   // ---------------------------------------------------------------------
   // Inicialização
   // ---------------------------------------------------------------------
+  // Busca a versão instalada uma única vez, sem bloquear a primeira tela
+  // (se falhar ou demorar, o rodapé simplesmente fica sem o número —
+  // nunca vale a pena atrasar o login por causa disso). Como renderShell
+  // é chamado de novo a cada navegação, o número aparece assim que a
+  // resposta chegar, mesmo que a pessoa já esteja em outra tela.
+  chamarApi("/saude", { semAuth: true })
+    .then((resp) => { state.versaoSistema = resp.versao; })
+    .catch(() => { /* rodapé sem versão não impede o uso do sistema */ });
+
   montarRota();
 })();

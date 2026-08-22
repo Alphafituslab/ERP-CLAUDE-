@@ -7,6 +7,13 @@ from .context import ApiError, close_db
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
+# Pedido do usuário: "cada modificação seja uma versão" — um número único,
+# visível no rodapé do menu lateral (ver app.js), que sobe a cada fase
+# entregue. MESMO número usado em `installer/AlphafitusOS.iss`
+# (MyAppVersion) — assim o que aparece na tela É o que está de fato
+# instalado, sem duas fontes de verdade divergentes.
+VERSAO_SISTEMA = "92.0"
+
 
 def create_app(test_config: dict = None) -> Flask:
     app = Flask(
@@ -91,7 +98,7 @@ def create_app(test_config: dict = None) -> Flask:
 
     @app.get("/api/v1/saude")
     def saude():
-        return jsonify({"status": "ok", "servico": "Alphafitus OS — Fase 1 a 50"})
+        return jsonify({"status": "ok", "servico": "Alphafitus OS", "versao": VERSAO_SISTEMA})
 
     @app.get("/")
     def frontend_index():

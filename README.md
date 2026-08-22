@@ -4854,3 +4854,20 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   antes do perfil passar a exigir 2FA (o backend é sempre a fonte de
   verdade, nunca um cálculo feito só no momento do login). A tela de Perfis
   agora mostra um selo "exige 2FA" nos perfis marcados, para transparência.
+- (Entregue na Fase 93) Número de versão visível + ícone novo do sistema —
+  dois pedidos pequenos, entregues juntos. `GET /api/v1/saude` (rota sem
+  autenticação, existia desde a Fase 1 só como healthcheck) agora devolve
+  `versao` (`app/__init__.py::VERSAO_SISTEMA`, MESMO número de
+  `installer/AlphafitusOS.iss::MyAppVersion` — uma fonte de verdade só, não
+  duas). O frontend busca isso uma única vez ao carregar e mostra no rodapé
+  do menu lateral ("v92.0") — dá pra confirmar visualmente, numa olhada, se
+  uma instalação já recebeu a atualização mais recente, sem precisar abrir
+  nenhum log. Convenção daqui pra frente: bumpar `VERSAO_SISTEMA` e
+  `MyAppVersion` juntos a cada fase que for para produção. `installer/
+  icone.ico` foi substituído pela nova identidade visual (fornecida pelo
+  usuário) — como é a ÚNICA fonte de ícone usada tanto pelo PyInstaller
+  (`alphafitus.spec`, ícone do .exe principal e do console de diagnóstico)
+  quanto pelo Inno Setup (`SetupIconFile`/`UninstallDisplayIcon`), um
+  rebuild propaga o ícone novo para o instalador, o .exe, o desinstalador
+  e os atalhos (que apontam para o ícone do .exe, não embutem um próprio)
+  de uma vez só.

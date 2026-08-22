@@ -270,6 +270,13 @@ button, input, select {
 
 .barra-lateral nav { flex: 1; padding: 12px 0; overflow-y: auto; }
 
+.versao-sistema-rodape {
+  padding: 10px 20px;
+  font-size: 11px;
+  color: rgba(255,255,255,0.55);
+  border-top: 1px solid rgba(255,255,255,0.15);
+}
+
 .link-nav {
   display: block;
   padding: 10px 20px;
