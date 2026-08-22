@@ -4688,3 +4688,22 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
      uma única vez em "Concluir ordem") — existe só para o painel em
      tempo real mostrar o que está sendo produzido agora, sem esperar a
      ordem inteira terminar.
+- (Entregue na Fase 85) Liberação do lote condicionada à NF-e de Entrada —
+  antes desta fase, `lotes.nota_fiscal_entrada_id` (Fase 78) era só um
+  vínculo opcional, nunca checado em lugar nenhum. Agora, com um novo
+  singleton `configuracoes_qualidade` (`exigir_nota_fiscal_entrada_para_
+  aprovar_lote`, padrão DESLIGADO — não quebra nenhum lote já em
+  `aguardando_aprovacao` em instalações existentes), ligar essa exigência
+  em Qualidade → Configuração de Qualidade faz `POST /lotes/<id>/aprovar`
+  recusar (400) qualquer lote com `origem = 'recebimento'` que ainda não
+  esteja vinculado a uma Nota Fiscal de Entrada lançada. **Detalhe
+  importante:** a checagem é restrita a `origem = 'recebimento'` de
+  propósito — um lote com `origem = 'producao'` (produto fabricado
+  internamente, Fase 3) nunca teve nem terá uma NF-e de entrada, então
+  nunca é bloqueado por esta trava; sem essa distinção, ligar a exigência
+  travaria a aprovação de todo produto acabado da fábrica, o que não é o
+  que foi pedido (o pedido é especificamente sobre matéria-prima recebida
+  de fornecedor). `receber()` não muda — continua criando o lote em
+  quarentena normalmente; a trava é só na hora de aprovar. Nova permissão
+  `qualidade.configurar` (só Administrador por padrão, mesma régua de
+  `fiscal.configurar`).

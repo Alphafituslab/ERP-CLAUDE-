@@ -312,6 +312,39 @@ def desbloquear(lote_id):
     return jsonify(_lote_ou_404(conn, lote_id))
 
 
+# ============================================================
+# FASE 85 — Configuração de Qualidade (singleton, mesmo padrão de
+# configuracoes_fiscais_sped da Fase 79)
+# ============================================================
+@bp.get("/configuracao-qualidade")
+@requires_permission("qualidade", "configurar")
+def obter_configuracao_qualidade():
+    conn = get_db()
+    row = conn.execute("SELECT * FROM configuracoes_qualidade WHERE id = 1").fetchone()
+    return jsonify(dict(row))
+
+
+@bp.put("/configuracao-qualidade")
+@requires_permission("qualidade", "configurar")
+def atualizar_configuracao_qualidade():
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+
+    anterior = dict(conn.execute("SELECT * FROM configuracoes_qualidade WHERE id = 1").fetchone())
+    exigir = bool(dados.get("exigir_nota_fiscal_entrada_para_aprovar_lote"))
+
+    conn.execute(
+        "UPDATE configuracoes_qualidade SET exigir_nota_fiscal_entrada_para_aprovar_lote = ?, atualizado_em = ?, atualizado_por = ? WHERE id = 1",
+        (1 if exigir else 0, _now_iso(), usuario_atual["id"]),
+    )
+    novo = dict(conn.execute("SELECT * FROM configuracoes_qualidade WHERE id = 1").fetchone())
+    audit.registrar(conn, tabela="configuracoes_qualidade", registro_id=1, usuario_id=usuario_atual["id"],
+                     acao="configuracao_qualidade_atualizada", valor_anterior=anterior, valor_novo=novo,
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(novo)
+
+
 @bp.post("/<int:lote_id>/aprovar")
 @requires_permission("lotes", "aprovar")
 def aprovar(lote_id):
@@ -329,6 +362,28 @@ def aprovar(lote_id):
     analise = _analise_concluida_pendente_de_aprovacao(conn, lote_id)
     if analise is None:
         raise ApiError("Não há análise concluída para este lote.", status=400)
+
+    # Fase 85 — se configurado (Administração > Configurações de
+    # Qualidade), um lote RECEBIDO de fornecedor só pode ser aprovado
+    # depois de vinculado a uma Nota Fiscal de Entrada já lançada (Fase
+    # 78). Só se aplica a `origem == 'recebimento'` — um lote produzido
+    # internamente (`origem == 'producao'`) nunca teve nem terá uma NF-e
+    # de entrada, então nunca é bloqueado por esta checagem.
+    config_qualidade = conn.execute(
+        "SELECT exigir_nota_fiscal_entrada_para_aprovar_lote FROM configuracoes_qualidade WHERE id = 1"
+    ).fetchone()
+    if (
+        config_qualidade
+        and config_qualidade["exigir_nota_fiscal_entrada_para_aprovar_lote"]
+        and lote["origem"] == "recebimento"
+        and lote["nota_fiscal_entrada_id"] is None
+    ):
+        raise ApiError(
+            "Este lote ainda não está vinculado a uma Nota Fiscal de Entrada lançada — a liberação está "
+            "configurada para exigir esse vínculo antes da aprovação do CQ (vincule pela tela de Notas Fiscais "
+            "de Entrada, ou desligue essa exigência em Administração > Configurações de Qualidade).",
+            status=400,
+        )
 
     # Segregação de função: quem registrou/concluiu a análise não pode ser
     # quem aprova a liberação do mesmo lote (mesmo padrão da Fase 1).

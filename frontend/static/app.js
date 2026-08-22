@@ -317,6 +317,7 @@
           case "fornecedores": return renderFornecedores();
           case "lotes": return param ? renderLoteDetalhe(Number(param)) : renderLotes();
           case "desvios": return renderDesvios();
+          case "configuracao-qualidade": return renderConfiguracaoQualidade();
           case "formulas": return renderFormulas();
           case "producao": return param ? renderOrdemDetalhe(Number(param)) : renderOrdensProducao();
           case "centros-trabalho": return renderCentrosTrabalho();
@@ -424,6 +425,7 @@
         { rota: "#/fornecedores", chave: "fornecedores", label: "Fornecedores", permissao: ["fornecedores", "visualizar"] },
         { rota: "#/lotes", chave: "lotes", label: "Lotes / Qualidade", permissao: ["lotes", "visualizar"] },
         { rota: "#/desvios", chave: "desvios", label: "Desvios", permissao: ["desvios", "visualizar"] },
+        { rota: "#/configuracao-qualidade", chave: "configuracao-qualidade", label: "Configuração de Qualidade", permissao: ["qualidade", "configurar"] },
       ],
     },
     {
@@ -7719,6 +7721,37 @@
   }
 
   // =======================================================================
+  // FASE 85 — Configuração de Qualidade (exigir NF-e de entrada antes de
+  // aprovar um lote recebido)
+  // =======================================================================
+  async function renderConfiguracaoQualidade() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const config = await chamarApi("/lotes/configuracao-qualidade");
+
+    renderShell(
+      `<h2>Configuração de Qualidade</h2>
+       <div class="cartao">
+         <form data-form="salvar-configuracao-qualidade">
+           <div class="campo">
+             <label><input type="checkbox" name="exigir_nota_fiscal_entrada_para_aprovar_lote"
+                    ${config.exigir_nota_fiscal_entrada_para_aprovar_lote ? "checked" : ""}>
+             Exigir Nota Fiscal de Entrada vinculada antes de aprovar um lote recebido</label>
+             <div class="dica">Enquanto ligado, um lote com origem "recebimento" (de fornecedor) só pode ser
+             aprovado pelo CQ depois de estar vinculado a uma Nota Fiscal de Entrada já lançada (tela "Notas
+             Fiscais de Entrada"). Não afeta lotes produzidos internamente — esses nunca têm NF-e de entrada.
+             Desligado por padrão, para não bloquear lotes já em andamento.</div>
+           </div>
+           ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
+           <div class="rodape-modal" style="padding:0;">
+             <button type="submit" class="botao">Salvar configuração</button>
+           </div>
+         </form>
+       </div>`,
+      "configuracao-qualidade"
+    );
+  }
+
+  // =======================================================================
   // APP DE VENDAS — Fase 36 (rascunho com reserva temporária, verbas
   // comerciais e comissão do vendedor)
   // =======================================================================
@@ -10961,6 +10994,14 @@
         });
         definirFlash("ok", "Configuração fiscal (SPED) salva.");
         return renderConfiguracaoSped();
+      }
+      case "salvar-configuracao-qualidade": {
+        await chamarApi("/lotes/configuracao-qualidade", {
+          method: "PUT",
+          body: { exigir_nota_fiscal_entrada_para_aprovar_lote: dados.get("exigir_nota_fiscal_entrada_para_aprovar_lote") === "on" },
+        });
+        definirFlash("ok", "Configuração de Qualidade salva.");
+        return renderConfiguracaoQualidade();
       }
       case "salvar-dados-fiscais-empresa": {
         await chamarApi(`/empresas/${form.dataset.id}`, {

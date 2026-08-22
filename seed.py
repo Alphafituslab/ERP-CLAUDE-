@@ -455,6 +455,10 @@ PERMISSOES_PADRAO = [
     # lotes, pedidos_compra), sem duplicar nada aqui.
     ("fluxo", "configurar", "Cadastrar/editar os tipos de etapa do catálogo de fluxo multi-módulo", 0),
     ("fluxo", "apontar", "Iniciar/concluir uma etapa manual do fluxo (ex.: Separação de um pedido)", 0),
+
+    # Fase 85 — mesma régua de "configurar" mais arriscado, só Administrador
+    # por padrão, já usada em fiscal.configurar/fiscal.configurar_sped.
+    ("qualidade", "configurar", "Ligar/desligar a exigência de NF-e de entrada vinculada antes de aprovar um lote recebido", 0),
 ]
 
 PERFIS_PADRAO = [
