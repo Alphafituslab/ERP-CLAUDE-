@@ -350,7 +350,12 @@ pedido_venda = admin.post("/comercial/pedidos", {
         {"item_id": produtos_acabados[2]["item"]["id"], "quantidade": 0.1, "unidade": "kg", "preco_unitario": 59.90},
     ],
 })
-admin.post(f"/comercial/pedidos/{pedido_venda['id']}/confirmar")
+# Fase 83 — toda confirmação agora exige aprovação financeira (não só as
+# que ultrapassam o limite de crédito do cliente); aprovada pela usuária de
+# qualidade (perfil Administrador, então também tem essa permissão) por
+# segregação de função — admin não pode aprovar a própria solicitação.
+confirmacao = admin.post(f"/comercial/pedidos/{pedido_venda['id']}/confirmar")
+qualidade.post(f"/comercial/pedidos/confirmacoes-pendentes/{confirmacao['confirmacao_pendente_criada_id']}/aprovar")
 pedido_expedido = admin.post(f"/comercial/pedidos/{pedido_venda['id']}/expedir")
 conta_receber = pedido_expedido.get("conta_receber")
 if conta_receber:

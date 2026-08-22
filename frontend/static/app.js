@@ -7110,11 +7110,14 @@
          ${pedido.motivo_cancelamento ? `<p class="mensagem-erro">Cancelado: ${escapeHtml(pedido.motivo_cancelamento)}</p>` : ""}
          ${confirmacaoPendente ? `
          <div class="subcartao">
-           <p class="mensagem-erro" style="margin-top:0;">Confirmação aguardando aprovação (Fase 63) — valor do
-           pedido de R$ ${Number(confirmacaoPendente.valor_pedido).toFixed(2)} somado ao saldo em aberto de
-           R$ ${Number(confirmacaoPendente.saldo_aberto_no_momento).toFixed(2)} ultrapassa o limite de crédito de
-           R$ ${Number(confirmacaoPendente.limite_credito_no_momento).toFixed(2)} do cliente, solicitado em
-           ${fmtData(confirmacaoPendente.solicitado_em)}.</p>
+           <p class="mensagem-erro" style="margin-top:0;">
+           ${confirmacaoPendente.motivo_solicitacao === "acima_do_limite"
+             ? `Confirmação aguardando aprovação financeira — valor do pedido de R$ ${Number(confirmacaoPendente.valor_pedido).toFixed(2)}
+                somado ao saldo em aberto de R$ ${Number(confirmacaoPendente.saldo_aberto_no_momento).toFixed(2)} ultrapassa o limite de
+                crédito de R$ ${Number(confirmacaoPendente.limite_credito_no_momento).toFixed(2)} do cliente.`
+             : `Confirmação aguardando aprovação financeira (obrigatória para todo pedido, Fase 83) — valor de
+                R$ ${Number(confirmacaoPendente.valor_pedido).toFixed(2)}.`}
+           Solicitado em ${fmtData(confirmacaoPendente.solicitado_em)}.</p>
            ${podeAprovarLimiteCredito
              ? (solicitanteConfirmacaoSouEu
                  ? `<p class="texto-suave">Você solicitou esta confirmação — a aprovação precisa ser feita por outro usuário (segregação de função).</p>`
@@ -7128,7 +7131,7 @@
            <span></span>
            <div style="display:flex;gap:8px;flex-wrap:wrap;">
              ${pedido.status === "rascunho" && podeEditarItens ? `<button class="botao secundario" data-acao="adicionar-item-pedido" data-id="${pedido.id}">+ Adicionar item</button>` : ""}
-             ${pedido.status === "rascunho" && podeConfirmar && !confirmacaoPendente ? `<button class="botao" data-acao="confirmar-pedido" data-id="${pedido.id}">Confirmar (reservar estoque)</button>` : ""}
+             ${pedido.status === "rascunho" && podeConfirmar && !confirmacaoPendente ? `<button class="botao" data-acao="confirmar-pedido" data-id="${pedido.id}">Enviar para aprovação financeira</button>` : ""}
              ${pedido.status === "confirmado" && podeExpedir ? `<button class="botao" data-acao="expedir-pedido" data-id="${pedido.id}">Expedir</button>` : ""}
              ${(pedido.status === "rascunho" || pedido.status === "confirmado") && podeCancelar ? `<button class="botao secundario" data-acao="cancelar-pedido" data-id="${pedido.id}">Cancelar</button>` : ""}
              ${podeEditarItens ? `<button class="botao secundario" data-acao="duplicar-pedido-comercial" data-id="${pedido.id}" data-numero="${escapeHtml(pedido.numero)}">Duplicar / Usar como modelo</button>` : ""}
@@ -10352,17 +10355,13 @@
         definirFlash("ok", "Item removido do pedido.");
         return renderPedidoDetalhe(Number(alvo.dataset.pedidoId));
       case "confirmar-pedido": {
-        if (!confirm("Confirmar este pedido? O sistema vai tentar reservar estoque (FEFO) para todos os itens — se algum não tiver saldo suficiente, nada é reservado.")) return;
-        // Fase 63 — acima do limite de crédito do cliente, o backend não
-        // confirma na hora: devolve 202 com uma solicitação pendente em
-        // vez de 200 com o pedido já 'confirmado'. `chamarApi` trata os
-        // dois como sucesso (resp.ok cobre 2xx) — só o texto do flash muda.
-        const resultadoConfirmacao = await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/confirmar`, { method: "POST" });
-        if (resultadoConfirmacao.confirmacao_pendente_criada_id) {
-          definirFlash("ok", "Valor acima do limite de crédito do cliente — confirmação registrada como solicitação pendente de aprovação por outro usuário.");
-        } else {
-          definirFlash("ok", "Pedido confirmado — estoque reservado.");
-        }
+        if (!confirm("Enviar este pedido para aprovação financeira? Só depois de aprovado o sistema tenta reservar estoque (FEFO) para todos os itens.")) return;
+        // Fase 83 — toda confirmação passa a exigir aprovação financeira
+        // (antes só acontecia acima do limite de crédito do cliente); o
+        // backend sempre devolve 202 com uma solicitação pendente agora, a
+        // reserva de estoque de verdade só roda depois de aprovada.
+        await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/confirmar`, { method: "POST" });
+        definirFlash("ok", "Pedido enviado para aprovação financeira.");
         return renderPedidoDetalhe(Number(alvo.dataset.id));
       }
       case "expedir-pedido":

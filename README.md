@@ -4626,3 +4626,33 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   criar_pedido`, e "Sugestões de Compra (MRP)" para quem tem) — na
   prática, isso já implementa "PCP solicita, Compras aprova e confirma"
   reaproveitando 100% do mecanismo de MRP que já existia desde a Fase 54.
+- (Entregue na Fase 83) Aprovação Financeira obrigatória em todo Pedido de
+  Venda — antes desta fase, `pedidos_venda_confirmacoes_pendentes` (Fase
+  63) só ganhava uma solicitação quando o pedido ultrapassava o limite de
+  crédito do cliente; sem limite configurado, ou dentro do limite, a
+  confirmação acontecia na hora (HTTP 200, estoque já reservado). A pedido
+  explícito do usuário, **toda** confirmação agora passa por essa mesma
+  fila (`confirmar_pedido_ou_solicitar_aprovacao` em
+  `app/routes/comercial.py` sempre devolve 202, nunca mais 200 direto) —
+  a reserva de estoque de verdade só acontece depois de aprovada
+  (`aprovar_confirmacao_pedido`), com a MESMA segregação de função de
+  sempre (quem solicitou não pode aprovar). Os números de limite de
+  crédito continuam calculados e gravados (contexto útil para quem
+  aprova), mas um novo campo `motivo_solicitacao`
+  (`'acima_do_limite'`/`'aprovacao_obrigatoria_padrao'`,
+  `ALTER TABLE pedidos_venda_confirmacoes_pendentes`) é quem diz de
+  verdade por que a aprovação foi pedida — a coluna
+  `limite_credito_no_momento` continua `NOT NULL` (SQLite não relaxa isso
+  sem recriar a tabela), então sem limite configurado ela grava `0` só
+  como preenchimento; nunca interprete esse `0` como "sem limite", porque
+  um cliente pode ter um limite configurado que é literalmente zero. A
+  permissão `comercial.aprovar_pedido_acima_limite_credito` manteve o
+  nome (só a descrição mudou) para não quebrar perfis já concedidos em
+  instalações existentes, e passou a ser concedida também ao perfil
+  Financeiro por padrão (além do Comercial, que já a tinha desde a Fase
+  63) — faz mais sentido um financeiro de verdade aprovar isso agora que
+  virou o caminho único, não a exceção. **Mudança de comportamento
+  relevante:** o App de Vendas (`vendas_app.py::enviar_rascunho`)
+  reaproveita a mesma função e já herda o comportamento automaticamente,
+  sem nenhuma alteração de código lá — mas qualquer fluxo externo que
+  chamava "Confirmar" esperando 200 direto agora sempre recebe 202.

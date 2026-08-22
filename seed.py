@@ -86,7 +86,11 @@ PERMISSOES_PADRAO = [
     # (comercial.confirmar_pedido E
     # comercial.aprovar_pedido_acima_limite_credito): a mesma pessoa pode
     # confirmar UM pedido e aprovar o de OUTRO colega.
-    ("comercial", "aprovar_pedido_acima_limite_credito", "Aprovar ou rejeitar a confirmação de um pedido de venda que ultrapassa o limite de crédito do cliente (quem solicitou a confirmação não pode aprovar)", 0),
+    # Fase 83 — desde então esta permissão aprova a confirmação de TODO
+    # pedido de venda (aprovação financeira obrigatória), não só os que
+    # ultrapassam o limite de crédito do cliente — nome mantido por
+    # compatibilidade com perfis/instalações já existentes.
+    ("comercial", "aprovar_pedido_acima_limite_credito", "Aprovar ou rejeitar a confirmação (aprovação financeira) de um pedido de venda — quem solicitou não pode aprovar", 0),
     # ---- Fase 6 (Financeiro básico: Contas a Receber e a Pagar) ----
     ("financeiro", "visualizar", "Ver contas a receber e a pagar", 0),
     ("financeiro", "criar_conta_pagar", "Lançar uma nova conta a pagar contra um fornecedor", 0),
@@ -627,6 +631,15 @@ PERFIS_PADRAO = [
         # USUÁRIO — quem solicita o registro de uma baixa grande não pode
         # ser quem aprova, verificado no próprio código).
         "financeiro.aprovar_baixa_receber", "financeiro.aprovar_baixa_pagar",
+        # Fase 83 — a confirmação de um pedido de venda agora exige
+        # aprovação financeira obrigatória (antes só quando ultrapassava o
+        # limite de crédito do cliente); o perfil Financeiro, que já
+        # aprova baixas e estornos acima, é quem faz sentido decidir isso
+        # de verdade — Comercial mantém a mesma permissão (perfil já
+        # existente desde a Fase 63) para instalações pequenas onde não há
+        # um Financeiro separado; a segregação real continua por USUÁRIO
+        # (quem solicitou não pode aprovar), não por perfil.
+        "comercial.aprovar_pedido_acima_limite_credito",
         # Fase 13 — quem cuida do financeiro é quem faz sentido ver quanto
         # a produção realmente custa (preço pago a fornecedor), mesmo sem
         # ter producao.visualizar (a tela "Custo do Produto" é independente

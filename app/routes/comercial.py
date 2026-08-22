@@ -768,59 +768,70 @@ def confirmar_pedido_internamente(conn, pedido_id, usuario_id):
 
 
 def confirmar_pedido_ou_solicitar_aprovacao(conn, pedido_id, usuario_id):
-    """Fase 63 — mesmo padrão de branching já usado em `enviar_pedido`
-    (Fase 61, app/routes/compras.py): confirma na hora quando cabe no
-    limite de crédito do cliente (ou quando o cliente não tem limite
-    configurado — `limite_credito IS NULL`, mesma convenção de "campo
-    vazio desliga a checagem" já usada em `fornecedores.lead_time_dias`
-    desde a Fase 57), e cria uma solicitação pendente quando não cabe.
+    """Fase 83 — desde a Fase 63, isso só criava uma solicitação pendente
+    quando o pedido ultrapassava o limite de crédito do cliente; a pedido
+    explícito do usuário, TODA confirmação agora passa por esta fila de
+    aprovação financeira antes de reservar estoque de verdade — não é mais
+    um desvio raro, é o caminho único. Os números de limite de crédito
+    continuam sendo calculados e gravados (ainda são um contexto útil para
+    quem aprova), só que `motivo_solicitacao` é quem diz POR QUE a
+    aprovação foi pedida: `'acima_do_limite'` quando de fato estourou o
+    limite configurado, `'aprovacao_obrigatoria_padrao'` no caso comum
+    (dentro do limite, ou cliente sem limite configurado). Nunca use
+    `limite_credito_no_momento == 0` para inferir "sem limite" — um
+    cliente pode ter um limite configurado que é literalmente zero;
+    `limite_credito_no_momento` grava `0` só como preenchimento quando
+    `cliente["limite_credito"] IS NULL` (a coluna continua NOT NULL, ver
+    a nota de escopo completa em migrations/schema_fase83.sql).
+
     Chamada tanto pela tela de desktop (`confirmar` abaixo) quanto pelo
     aplicativo de vendas (`enviar_rascunho` em app/routes/vendas_app.py)
     — um só ponto de decisão para os dois pontos de entrada, mesmo
     raciocínio de `confirmar_pedido_internamente` já ser compartilhada
     entre os dois desde a Fase 36.
 
-    Devolve (pedido_detalhado, status_http): 200 quando confirmou de
-    verdade, 202 quando só criou a solicitação pendente (o pedido
-    continua em 'rascunho')."""
+    Devolve (pedido_detalhado, status_http) — sempre 202 agora (a
+    confirmação de verdade só acontece depois de aprovada, via
+    `aprovar_confirmacao_pedido` abaixo); o pedido continua em
+    'rascunho' até lá."""
     pedido = _pedido_ou_404(conn, pedido_id)
     if pedido["status"] != "rascunho":
         raise ApiError(f"Só é possível confirmar um pedido 'rascunho' (status atual: '{pedido['status']}').", status=400)
 
     cliente = _cliente_ou_404(conn, pedido["cliente_id"])
-    if cliente["limite_credito"] is not None:
-        valor_pedido = _valor_total_pedido_venda(conn, pedido_id)
-        saldo_aberto = _saldo_aberto_cliente(conn, pedido["cliente_id"])
-        if saldo_aberto + valor_pedido > cliente["limite_credito"]:
-            cur = conn.execute(
-                """
-                INSERT INTO pedidos_venda_confirmacoes_pendentes
-                    (pedido_venda_id, valor_pedido, saldo_aberto_no_momento, limite_credito_no_momento, solicitado_por)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (pedido_id, valor_pedido, saldo_aberto, cliente["limite_credito"], usuario_id),
-            )
-            conn.commit()
-            audit.registrar(conn, tabela="pedidos_venda_confirmacoes_pendentes", registro_id=cur.lastrowid, usuario_id=usuario_id,
-                             acao="pedido_venda_confirmacao_solicitada",
-                             valor_novo={"pedido_venda_id": pedido_id, "valor_pedido": valor_pedido,
-                                         "saldo_aberto_no_momento": saldo_aberto,
-                                         "limite_credito_no_momento": cliente["limite_credito"]},
-                             ip=client_ip(), dispositivo=client_device())
-            notificacoes_service.notificar_usuarios_com_permissao(
-                conn, modulo="comercial", acao="aprovar_pedido_acima_limite_credito",
-                tipo="pedido_venda_confirmacao_pendente",
-                mensagem=(
-                    f"A confirmação do pedido de venda {pedido['numero']} (R$ {valor_pedido:.2f}) ultrapassa o "
-                    f"limite de crédito do cliente {cliente['razao_social']} e precisa de segunda aprovação."
-                ),
-                excluir_usuario_id=usuario_id,
-            )
-            resultado = _pedido_detalhado(conn, pedido_id)
-            resultado["confirmacao_pendente_criada_id"] = cur.lastrowid
-            return resultado, 202
+    valor_pedido = _valor_total_pedido_venda(conn, pedido_id)
+    saldo_aberto = _saldo_aberto_cliente(conn, pedido["cliente_id"])
+    limite = cliente["limite_credito"]
+    acima_do_limite = limite is not None and (saldo_aberto + valor_pedido > limite)
+    motivo_solicitacao = "acima_do_limite" if acima_do_limite else "aprovacao_obrigatoria_padrao"
 
-    return confirmar_pedido_internamente(conn, pedido_id, usuario_id), 200
+    cur = conn.execute(
+        """
+        INSERT INTO pedidos_venda_confirmacoes_pendentes
+            (pedido_venda_id, valor_pedido, saldo_aberto_no_momento, limite_credito_no_momento, motivo_solicitacao, solicitado_por)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (pedido_id, valor_pedido, saldo_aberto, limite if limite is not None else 0, motivo_solicitacao, usuario_id),
+    )
+    conn.commit()
+    audit.registrar(conn, tabela="pedidos_venda_confirmacoes_pendentes", registro_id=cur.lastrowid, usuario_id=usuario_id,
+                     acao="pedido_venda_confirmacao_solicitada",
+                     valor_novo={"pedido_venda_id": pedido_id, "valor_pedido": valor_pedido,
+                                 "saldo_aberto_no_momento": saldo_aberto,
+                                 "limite_credito_no_momento": limite, "motivo_solicitacao": motivo_solicitacao},
+                     ip=client_ip(), dispositivo=client_device())
+    notificacoes_service.notificar_usuarios_com_permissao(
+        conn, modulo="comercial", acao="aprovar_pedido_acima_limite_credito",
+        tipo="pedido_venda_confirmacao_pendente",
+        mensagem=(
+            f"O pedido de venda {pedido['numero']} (R$ {valor_pedido:.2f}) aguarda aprovação financeira antes de "
+            f"ser confirmado." + (f" Ultrapassa o limite de crédito do cliente {cliente['razao_social']}." if acima_do_limite else "")
+        ),
+        excluir_usuario_id=usuario_id,
+    )
+    resultado = _pedido_detalhado(conn, pedido_id)
+    resultado["confirmacao_pendente_criada_id"] = cur.lastrowid
+    return resultado, 202
 
 
 def _confirmacao_pendente_ou_erro(conn, pendente_id):
