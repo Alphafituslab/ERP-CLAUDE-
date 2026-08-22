@@ -68,7 +68,7 @@ def etapas_da_entidade(conn, entidade_tipo, entidade_id):
 def _instancia_ou_404(conn, entidade_tipo, entidade_id, tipo_etapa_fluxo_id):
     row = conn.execute(
         """
-        SELECT fi.*, t.codigo, t.nome, t.entidade_tipo
+        SELECT fi.*, t.codigo, t.nome, t.entidade_tipo, t.origem
         FROM fluxo_instancias fi JOIN tipos_etapa_fluxo t ON t.id = fi.tipo_etapa_fluxo_id
         WHERE fi.tipo_etapa_fluxo_id = ? AND fi.entidade_id = ? AND t.entidade_tipo = ?
         """,
@@ -81,6 +81,11 @@ def _instancia_ou_404(conn, entidade_tipo, entidade_id, tipo_etapa_fluxo_id):
 
 def iniciar_etapa(conn, entidade_tipo, entidade_id, tipo_etapa_fluxo_id, usuario_id):
     instancia = _instancia_ou_404(conn, entidade_tipo, entidade_id, tipo_etapa_fluxo_id)
+    if instancia["origem"] == "sistema":
+        raise ApiError(
+            "Esta etapa é marcada automaticamente por uma ação real do sistema — não pode ser iniciada manualmente.",
+            status=400,
+        )
     if instancia["status"] != "pendente":
         raise ApiError(f"Esta etapa já está '{instancia['status']}' — não é possível iniciar de novo.", status=400)
     conn.execute(
@@ -92,6 +97,11 @@ def iniciar_etapa(conn, entidade_tipo, entidade_id, tipo_etapa_fluxo_id, usuario
 
 def concluir_etapa(conn, entidade_tipo, entidade_id, tipo_etapa_fluxo_id, usuario_id, observacao=None):
     instancia = _instancia_ou_404(conn, entidade_tipo, entidade_id, tipo_etapa_fluxo_id)
+    if instancia["origem"] == "sistema":
+        raise ApiError(
+            "Esta etapa é marcada automaticamente por uma ação real do sistema — não pode ser concluída manualmente.",
+            status=400,
+        )
     if instancia["status"] == "concluida":
         raise ApiError("Esta etapa já está concluída.", status=400)
     conn.execute(

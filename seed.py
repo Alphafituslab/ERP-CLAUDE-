@@ -459,6 +459,9 @@ PERMISSOES_PADRAO = [
     # Fase 85 — mesma régua de "configurar" mais arriscado, só Administrador
     # por padrão, já usada em fiscal.configurar/fiscal.configurar_sped.
     ("qualidade", "configurar", "Ligar/desligar a exigência de NF-e de entrada vinculada antes de aprovar um lote recebido", 0),
+
+    # Fase 86 — Transportadora / Coleta (MVP).
+    ("comercial", "gerenciar_coleta", "Cadastrar transportadoras e agendar/confirmar/cancelar a coleta de um pedido expedido", 0),
 ]
 
 PERFIS_PADRAO = [
@@ -545,6 +548,9 @@ PERFIS_PADRAO = [
         # Fase 81 — Estoque é quem fisicamente separa um pedido de venda,
         # então é quem aponta a etapa "Separação" no painel.
         "fluxo.apontar",
+        # Fase 86 — quem separa/expede fisicamente também é quem costuma
+        # lidar com a transportadora na doca de carregamento.
+        "comercial.gerenciar_coleta",
     ]),
     ("Compras", "Compras e homologação de fornecedores", 1, [
         "itens.visualizar", "fornecedores.visualizar", "fornecedores.cadastrar",
@@ -598,6 +604,9 @@ PERFIS_PADRAO = [
         # Fase 81 — Comercial também pode apontar etapas manuais do fluxo
         # (ex.: confirmar que a Separação de um pedido foi concluída).
         "fluxo.apontar",
+        # Fase 86 — mesmo perfil que já expede o pedido cuida de agendar e
+        # confirmar a coleta pela transportadora.
+        "comercial.gerenciar_coleta",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",

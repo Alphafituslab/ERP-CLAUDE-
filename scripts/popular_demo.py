@@ -522,8 +522,20 @@ if etapa_separacao and etapa_separacao["status"] == "pendente":
                {"observacao": "Separado no almoxarifado (exemplo de demonstração)."})
     log(f"etapa de fluxo 'Separação' do pedido {pedido_venda['numero']} concluída (Fase 81)")
 
+# ============================================================
+# 12) Transportadora / Coleta (Fase 86) — sobre o pedido de venda já
+#     expedido acima (seção 6).
+# ============================================================
+transportadora_demo = admin.post("/transportadoras", {"nome": "Transportadora Expressa Demo", "cnpj": "89012345000106"})
+coleta_demo = admin.post(f"/pedidos-venda/{pedido_venda['id']}/coletas", {
+    "transportadora_id": transportadora_demo["id"],
+    "observacoes": "Retirar no doca de expedição (exemplo de demonstração).",
+})
+admin.post(f"/pedidos-venda/coletas/{coleta_demo['id']}/confirmar-coleta")
+log(f"coleta do pedido {pedido_venda['numero']} agendada e confirmada pela {transportadora_demo['nome']} (Fase 86)")
+
 log("")
 log("Concluído — instalação populada com um exemplo completo em Itens, Fornecedores, Estoque/Lotes,")
 log("Análises (QMS), Fórmulas, Produção (OPs), Comercial, App de Vendas (Portfólio + rascunho modelo),")
-log("Compras, Financeiro (contas a receber e a pagar), Desvios de Qualidade, Solicitações de Materiais/EPI")
-log("e o Catálogo de Fluxo Configurável (etapa de Separação do pedido de venda).")
+log("Compras, Financeiro (contas a receber e a pagar), Desvios de Qualidade, Solicitações de Materiais/EPI,")
+log("o Catálogo de Fluxo Configurável e Transportadora/Coleta.")

@@ -127,6 +127,7 @@ SCHEMA_FILES = [
     "schema_fase83.sql",  # Fase 83 — Aprovação Financeira obrigatória em todo Pedido de Venda
     "schema_fase84.sql",  # Fase 84 — Granel intermediário como etapa + Centro de Trabalho por etapa + Apontamento Diário
     "schema_fase85.sql",  # Fase 85 — Liberação do lote condicionada à NF-e de Entrada (configurável)
+    "schema_fase86.sql",  # Fase 86 — Transportadora / Coleta (MVP)
 ]
 
 

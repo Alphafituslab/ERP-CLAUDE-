@@ -4707,3 +4707,23 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   quarentena normalmente; a trava é só na hora de aprovar. Nova permissão
   `qualidade.configurar` (só Administrador por padrão, mesma régua de
   `fiscal.configurar`).
+- (Entregue na Fase 86) Transportadora / Coleta (MVP) — não existia
+  NENHUM conceito de transportadora/frete/coleta em lugar nenhum do
+  sistema antes desta fase (confirmado por busca exaustiva no
+  repositório). Escopo deliberadamente mínimo: cadastro de
+  `transportadoras` (nome/CNPJ/telefone) e agendamento/confirmação/
+  cancelamento de uma coleta (`pedido_venda_coletas`) contra um pedido de
+  venda já `expedido` — sem rastreamento de entrega, sem integração com
+  API de transportadora nenhuma, sem cálculo de frete (um projeto à parte
+  se o cliente precisar disso depois). Nova permissão
+  `comercial.gerenciar_coleta` (perfis Comercial e Estoque, quem já lida
+  com a expedição física). **Marco técnico**: confirmar uma coleta é o
+  PRIMEIRO uso real do Catálogo de Fluxo Configurável (Fase 81) para uma
+  etapa `origem = 'sistema'` — `app/fluxo_service.py::marcar_concluida`
+  marca a etapa "Coleta pela Transportadora" automaticamente no momento
+  exato da confirmação, sem duplicar a lógica de negócio em dois lugares.
+  Por causa disso, o card genérico "Etapas de Fluxo" (Fase 81) foi
+  ajustado: uma etapa `origem = 'sistema'` nunca mostra botão manual de
+  iniciar/concluir (nem no frontend, nem na API — `fluxo_service.
+  iniciar_etapa`/`concluir_etapa` agora recusam com 400) — ela só existe
+  para ser lida, nunca para ser operada manualmente por engano.

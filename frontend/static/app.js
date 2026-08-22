@@ -341,6 +341,7 @@
           case "fiscal-entrada": return param ? renderNotaFiscalEntradaDetalhe(Number(param)) : renderNotasFiscaisEntrada();
           case "fiscal-configuracao": return renderFiscalConfiguracao();
           case "fiscal-configuracao-sped": return renderConfiguracaoSped();
+          case "transportadoras": return renderTransportadoras();
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "conciliacao-bancaria": return param ? renderConciliacaoBancariaDetalhe(Number(param)) : renderConciliacaoBancaria();
           case "painel-gerencial": return renderPainelGerencial();
@@ -469,6 +470,7 @@
         { rota: "#/fiscal-entrada", chave: "fiscal-entrada", label: "Notas Fiscais de Entrada", permissao: ["fiscal", "visualizar"] },
         { rota: "#/fiscal-configuracao", chave: "fiscal-configuracao", label: "Configuração NF-e", permissao: ["fiscal", "configurar"] },
         { rota: "#/fiscal-configuracao-sped", chave: "fiscal-configuracao-sped", label: "Configuração Fiscal (SPED)", permissao: ["fiscal", "configurar_sped"] },
+        { rota: "#/transportadoras", chave: "transportadoras", label: "Transportadoras", permissao: ["comercial", "gerenciar_coleta"] },
       ],
     },
     {
@@ -7106,8 +7108,17 @@
         <div>${et.iniciado_em ? `<span class="rotulo">Iniciado</span><br>${fmtData(et.iniciado_em)}` : ""}</div>
         <div>${et.concluido_em ? `<span class="rotulo">Concluído</span><br>${fmtData(et.concluido_em)}` : ""}</div>
         <div>
-          ${et.status === "pendente" ? `<button class="botao secundario pequeno" data-acao="iniciar-etapa-fluxo" data-entidade-tipo="${entidadeTipo}" data-entidade-id="${entidadeId}" data-tipo-id="${et.tipo_etapa_fluxo_id}">Iniciar</button>` : ""}
-          ${et.status === "em_andamento" ? `<button class="botao pequeno" data-acao="concluir-etapa-fluxo" data-entidade-tipo="${entidadeTipo}" data-entidade-id="${entidadeId}" data-tipo-id="${et.tipo_etapa_fluxo_id}">Concluir</button>` : ""}
+          ${
+            // Fase 86 — uma etapa origem='sistema' (ex.: "Coleta pela
+            // Transportadora") é marcada automaticamente por uma ação
+            // REAL de outro card (ver fluxo_service.marcar_concluida) —
+            // nunca mostra botão manual aqui, para não duplicar/confundir
+            // com a ação de verdade.
+            et.origem === "sistema"
+              ? '<span class="texto-suave">Automático</span>'
+              : `${et.status === "pendente" ? `<button class="botao secundario pequeno" data-acao="iniciar-etapa-fluxo" data-entidade-tipo="${entidadeTipo}" data-entidade-id="${entidadeId}" data-tipo-id="${et.tipo_etapa_fluxo_id}">Iniciar</button>` : ""}
+                 ${et.status === "em_andamento" ? `<button class="botao pequeno" data-acao="concluir-etapa-fluxo" data-entidade-tipo="${entidadeTipo}" data-entidade-id="${entidadeId}" data-tipo-id="${et.tipo_etapa_fluxo_id}">Concluir</button>` : ""}`
+          }
         </div>
       </div>`).join("");
     return `<div class="cartao">
@@ -7120,11 +7131,22 @@
     app.innerHTML = '<div class="carregando">Carregando pedido…</div>';
     const podeVerFiscal = temPermissao("fiscal", "visualizar");
     const podeApontarFluxo = temPermissao("fluxo", "apontar");
+    const podeGerenciarColeta = temPermissao("comercial", "gerenciar_coleta");
     const [pedido, itens, notasFiscais, etapasFluxo] = await Promise.all([
       chamarApi(`/comercial/pedidos/${pedidoId}`), chamarApi("/itens"),
       podeVerFiscal ? chamarApi(`/fiscal/notas?pedido_id=${pedidoId}`) : Promise.resolve([]),
       podeApontarFluxo ? chamarApi(`/fluxo/pedido_venda/${pedidoId}/etapas`) : Promise.resolve([]),
     ]);
+    // Fase 86 — só busca coleta/transportadoras depois de saber o status
+    // real do pedido (a coleta só faz sentido depois de 'expedido').
+    let coletasDoPedido = [];
+    let transportadorasParaColeta = [];
+    if (podeGerenciarColeta && pedido.status === "expedido") {
+      [coletasDoPedido, transportadorasParaColeta] = await Promise.all([
+        chamarApi(`/pedidos-venda/${pedidoId}/coletas`),
+        chamarApi("/transportadoras"),
+      ]);
+    }
     state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
 
     const podeEditarItens = temPermissao("comercial", "criar_pedido");
@@ -7223,6 +7245,7 @@
        </div>
        ${contaReceberHtml}
        ${podeApontarFluxo ? cartaoEtapasFluxo("pedido_venda", pedido.id, etapasFluxo) : ""}
+       ${podeGerenciarColeta && pedido.status === "expedido" ? cartaoColetaDoPedido(pedido, coletasDoPedido, transportadorasParaColeta) : ""}
        ${podeVerFiscal ? cartaoNotaFiscalDoPedido(pedido, notasFiscais) : ""}`,
       "comercial"
     );
@@ -7718,6 +7741,127 @@
        </div>`,
       "fiscal-configuracao-sped"
     );
+  }
+
+  // =======================================================================
+  // FASE 86 — Transportadora / Coleta (MVP)
+  // =======================================================================
+  async function renderTransportadoras() {
+    app.innerHTML = '<div class="carregando">Carregando transportadoras…</div>';
+    const transportadoras = await chamarApi("/transportadoras?incluir_inativas=1");
+
+    const linhas = transportadoras.map((t) => `<tr>
+      <td>${escapeHtml(t.nome)}</td>
+      <td class="mono">${escapeHtml(t.cnpj || "—")}</td>
+      <td>${escapeHtml(t.telefone || "—")}</td>
+      <td><span class="selo ${t.status === "ativo" ? "ativo" : "inativo"}">${t.status === "ativo" ? "Ativa" : "Inativa"}</span></td>
+      <td><button class="botao secundario pequeno" data-acao="editar-transportadora" data-id="${t.id}">Editar</button></td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Transportadoras</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${transportadoras.length} transportadora(s)</span>
+           <button class="botao" data-acao="nova-transportadora">+ Nova transportadora</button>
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>CNPJ</th><th>Telefone</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhuma transportadora cadastrada.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "transportadoras"
+    );
+  }
+
+  function modalNovaTransportadora() {
+    abrirModal(`
+      <h3>Nova transportadora</h3>
+      <form data-form="criar-transportadora">
+        <div class="campo"><label>Nome</label><input name="nome" required></div>
+        <div class="campo"><label>CNPJ (opcional)</label><input name="cnpj"></div>
+        <div class="campo"><label>Telefone (opcional)</label><input name="telefone"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Cadastrar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarTransportadora(t) {
+    abrirModal(`
+      <h3>Editar ${escapeHtml(t.nome)}</h3>
+      <form data-form="editar-transportadora" data-id="${t.id}">
+        <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(t.nome)}" required></div>
+        <div class="campo"><label>CNPJ (opcional)</label><input name="cnpj" value="${escapeHtml(t.cnpj || "")}"></div>
+        <div class="campo"><label>Telefone (opcional)</label><input name="telefone" value="${escapeHtml(t.telefone || "")}"></div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${t.status === "ativo" ? "selected" : ""}>Ativa</option>
+            <option value="inativo" ${t.status === "inativo" ? "selected" : ""}>Inativa</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalAgendarColeta(pedidoId, transportadoras) {
+    const opcoes = transportadoras.filter((t) => t.status === "ativo")
+      .map((t) => `<option value="${t.id}">${escapeHtml(t.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Agendar coleta</h3>
+      <form data-form="agendar-coleta" data-id="${pedidoId}">
+        <div class="campo"><label>Transportadora</label><select name="transportadora_id" required>${opcoes}</select></div>
+        <div class="campo"><label>Data agendada (opcional)</label><input name="data_agendada" type="date"></div>
+        <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Agendar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarColeta(coletaId, pedidoId) {
+    abrirModal(`
+      <h3>Cancelar coleta</h3>
+      <form data-form="cancelar-coleta" data-id="${coletaId}" data-pedido-id="${pedidoId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar cancelamento</button>
+        </div>
+      </form>`);
+  }
+
+  // Card mostrado no detalhe do pedido de venda quando já está expedido —
+  // mesmo espírito de `cartaoNotaFiscalDoPedido` (Fase 70): nunca esconde
+  // uma coleta cancelada, só mostra o histórico completo.
+  function cartaoColetaDoPedido(pedido, coletas, transportadoras) {
+    const coletaAtiva = coletas.find((c) => c.status === "agendada");
+    const linhasHistorico = coletas.map((c) => `
+      <div class="subcartao">
+        <div class="linha-detalhe">
+          <div><span class="rotulo">Transportadora</span><br>${escapeHtml(c.transportadora_nome)}</div>
+          <div><span class="rotulo">Status</span><br><span class="selo ${c.status === "coletada" ? "ativo" : c.status === "cancelada" ? "inativo" : "amarelo"}">${escapeHtml(c.status)}</span></div>
+          <div><span class="rotulo">Data agendada</span><br>${c.data_agendada ? escapeHtml(c.data_agendada) : "—"}</div>
+          ${c.coletado_em ? `<div><span class="rotulo">Coletado em</span><br>${fmtData(c.coletado_em)}</div>` : ""}
+        </div>
+        ${c.observacoes ? `<p class="texto-suave">${escapeHtml(c.observacoes)}</p>` : ""}
+        ${c.motivo_cancelamento ? `<p class="mensagem-erro">Cancelado: ${escapeHtml(c.motivo_cancelamento)}</p>` : ""}
+        ${c.status === "agendada" ? `<div style="display:flex;gap:8px;">
+          <button class="botao secundario pequeno" data-acao="confirmar-coleta" data-id="${c.id}" data-pedido-id="${pedido.id}">Confirmar coleta</button>
+          <button class="botao perigo pequeno" data-acao="abrir-cancelar-coleta" data-id="${c.id}" data-pedido-id="${pedido.id}">Cancelar</button>
+        </div>` : ""}
+      </div>`).join("");
+
+    return `<div class="cartao">
+      <h3 style="margin-top:0;">Coleta pela Transportadora</h3>
+      ${linhasHistorico || '<p class="texto-suave">Nenhuma coleta agendada ainda.</p>'}
+      ${!coletaAtiva ? `<button class="botao secundario pequeno" style="margin-top:12px;" data-acao="abrir-agendar-coleta" data-id="${pedido.id}" data-transportadoras='${JSON.stringify(transportadoras).replace(/'/g, "&apos;")}'>+ Agendar coleta</button>` : ""}
+    </div>`;
   }
 
   // =======================================================================
@@ -10075,6 +10219,31 @@
         return montarRota();
       }
 
+      // ---- Fase 86: Transportadora / Coleta ----
+      case "nova-transportadora":
+        modalNovaTransportadora();
+        return;
+      case "editar-transportadora": {
+        const transportadoras = await chamarApi("/transportadoras?incluir_inativas=1");
+        const transportadora = transportadoras.find((t) => String(t.id) === alvo.dataset.id);
+        modalEditarTransportadora(transportadora);
+        return;
+      }
+      case "abrir-agendar-coleta": {
+        const transportadoras = JSON.parse(alvo.dataset.transportadoras.replace(/&apos;/g, "'"));
+        modalAgendarColeta(Number(alvo.dataset.id), transportadoras);
+        return;
+      }
+      case "confirmar-coleta": {
+        if (!confirm("Confirmar que a transportadora coletou este pedido?")) return;
+        await chamarApi(`/pedidos-venda/coletas/${alvo.dataset.id}/confirmar-coleta`, { method: "POST" });
+        definirFlash("ok", "Coleta confirmada.");
+        return renderPedidoDetalhe(Number(alvo.dataset.pedidoId));
+      }
+      case "abrir-cancelar-coleta":
+        modalCancelarColeta(Number(alvo.dataset.id), Number(alvo.dataset.pedidoId));
+        return;
+
       // ---- Fase 80: Solicitações de Materiais/EPI ----
       case "nova-solicitacao-material": {
         state.cache.materiaisSolicitaveis = await chamarApi("/solicitacoes-material/materiais");
@@ -11455,6 +11624,46 @@
         fecharModais();
         definirFlash("ok", "Produção do dia registrada.");
         return renderOrdemDetalhe(ordemId);
+      }
+      case "criar-transportadora": {
+        await chamarApi("/transportadoras", {
+          method: "POST",
+          body: { nome: dados.get("nome"), cnpj: dados.get("cnpj") || null, telefone: dados.get("telefone") || null },
+        });
+        fecharModais();
+        definirFlash("ok", "Transportadora cadastrada.");
+        return renderTransportadoras();
+      }
+      case "editar-transportadora": {
+        await chamarApi(`/transportadoras/${form.dataset.id}`, {
+          method: "PUT",
+          body: { nome: dados.get("nome"), cnpj: dados.get("cnpj") || null, telefone: dados.get("telefone") || null, status: dados.get("status") },
+        });
+        fecharModais();
+        definirFlash("ok", "Transportadora atualizada.");
+        return renderTransportadoras();
+      }
+      case "agendar-coleta": {
+        const pedidoId = Number(form.dataset.id);
+        await chamarApi(`/pedidos-venda/${pedidoId}/coletas`, {
+          method: "POST",
+          body: {
+            transportadora_id: Number(dados.get("transportadora_id")),
+            data_agendada: dados.get("data_agendada") || null, observacoes: dados.get("observacoes") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Coleta agendada.");
+        return renderPedidoDetalhe(pedidoId);
+      }
+      case "cancelar-coleta": {
+        const pedidoId = Number(form.dataset.pedidoId);
+        await chamarApi(`/pedidos-venda/coletas/${form.dataset.id}/cancelar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Coleta cancelada.");
+        return renderPedidoDetalhe(pedidoId);
       }
       case "concluir-etapa-ordem": {
         const ordemId = Number(form.dataset.id);
