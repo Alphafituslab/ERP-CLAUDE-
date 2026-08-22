@@ -31,8 +31,8 @@
   --raio-xl: 22px;
   --perspectiva: 1400px;
 
-  --grad-azul: linear-gradient(135deg, var(--azul-claro) 0%, var(--azul) 55%, #12233a 100%);
-  --grad-dourado: linear-gradient(135deg, #c8a34a 0%, var(--dourado) 100%);
+  --grad-azul: linear-gradient(135deg, var(--azul-claro) 0%, var(--azul) 55%, #06231a 100%);
+  --grad-dourado: linear-gradient(135deg, #10b981 0%, var(--dourado) 100%);
   --grad-verde: linear-gradient(135deg, #2fa15c 0%, var(--verde) 100%);
   --grad-vermelho: linear-gradient(135deg, #d3554c 0%, var(--vermelho) 100%);
 
@@ -46,12 +46,17 @@
   --acc-4: #7c5cbf;
   --acc-5: #1d8fa3;
 
-  /* Cores da marca Alphafitus (extraídas da logo oficial) — nomes
-     próprios (não reaproveitam --verde/--azul acima) porque aquelas já
-     têm significado semântico no resto do sistema (ex.: --verde marca
-     "ativo/aprovado", --azul é a cor de ação padrão) e não devem virar
-     também "a cor da marca" por baixo dos panos — troca-las mudaria
-     selos e botões do sistema inteiro sem ninguém pedir isso. */
+  /* Cores da marca Alphafitus (extraídas da logo oficial). Até a Fase 96
+     eram mantidas separadas de propósito (--verde/--azul já tinham
+     significado semântico próprio: "ativo/aprovado" e "cor de ação
+     padrão"). A Fase 96 mudou essa decisão a pedido do usuário
+     ("padronizar o sistema tudo para essas cores") — --azul/--azul-claro
+     em styles.css agora REUSAM --marca-verde/--marca-teal. --verde
+     (estado de negócio) continua deliberadamente intocado. Estas duas
+     variáveis abaixo continuam existindo por nome próprio porque
+     `--grad-marca` (usado no cabeçalho de PDFs/telas com a logo de
+     verdade) precisa dos valores exatos, independente de o que --azul
+     passe a valer no futuro. */
   --marca-teal: #00b4a3;
   --marca-verde: #00af6b;
   --marca-texto: #373435;
@@ -65,7 +70,7 @@
   --elev-4: 0 8px 20px rgba(0, 0, 0, 0.45), 0 36px 72px -18px rgba(0, 0, 0, 0.7);
   --brilho-topo: inset 0 1px 0 rgba(255, 255, 255, 0.08);
   --brilho-topo-fraco: inset 0 1px 0 rgba(255, 255, 255, 0.05);
-  --grad-azul: linear-gradient(135deg, #6c98cf 0%, var(--azul) 55%, #0a1420 100%);
+  --grad-azul: linear-gradient(135deg, #5eead4 0%, var(--azul) 55%, #061a13 100%);
   --acc-4: #a48ce0;
   --acc-5: #4db6cc;
 }
@@ -87,7 +92,7 @@ body {
   background-image:
     radial-gradient(680px circle at 8% 0%, color-mix(in srgb, var(--azul-claro) 16%, transparent), transparent 60%),
     radial-gradient(620px circle at 100% 18%, color-mix(in srgb, var(--dourado) 12%, transparent), transparent 55%),
-    radial-gradient(900px circle at 50% 100%, color-mix(in srgb, #0a1420 60%, transparent), transparent 60%);
+    radial-gradient(900px circle at 50% 100%, color-mix(in srgb, #061a13 60%, transparent), transparent 60%);
 }
 
 /* Custom scrollbar — combina com o tema em vez da barra cinza padrão. */
@@ -107,9 +112,9 @@ body {
 .tela-login {
   position: relative;
   overflow: hidden;
-  background: radial-gradient(1200px 800px at 20% 15%, #24507e 0%, transparent 55%),
-              radial-gradient(1000px 700px at 85% 85%, #0f2137 0%, transparent 55%),
-              linear-gradient(135deg, var(--azul) 0%, #0a1626 100%);
+  background: radial-gradient(1200px 800px at 20% 15%, #0f6b4a 0%, transparent 55%),
+              radial-gradient(1000px 700px at 85% 85%, #06231a 0%, transparent 55%),
+              linear-gradient(135deg, var(--azul) 0%, #071912 100%);
   perspective: var(--perspectiva);
 }
 .tela-login::before, .tela-login::after {
@@ -260,20 +265,12 @@ body {
 }
 .barra-lateral .marca {
   position: relative;
-  padding: 20px 20px 18px 68px;
+  padding: 20px;
   min-height: 40px;
   background: rgba(0, 0, 0, 0.12);
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
 }
-.barra-lateral .marca::before {
-  content: "A";
-  position: absolute;
-  left: 20px; top: 20px;
-  display: inline-flex; align-items: center; justify-content: center;
-  width: 36px; height: 36px;
-  border-radius: 10px;
-  font-size: 17px; font-weight: 800; color: #12233a;
-  background: var(--grad-dourado);
+.barra-lateral .marca .marca-icone {
   box-shadow: var(--elev-2), var(--brilho-topo);
 }
 .barra-lateral .marca small {

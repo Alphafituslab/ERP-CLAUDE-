@@ -338,6 +338,7 @@
           case "solicitacoes-material": return param ? renderSolicitacaoMaterialDetalhe(Number(param)) : renderSolicitacoesMateriais();
           case "materiais-catalogo": return renderCatalogoMateriaisEpi();
           case "comercial": return renderComercial();
+          case "lancar-faturar": return renderLancarFaturarPedidos();
           case "pedido": return param ? renderPedidoDetalhe(Number(param)) : renderComercial();
           case "app-vendas": return param === "portfolio" ? renderPortfolioVendas() : renderAppVendas();
           case "minhas-comissoes": return renderMinhasComissoes();
@@ -466,6 +467,9 @@
       tipo: "grupo", chave: "grupo-comercial", nome: "Comercial & Vendas",
       itens: [
         { rota: "#/comercial", chave: "comercial", label: "Comercial (CRM)", permissao: ["comercial", "visualizar"] },
+        // Fase 97 — tela única para lançar e faturar pedidos sem alternar
+        // entre Comercial e Fiscal a cada etapa.
+        { rota: "#/lancar-faturar", chave: "lancar-faturar", label: "Lançar & Faturar Pedidos", permissao: ["comercial", "criar_pedido"] },
         { rota: "#/app-vendas", chave: "app-vendas", label: "App de Vendas", permissao: ["vendas_app", "usar"] },
         { rota: "#/app-vendas/portfolio", chave: "app-vendas-portfolio", label: "Portfólio", permissao: ["vendas_app", "usar"] },
         { rota: "#/minhas-comissoes", chave: "minhas-comissoes", label: "Minhas Comissões", permissao: ["vendas_app", "usar"] },
@@ -559,7 +563,10 @@
       <div class="layout ${state.menuLateralOculto ? "menu-lateral-oculto" : ""}">
         <div class="fundo-menu-mobile" data-acao="alternar-menu-mobile"></div>
         <aside class="barra-lateral">
-          <div class="marca">ALPHAFITUS OS<small>Sistema Integrado de Gestão</small></div>
+          <div class="marca">
+            <img class="marca-icone" src="/static/img/logo_icone.png" alt="">
+            <span>ALPHAFITUS OS<small>Sistema Integrado de Gestão</small></span>
+          </div>
           <nav>${linksHtml}</nav>
           <div class="versao-sistema-rodape">${state.versaoSistema ? `v${escapeHtml(state.versaoSistema)}` : ""}</div>
         </aside>
@@ -7143,6 +7150,104 @@
     );
   }
 
+  // =======================================================================
+  // Fase 97 — "Lançar & Faturar Pedidos": tela única compondo ações que já
+  // existiam espalhadas entre Comercial e Fiscal (criar, confirmar,
+  // expedir, emitir NF-e), mais duas ações novas (reverter para rascunho,
+  // excluir com senha) — sem duplicar nenhuma regra de negócio, só
+  // reaproveitando as mesmas rotas de sempre a partir de um lugar só.
+  // =======================================================================
+  async function renderLancarFaturarPedidos() {
+    app.innerHTML = '<div class="carregando">Carregando pedidos…</div>';
+    const podeVerFiscal = temPermissao("fiscal", "visualizar");
+    const [clientes, pedidos, itens, notasFiscais] = await Promise.all([
+      chamarApi("/comercial/clientes"), chamarApi("/comercial/pedidos"), chamarApi("/itens"),
+      podeVerFiscal ? chamarApi("/fiscal/notas") : Promise.resolve([]),
+    ]);
+    state.cache.clientes = clientes;
+    state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
+    await carregarEmpresasParaSeletor();
+
+    const notasPorPedido = {};
+    notasFiscais.forEach((n) => {
+      if (!notasPorPedido[n.pedido_id]) notasPorPedido[n.pedido_id] = [];
+      notasPorPedido[n.pedido_id].push(n);
+    });
+
+    const podeCriarPedido = temPermissao("comercial", "criar_pedido");
+    const podeConfirmar = temPermissao("comercial", "confirmar_pedido");
+    const podeExpedir = temPermissao("comercial", "expedir_pedido");
+    const podeCancelar = temPermissao("comercial", "cancelar_pedido");
+    const podeEmitirNfe = temPermissao("fiscal", "emitir");
+    const temClienteAtivo = clientes.filter((c) => c.status === "ativo").length > 0;
+
+    const linhas = pedidos
+      .map((p) => {
+        const notasDoPedido = notasPorPedido[p.id] || [];
+        const notaAtiva = notasDoPedido.find((n) => n.status === "processando_autorizacao" || n.status === "autorizada");
+        const acoes = [];
+        if (p.status === "rascunho") {
+          if (podeConfirmar) acoes.push(`<button class="botao secundario pequeno" data-acao="confirmar-pedido-lf" data-id="${p.id}">Enviar p/ aprovação</button>`);
+          if (podeCancelar) acoes.push(`<button class="botao perigo pequeno" data-acao="abrir-excluir-pedido-lf" data-id="${p.id}" data-numero="${escapeHtml(p.numero)}">Excluir</button>`);
+        } else if (p.status === "confirmado") {
+          if (podeExpedir) acoes.push(`<button class="botao secundario pequeno" data-acao="expedir-pedido-lf" data-id="${p.id}">Expedir</button>`);
+          if (podeCancelar) acoes.push(`<button class="botao secundario pequeno" data-acao="reverter-pedido-lf" data-id="${p.id}">Reverter p/ orçamento</button>`);
+          if (podeCancelar) acoes.push(`<button class="botao perigo pequeno" data-acao="abrir-cancelar-pedido-lf" data-id="${p.id}">Cancelar</button>`);
+        } else if (p.status === "expedido") {
+          if (podeVerFiscal && notaAtiva) {
+            acoes.push(`${seloNota(notaAtiva.status)} <span class="mono texto-suave">${notaAtiva.numero}/${notaAtiva.serie}</span>`);
+          } else if (podeEmitirNfe) {
+            acoes.push(`<button class="botao pequeno" data-acao="faturar-pedido-lf" data-id="${p.id}">Faturar (emitir NF-e)</button>`);
+          }
+        }
+        acoes.push(`<a class="botao secundario pequeno" href="#/pedido/${p.id}">Detalhes</a>`);
+        return `<tr>
+          <td class="mono">${escapeHtml(p.numero)}</td>
+          <td>${escapeHtml(p.cliente_razao_social)}</td>
+          <td>${seloPedido(p.status)}</td>
+          <td>R$ ${Number(p.valor_total || 0).toFixed(2)}</td>
+          <td class="texto-suave">${fmtData(p.criado_em)}</td>
+          <td style="display:flex;gap:6px;flex-wrap:wrap;">${acoes.join("")}</td>
+        </tr>`;
+      })
+      .join("");
+
+    renderShell(
+      `<h2>Lançar & Faturar Pedidos</h2>
+       <p class="texto-suave">Cria, confirma, expede e fatura (emite NF-e) um pedido de venda sem trocar de tela.
+       Um pedido ainda em rascunho pode ser excluído de vez (com sua senha); um já confirmado pode ser revertido
+       para rascunho (libera a reserva de estoque automaticamente) ou cancelado — nenhuma das duas ações funciona
+       depois de expedido, já que a mercadoria pode ter saído fisicamente.</p>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${pedidos.length} pedido(s)</span>
+           ${podeCriarPedido ? `<button class="botao" data-acao="novo-pedido-lf" ${temClienteAtivo ? "" : "disabled title='Cadastre um cliente ativo primeiro'"}>+ Lançar pedido</button>` : ""}
+         </div>
+         ${podeCriarPedido && !temClienteAtivo ? '<p class="texto-suave">Nenhum cliente ativo cadastrado ainda — cadastre um cliente em Comercial antes de lançar um pedido.</p>' : ""}
+         <table>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Status</th><th>Valor</th><th>Criado em</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum pedido de venda registrado ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "lancar-faturar"
+    );
+  }
+
+  function modalExcluirPedidoLf(pedidoId, numero) {
+    abrirModal(`
+      <h3>Excluir pedido ${escapeHtml(numero)}</h3>
+      <p class="mensagem-erro">Isto apaga o pedido de vez — diferente de cancelar, não fica nenhum registro dele
+      na lista depois. Só é possível enquanto o pedido ainda está em rascunho (nada foi reservado, aprovado ou
+      faturado ainda). Confirme sua senha para continuar.</p>
+      <form data-form="excluir-pedido-lf" data-id="${pedidoId}">
+        <div class="campo"><label>Senha atual</label><input name="senha_atual" type="password" required autofocus></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Excluir definitivamente</button>
+        </div>
+      </form>`);
+  }
+
   function modalNovoCliente() {
     abrirModal(`
       <h3>Novo cliente</h3>
@@ -7235,7 +7340,7 @@
       </div>`, { largo: true });
   }
 
-  function modalNovoPedido() {
+  function modalNovoPedido(origem) {
     const clientes = (state.cache.clientes || []).filter((c) => c.status === "ativo");
     const itens = state.cache.itensVendaveis || [];
     const opcoesCliente = clientes.map((c) => `<option value="${c.id}">${escapeHtml(c.razao_social)} — ${escapeHtml(c.cnpj)}</option>`).join("");
@@ -7251,6 +7356,7 @@
         <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
         <div class="dica">O pedido é criado como rascunho com este primeiro item — depois de criado, você pode adicionar mais itens na tela de detalhe antes de confirmar. O preço aqui informado é o que será usado para gerar a conta a receber quando o pedido for expedido.</div>
         ${campoSeletorEmpresa(state.cache.empresasSeletor || [])}
+        ${origem ? `<input type="hidden" name="origem" value="${escapeHtml(origem)}">` : ""}
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Criar (rascunho)</button>
@@ -7275,12 +7381,13 @@
       </form>`);
   }
 
-  function modalCancelarPedido(pedido) {
+  function modalCancelarPedido(pedido, origem) {
     abrirModal(`
       <h3>Cancelar pedido ${escapeHtml(pedido.numero)}</h3>
       ${pedido.status === "confirmado" ? '<p class="texto-suave">Este pedido já está confirmado — cancelar libera automaticamente o estoque reservado para outros pedidos.</p>' : ""}
       <form data-form="cancelar-pedido" data-id="${pedido.id}">
         <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        ${origem ? `<input type="hidden" name="origem" value="${escapeHtml(origem)}">` : ""}
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
           <button type="submit" class="botao perigo">Cancelar pedido</button>
@@ -10899,6 +11006,48 @@
         modalCancelarPedido(pedido);
         return;
       }
+
+      // ---- Fase 97: Lançar & Faturar Pedidos (tela única) ----
+      case "novo-pedido-lf":
+        modalNovoPedido("lf");
+        return;
+      case "confirmar-pedido-lf":
+        if (!confirm("Enviar este pedido para aprovação financeira? Só depois de aprovado o sistema tenta reservar estoque (FEFO) para todos os itens.")) return;
+        await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/confirmar`, { method: "POST" });
+        definirFlash("ok", "Pedido enviado para aprovação financeira.");
+        return renderLancarFaturarPedidos();
+      case "expedir-pedido-lf":
+        if (!confirm("Expedir este pedido? Isso vai dar baixa real no estoque físico reservado.")) return;
+        await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/expedir`, { method: "POST" });
+        definirFlash("ok", "Pedido expedido — saída de estoque registrada.");
+        return renderLancarFaturarPedidos();
+      case "reverter-pedido-lf":
+        if (!confirm("Reverter este pedido para rascunho (orçamento)? A reserva de estoque é liberada automaticamente.")) return;
+        await chamarApi(`/comercial/pedidos/${alvo.dataset.id}/reverter-para-rascunho`, { method: "POST" });
+        definirFlash("ok", "Pedido revertido para rascunho — a reserva de estoque foi liberada.");
+        return renderLancarFaturarPedidos();
+      case "abrir-cancelar-pedido-lf": {
+        const pedidoParaCancelarLf = await chamarApi(`/comercial/pedidos/${alvo.dataset.id}`);
+        modalCancelarPedido(pedidoParaCancelarLf, "lf");
+        return;
+      }
+      case "abrir-excluir-pedido-lf":
+        modalExcluirPedidoLf(Number(alvo.dataset.id), alvo.dataset.numero);
+        return;
+      case "faturar-pedido-lf": {
+        if (alvo.disabled) return;
+        if (!confirm("Emitir NF-e para este pedido? Esta ação envia os dados ao provedor de NF-e configurado.")) return;
+        alvo.disabled = true;
+        const notaEmitidaLf = await chamarApi(`/fiscal/pedidos/${alvo.dataset.id}/emitir`, { method: "POST" });
+        definirFlash(
+          notaEmitidaLf.status === "autorizada" ? "ok" : "erro",
+          notaEmitidaLf.status === "autorizada"
+            ? `NF-e ${notaEmitidaLf.numero}/${notaEmitidaLf.serie} autorizada.`
+            : `NF-e enviada — status atual: ${notaEmitidaLf.status}.`
+        );
+        return renderLancarFaturarPedidos();
+      }
+
       case "aprovar-confirmacao-pedido": {
         await chamarApi(`/comercial/pedidos/confirmacoes-pendentes/${alvo.dataset.pendenteId}/aprovar`, { method: "POST" });
         definirFlash("ok", "Confirmação aprovada — o pedido foi confirmado e o estoque reservado.");
@@ -12463,7 +12612,7 @@
         });
         fecharModais();
         definirFlash("ok", "Pedido criado como rascunho.");
-        return navegarPara(`#/pedido/${pedido.id}`);
+        return dados.get("origem") === "lf" ? renderLancarFaturarPedidos() : navegarPara(`#/pedido/${pedido.id}`);
       }
       case "adicionar-item-pedido": {
         await chamarApi(`/comercial/pedidos/${form.dataset.id}/itens`, {
@@ -12482,7 +12631,16 @@
         await chamarApi(`/comercial/pedidos/${pedidoId}/cancelar`, { method: "POST", body: { motivo: dados.get("motivo") } });
         fecharModais();
         definirFlash("ok", "Pedido cancelado.");
-        return renderPedidoDetalhe(pedidoId);
+        return dados.get("origem") === "lf" ? renderLancarFaturarPedidos() : renderPedidoDetalhe(pedidoId);
+      }
+      case "excluir-pedido-lf": {
+        const pedidoIdExcluirLf = Number(form.dataset.id);
+        await chamarApi(`/comercial/pedidos/${pedidoIdExcluirLf}/excluir`, {
+          method: "POST", body: { senha_atual: dados.get("senha_atual") },
+        });
+        fecharModais();
+        definirFlash("ok", "Pedido excluído definitivamente.");
+        return renderLancarFaturarPedidos();
       }
 
       // ---- Fase 63: Limite de Crédito do Cliente (Alçada na Confirmação do Pedido de Venda) ----

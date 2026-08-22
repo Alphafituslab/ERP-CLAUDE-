@@ -6,6 +6,7 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import audit
 from .. import notificacoes_service
+from .. import security
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..permissions import requires_permission
 from .estoque import _reservado_producao_lote, _saldo_posicao
@@ -481,7 +482,8 @@ def listar_pedidos():
     where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
     rows = conn.execute(
         f"""
-        SELECT pv.*, c.razao_social AS cliente_razao_social
+        SELECT pv.*, c.razao_social AS cliente_razao_social,
+               (SELECT COALESCE(SUM(quantidade * preco_unitario), 0) FROM pedido_venda_itens WHERE pedido_id = pv.id) AS valor_total
         FROM pedidos_venda pv JOIN clientes c ON c.id = pv.cliente_id
         {where} ORDER BY pv.id DESC
         """,
@@ -1141,3 +1143,88 @@ def cancelar(pedido_id):
     motivo = (dados.get("motivo") or "").strip()
     conn = get_db()
     return jsonify(cancelar_pedido_internamente(conn, pedido_id, usuario_atual["id"], motivo))
+
+
+@bp.post("/pedidos/<int:pedido_id>/reverter-para-rascunho")
+@requires_permission("comercial", "cancelar_pedido")
+def reverter_para_rascunho(pedido_id):
+    """Fase 97 — pedido do usuário: "revertido em orçamento". Só a partir
+    de 'confirmado' (nunca 'expedido' — mesma fronteira de
+    STATUS_QUE_PERMITEM_CANCELAR/cancelar_pedido_internamente acima: uma
+    vez expedido, a mercadoria já pode ter saído fisicamente, e reverter
+    o status aqui não desfaria isso). A liberação da reserva de estoque é
+    automática, de graça: `_saldo_reservado_ativo` só soma reservas de
+    pedidos com status='confirmado' (ver a nota completa em
+    cancelar_pedido_internamente acima) — assim que o status muda para
+    'rascunho' aqui, o saldo reservado volta a ficar livre, sem precisar
+    tocar em `pedido_venda_reservas` (que é append-only, histórico)."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    pedido = _pedido_ou_404(conn, pedido_id)
+
+    if pedido["status"] != "confirmado":
+        raise ApiError(
+            f"Só é possível reverter para rascunho um pedido 'confirmado' (status atual: '{pedido['status']}') — "
+            "um pedido já expedido não pode ser revertido (trate devolução como um fluxo separado).",
+            status=400,
+        )
+
+    conn.execute("UPDATE pedidos_venda SET status = 'rascunho' WHERE id = ?", (pedido_id,))
+    audit.registrar(conn, tabela="pedidos_venda", registro_id=pedido_id, usuario_id=usuario_atual["id"],
+                     acao="pedido_revertido_para_rascunho", valor_anterior={"status": "confirmado"},
+                     valor_novo={"status": "rascunho"}, ip=client_ip(), dispositivo=client_device())
+    return jsonify(_pedido_detalhado(conn, pedido_id))
+
+
+@bp.post("/pedidos/<int:pedido_id>/excluir")
+@requires_permission("comercial", "cancelar_pedido")
+def excluir_pedido(pedido_id):
+    """Fase 97 — pedido do usuário: "excluído com senha". Restrito a
+    'rascunho' de propósito: é o ÚNICO status em que o pedido ainda não
+    tem nenhuma consequência de negócio real (sem reserva de estoque, sem
+    aprovação financeira concedida, sem nota fiscal) — a partir de
+    'confirmado' em diante, a única forma de desfazer continua sendo
+    cancelar (ou reverter-para-rascunho, acima), nunca apagar de vez.
+    Exige a senha atual — mesma régua de reautenticação de
+    `trocar_senha`/`desativar_2fa`, para uma ação irreversível como esta.
+
+    Um rascunho com lançamento de verba comercial vinculado (Fase 36) não
+    pode ser excluído: `verbas_comerciais_lancamentos` é append-only por
+    trigger (UPDATE e DELETE bloqueados no próprio banco, de propósito —
+    ver schema_fase36.sql) — apagar o pedido violaria a referência
+    (FOREIGN KEY) sem nenhuma forma legal de limpar antes. Nesse caso,
+    cancelar continua sendo o caminho certo."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    senha_atual = (dados.get("senha_atual") or "").strip()
+    conn = get_db()
+    pedido = _pedido_ou_404(conn, pedido_id)
+
+    if pedido["status"] != "rascunho":
+        raise ApiError(
+            f"Só é possível excluir definitivamente um pedido ainda em 'rascunho' (status atual: '{pedido['status']}') "
+            "— um pedido já confirmado ou expedido precisa ser cancelado, nunca excluído.",
+            status=400,
+        )
+    if not security.verify_password(senha_atual, usuario_atual["senha_hash"]):
+        raise ApiError("Senha atual incorreta.", status=400)
+
+    tem_verba_vinculada = conn.execute(
+        "SELECT 1 FROM verbas_comerciais_lancamentos WHERE pedido_venda_id = ? LIMIT 1", (pedido_id,)
+    ).fetchone()
+    if tem_verba_vinculada:
+        raise ApiError(
+            "Este pedido tem um lançamento de verba comercial vinculado (registro financeiro permanente, "
+            "nunca apagado) — não é possível excluir. Cancele o pedido em vez de excluir.",
+            status=400,
+        )
+
+    numero = pedido["numero"]
+    audit.registrar(conn, tabela="pedidos_venda", registro_id=pedido_id, usuario_id=usuario_atual["id"],
+                     acao="pedido_excluido", valor_anterior=dict(pedido), valor_novo=None,
+                     ip=client_ip(), dispositivo=client_device())
+    conn.execute("DELETE FROM pedidos_venda_confirmacoes_pendentes WHERE pedido_venda_id = ?", (pedido_id,))
+    conn.execute("DELETE FROM sessoes_rascunho_app_vendas WHERE pedido_venda_id = ?", (pedido_id,))
+    conn.execute("DELETE FROM pedido_venda_itens WHERE pedido_id = ?", (pedido_id,))
+    conn.execute("DELETE FROM pedidos_venda WHERE id = ?", (pedido_id,))
+    return jsonify({"ok": True, "numero": numero})

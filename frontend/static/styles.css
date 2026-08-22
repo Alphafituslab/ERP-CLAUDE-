@@ -1,7 +1,23 @@
+/* Fase 96 — rebrand para o teal/verde da logo oficial (tema-3d.css já
+   tinha --marca-teal #00b4a3 / --marca-verde #00af6b, amostrados da
+   logo, mas deliberadamente NÃO usados como --azul/--azul-claro até
+   aqui — ver o comentário original logo abaixo, em tema-3d.css, sobre
+   por que eram mantidos separados). O usuário pediu para padronizar o
+   sistema inteiro para essas cores, então --azul/--azul-claro (cor de
+   ação padrão em todo o sistema) passam a REUSAR os mesmos valores da
+   marca, e --azul agora é um pouco mais escuro que --marca-verde só
+   para manter contraste de texto branco em fundos grandes (sidebar,
+   botão primário). `--dourado` também virou um VERDE de destaque aqui
+   (nome da variável mantido de propósito, para não precisar caçar cada
+   um dos ~30 usos espalhados por styles.css e tema-3d.css — só o VALOR
+   mudou). `--verde` (estado "ativo"/"aprovado") continua intocado e
+   propositalmente diferente (mais amarelado/"grama") do verde de marca
+   (mais "jade"/azulado) — marca vs. status de negócio precisam
+   continuar distinguíveis. */
 :root {
-  --azul: #1f3a5f;
-  --azul-claro: #2c5282;
-  --dourado: #9c7a2e;
+  --azul: #00875f;
+  --azul-claro: #00b4a3;
+  --dourado: #34d399;
   --fundo: #f4f6f8;
   --superficie: #ffffff;
   --texto: #1a202c;
@@ -20,8 +36,8 @@
   --texto: #e8ecf1;
   --texto-suave: #a2acb8;
   --borda: #2a3444;
-  --azul: #4f7bb0;
-  --azul-claro: #6c98cf;
+  --azul: #22c58d;
+  --azul-claro: #4ee2ab;
 }
 
 * { box-sizing: border-box; }
@@ -47,7 +63,7 @@ button, input, select {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, var(--azul) 0%, #0f2137 100%);
+  background: linear-gradient(135deg, var(--azul) 0%, #071912 100%);
 }
 
 .cartao-login {
@@ -265,7 +281,11 @@ button, input, select {
   font-weight: 700;
   font-size: 16px;
   border-bottom: 1px solid rgba(255,255,255,0.15);
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
+.barra-lateral .marca .marca-icone { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; }
 .barra-lateral .marca small { display: block; font-weight: 400; font-size: 11px; opacity: 0.75; }
 
 .barra-lateral nav { flex: 1; padding: 12px 0; overflow-y: auto; }

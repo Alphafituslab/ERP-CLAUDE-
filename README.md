@@ -4901,3 +4901,55 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   `POST /auth/2fa/desativar` revoga todos os dispositivos confiáveis do
   usuário, para uma reativação futura não herdar confiança de uma
   configuração anterior.
+- (Entregue na Fase 96) Rebrand visual para as cores oficiais da marca —
+  pedido do usuário ao mandar o ícone novo do app: "verificar que essa é
+  nossas cores, padronizar o sistema tudo para essas cores". `tema-3d.css`
+  já tinha `--marca-teal`/`--marca-verde` (amostrados da logo oficial,
+  `frontend/static/img/logo_alphafitus.png`) desde antes, mas
+  DELIBERADAMENTE não usados como `--azul`/`--azul-claro` (a cor de ação
+  padrão do sistema inteiro) para não mudar botões/selos sem ninguém
+  pedir. Esta fase reverte essa decisão a pedido explícito do usuário:
+  `--azul`/`--azul-claro` em `styles.css` (`:root` e `[data-tema="escuro"]`)
+  passam a usar os mesmos tons de verde/teal da marca; `--dourado`
+  (destaque secundário, indicador de link ativo no menu) também virou
+  verde — nome da variável mantido de propósito para não precisar caçar
+  ~30 usos espalhados por `styles.css`/`tema-3d.css`. `--verde` (selo de
+  status "ativo/aprovado") continua deliberadamente intocado — é um
+  conceito diferente (status de negócio, não identidade visual) e
+  precisa continuar distinguível do verde de marca. O badge "A" que
+  aparecia no topo do menu lateral (gerado por CSS puro, `::before` com
+  `content: "A"` sobre um fundo dourado) foi substituído por uma imagem
+  de verdade (`frontend/static/img/logo_icone.png`, recortada do ícone
+  3D que o usuário forneceu). Os ícones do PWA (`frontend/static/icons/
+  icon-192.png`, `icon-512.png`, `icon-maskable-512.png`, usados na aba
+  do navegador e ao "instalar como app" no celular) e o `theme_color` do
+  `manifest.json`/`index.html` também foram atualizados para a mesma
+  identidade — antes disso só o ícone do instalador Windows (Fase 93)
+  tinha sido trocado; o favicon/PWA web ainda era o "AF" dourado antigo.
+- (Entregue na Fase 97) "Lançar & Faturar Pedidos" — tela única pedida
+  pelo usuário para criar, confirmar, expedir e faturar (emitir NF-e) um
+  pedido de venda sem alternar entre Comercial e Fiscal a cada etapa.
+  Não duplica nenhuma regra de negócio: cada botão da nova tela chama
+  exatamente a mesma rota que a tela de detalhe do pedido já usava
+  (`confirmar`, `expedir`, `fiscal/pedidos/<id>/emitir`). Duas ações são
+  genuinamente novas: **reverter para rascunho** (`POST /comercial/
+  pedidos/<id>/reverter-para-rascunho`, só a partir de 'confirmado' — a
+  liberação da reserva de estoque é automática, de graça, porque
+  `_saldo_reservado_ativo` já só soma reservas de pedidos com
+  status='confirmado', mesmo mecanismo que `cancelar_pedido_internamente`
+  já usava) e **excluir em definitivo** (`POST /comercial/pedidos/<id>/
+  excluir`, exige a senha atual — mesma régua de reautenticação de
+  `trocar_senha`/`desativar_2fa`). As duas são restritas de propósito à
+  mesma fronteira que `STATUS_QUE_PERMITEM_CANCELAR` já usava: nunca a
+  partir de 'expedido' (mercadoria já pode ter saído fisicamente, e pode
+  já existir uma NF-e emitida — trate devolução como fluxo separado).
+  `excluir` tem uma trava extra: um pedido com lançamento de verba
+  comercial vinculado (`verbas_comerciais_lancamentos`, Fase 36) não pode
+  ser apagado — aquela tabela é append-only por TRIGGER no próprio banco
+  (UPDATE e DELETE bloqueados de propósito, "registro financeiro
+  permanente" no comentário original da migração) — nesse caso a
+  exclusão é recusada com uma mensagem explicando para cancelar em vez
+  de excluir. `GET /comercial/pedidos` (lista) ganhou `valor_total`
+  (subquery correlacionada sobre `pedido_venda_itens`, mesmo cálculo que
+  `_valor_total_pedido_venda` já fazia para o detalhe) — não existia
+  antes porque a tela de lista nunca tinha precisado mostrar valor.
