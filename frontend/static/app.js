@@ -493,17 +493,27 @@
   // escolha manual do usuário guardada em `state.gruposMenuAbertos`; um
   // grupo que o usuário nunca tocou fica fechado por padrão (só abre
   // sozinho quando é o grupo da página atual).
-  function grupoMenuAberto(grupo, itensVisiveis, paginaAtiva) {
-    if (itensVisiveis.some((it) => it.chave === paginaAtiva)) return true;
-    return state.gruposMenuAbertos[grupo.chave] === true;
+  // Fase 79 — menu em modo "sanfona": nunca mais de um grupo aberto ao
+  // mesmo tempo (evita a barra lateral virar uma lista comprida e
+  // misturada depois de navegar por vários módulos ao longo do tempo,
+  // já que antes cada grupo guardava seu próprio aberto/fechado
+  // independente dos outros). O grupo da página atual sempre vence; sem
+  // isso, olha o que sobrou marcado como aberto da última vez.
+  function calcularGrupoAbertoUnico(paginaAtiva) {
+    const grupoDaPagina = ITENS_MENU.find(
+      (it) => it.tipo === "grupo" && it.itens.some((sub) => sub.chave === paginaAtiva)
+    );
+    if (grupoDaPagina) return grupoDaPagina.chave;
+    return Object.keys(state.gruposMenuAbertos).find((chave) => state.gruposMenuAbertos[chave] === true) || null;
   }
 
   function renderShell(conteudoHtml, paginaAtiva) {
+    const grupoAbertoUnico = calcularGrupoAbertoUnico(paginaAtiva);
     const linksHtml = ITENS_MENU.map((it) => {
       if (it.tipo === "grupo") {
         const itensVisiveis = it.itens.filter((sub) => !sub.permissao || temPermissao(sub.permissao[0], sub.permissao[1]));
         if (!itensVisiveis.length) return "";
-        const aberto = grupoMenuAberto(it, itensVisiveis, paginaAtiva);
+        const aberto = it.chave === grupoAbertoUnico;
         const subitensHtml = itensVisiveis
           .map((sub) => `<a class="link-nav barra-lateral-subitem ${sub.chave === paginaAtiva ? "ativo" : ""}" href="${sub.rota}">${sub.label}</a>`)
           .join("");
@@ -552,6 +562,14 @@
     app.querySelectorAll(".barra-lateral-grupo").forEach((el) => {
       el.addEventListener("toggle", () => {
         state.gruposMenuAbertos[el.dataset.grupo] = el.open;
+        // Sanfona: abrir um grupo fecha todos os outros — cada `.open =
+        // false` dispara o "toggle" do PRÓPRIO elemento fechado, que já
+        // atualiza `gruposMenuAbertos` e o localStorage sozinho.
+        if (el.open) {
+          app.querySelectorAll(".barra-lateral-grupo").forEach((outro) => {
+            if (outro !== el && outro.open) outro.open = false;
+          });
+        }
         localStorage.setItem("alphafitus_grupos_menu", JSON.stringify(state.gruposMenuAbertos));
       });
     });

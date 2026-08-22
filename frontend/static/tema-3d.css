@@ -339,42 +339,68 @@ body {
 [data-grupo="grupo-administracao"] { --cor-grupo: var(--menu-administracao); }
 
 .barra-lateral-grupo {
-  margin: 6px 2px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--cor-grupo, #fff) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--cor-grupo, #fff) 20%, transparent);
+  margin: 10px 6px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--cor-grupo, #fff) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cor-grupo, #fff) 24%, transparent);
+  border-left: 4px solid var(--cor-grupo, transparent);
   box-shadow: var(--elev-1), var(--brilho-topo-fraco);
   overflow: hidden;
   transition: background 0.15s ease, box-shadow 0.15s ease;
 }
+/* Espaço extra ANTES de cada grupo (menos o primeiro) — de propósito
+   maior que o espaço entre os itens de topo, para o olho perceber "aqui
+   começa uma seção nova" só pela respiração, antes mesmo de reparar na
+   cor. */
+.barra-lateral-grupo + .barra-lateral-grupo { margin-top: 10px; }
+/* Respiro extra entre os itens de topo (Painel, Itens...) e o primeiro
+   grupo colorido — marca visualmente onde a navegação "solta" termina e
+   as seções por módulo começam. */
+.link-nav + .barra-lateral-grupo { margin-top: 18px; }
 .barra-lateral-grupo[open] {
-  background: color-mix(in srgb, var(--cor-grupo, #fff) 13%, transparent);
+  background: color-mix(in srgb, var(--cor-grupo, #fff) 16%, transparent);
   box-shadow: var(--elev-2), var(--brilho-topo-fraco);
 }
 .barra-lateral-grupo summary {
-  border-radius: 0; margin: 0; transition: background 0.15s ease;
+  border-radius: 0; margin: 0; padding-top: 12px; padding-bottom: 12px;
+  transition: background 0.15s ease;
   justify-content: flex-start;
+  font-size: 13.5px;
+  letter-spacing: 0.2px;
 }
-.barra-lateral-grupo summary:hover { background: color-mix(in srgb, var(--cor-grupo, #fff) 14%, transparent); }
+.barra-lateral-grupo[open] summary {
+  font-weight: 700;
+  color: #fff;
+  border-bottom: 1px solid color-mix(in srgb, var(--cor-grupo, #fff) 30%, transparent);
+}
+.barra-lateral-grupo summary:hover { background: color-mix(in srgb, var(--cor-grupo, #fff) 16%, transparent); }
 .barra-lateral-grupo summary::after { margin-left: auto; }
 .barra-lateral-grupo summary::before {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 24px; height: 24px; border-radius: 7px; margin-right: 10px; font-size: 13px;
-  background: color-mix(in srgb, var(--cor-grupo, #fff) 28%, transparent);
+  width: 26px; height: 26px; border-radius: 8px; margin-right: 10px; font-size: 14px;
+  background: color-mix(in srgb, var(--cor-grupo, #fff) 32%, transparent);
   box-shadow: var(--brilho-topo-fraco);
   flex-shrink: 0;
 }
 .barra-lateral-subitens {
-  background: rgba(0, 0, 0, 0.1);
-  padding: 4px 6px 6px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 6px 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 .barra-lateral-subitem {
-  border-radius: 8px;
-  margin: 2px 0;
+  border-radius: 7px;
+  margin: 0;
+  padding-top: 8px !important;
+  padding-bottom: 8px !important;
+  opacity: 0.92;
 }
+.barra-lateral-subitem:hover { opacity: 1; }
 .barra-lateral-subitem.ativo {
-  background: color-mix(in srgb, var(--cor-grupo, var(--dourado)) 30%, transparent);
+  background: color-mix(in srgb, var(--cor-grupo, var(--dourado)) 35%, transparent);
   box-shadow: inset 3px 0 0 var(--cor-grupo, var(--dourado));
+  opacity: 1;
 }
 
 /* Ícones por rota — puramente decorativo, não depende de nenhum dado. */
