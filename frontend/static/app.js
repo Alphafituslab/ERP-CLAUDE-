@@ -119,6 +119,13 @@
       if (resp.status === 401 && !semAuth) {
         limparSessao();
         navegarPara("#/login");
+      } else if (dados.erro === "2fa_obrigatorio_pendente" && location.hash !== "#/configurar-2fa-obrigatorio") {
+        // Fase 92 — pega tanto quem acabou de logar (a próxima chamada
+        // qualquer, ex.: /auth/me, já vem com esse 403) quanto uma sessão
+        // já aberta ANTES do perfil passar a exigir 2FA (o backend é a
+        // única fonte de verdade aqui — não dá pra confiar em nada
+        // calculado no login, que pode ter acontecido horas atrás).
+        navegarPara("#/configurar-2fa-obrigatorio");
       }
       const erro = new Error(dados.mensagem || `Erro ${resp.status} na requisição.`);
       erro.status = resp.status;
@@ -313,6 +320,7 @@
           case "auditoria": return renderAuditoria();
           case "notificacoes": return renderNotificacoes();
           case "conta": return renderMinhaConta();
+          case "configurar-2fa-obrigatorio": return renderConfigurar2faObrigatorio();
           case "itens": return renderItens();
           case "fornecedores": return renderFornecedores();
           case "lotes": return param ? renderLoteDetalhe(Number(param)) : renderLotes();
@@ -938,7 +946,7 @@
     const linhas = perfis
       .map(
         (p) => `<tr>
-          <td>${escapeHtml(p.nome)} ${!p.editavel ? '<span class="selo bloqueado">sistema</span>' : ""}</td>
+          <td>${escapeHtml(p.nome)} ${!p.editavel ? '<span class="selo bloqueado">sistema</span>' : ""}${p.exige_2fa ? '<span class="selo amarelo">exige 2FA</span>' : ""}</td>
           <td class="texto-suave">${escapeHtml(p.descricao || "—")}</td>
           <td>${p.permissoes.length}</td>
           <td>
@@ -1414,6 +1422,34 @@
           <button type="submit" class="botao">Confirmar e ativar</button>
         </div>
       </form>`);
+  }
+
+  // Fase 92 — 2FA obrigatório por perfil. Tela cheia (não é modal, de
+  // propósito: um modal tem um "x"/clique-fora para fechar, e a pessoa
+  // precisa ser realmente impedida de seguir em frente até confirmar —
+  // o backend já bloqueia toda a API mesmo assim, isto aqui é só a
+  // experiência de chegar direto na solução em vez de descobrir a
+  // pendência por tentativa e erro em cada tela).
+  async function renderConfigurar2faObrigatorio() {
+    app.innerHTML = '<div class="carregando">Preparando configuração de 2FA…</div>';
+    const setup = await chamarApi("/auth/2fa/setup", { method: "POST" });
+    renderShell(
+      `<h2>Configuração obrigatória de segurança</h2>
+       <div class="cartao">
+         <p class="mensagem-erro" style="margin-top:0;">Seu perfil exige autenticação em duas etapas (2FA) —
+         o restante do sistema fica bloqueado até você concluir esta configuração.</p>
+         <p class="texto-suave">Adicione esta chave no seu aplicativo autenticador (Google Authenticator, Microsoft
+         Authenticator etc.) e depois digite o código de 6 dígitos gerado para confirmar.</p>
+         <div class="campo"><label>Chave manual</label><div class="mono cartao">${escapeHtml(setup.secret)}</div></div>
+         <div class="campo"><label>URI (para leitores compatíveis)</label><div class="mono cartao">${escapeHtml(setup.otpauth_uri)}</div></div>
+         <form data-form="confirmar-2fa-obrigatorio">
+           <div class="campo"><label>Código de 6 dígitos</label><input name="codigo" inputmode="numeric" maxlength="6" required autofocus></div>
+           <button class="botao" type="submit">Confirmar e ativar</button>
+         </form>
+         <p class="texto-suave" style="margin-top:16px;">Prefere fazer isso depois de outro computador? <a href="#" data-acao="logout">Sair agora</a>.</p>
+       </div>`,
+      "configurar-2fa-obrigatorio"
+    );
   }
 
   // =======================================================================
@@ -11455,6 +11491,11 @@
         fecharModais();
         definirFlash("ok", "2FA ativado com sucesso.");
         return renderMinhaConta();
+      }
+      case "confirmar-2fa-obrigatorio": {
+        await chamarApi("/auth/2fa/confirmar", { method: "POST", body: { codigo: dados.get("codigo") } });
+        definirFlash("ok", "2FA ativado — obrigado por proteger sua conta.");
+        return navegarPara("#/dashboard");
       }
 
       // ---- Fase 2: Itens ----

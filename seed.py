@@ -464,6 +464,12 @@ PERMISSOES_PADRAO = [
     ("comercial", "gerenciar_coleta", "Cadastrar transportadoras e agendar/confirmar/cancelar a coleta de um pedido expedido", 0),
 ]
 
+# Fase 92 — perfis para os quais o 2FA (TOTP) não é mais opcional. É uma
+# lista separada (em vez de um 5º elemento em cada tupla de PERFIS_PADRAO)
+# de propósito: evita reescrever as ~14 tuplas já existentes só para
+# acrescentar um campo que só se aplica a duas delas.
+PERFIS_QUE_EXIGEM_2FA = ("Administrador", "Financeiro")
+
 PERFIS_PADRAO = [
     ("Administrador", "Acesso total ao sistema. Perfil de sistema, não pode ser excluído ou ter permissões removidas.", 0, "TODAS"),
     ("PCP", "Planejamento e Controle da Produção", 1, [
@@ -787,6 +793,15 @@ def rodar_seed(conn=None, admin_email=None, admin_senha=None, imprimir=True):
                     "INSERT INTO perfil_permissao (perfil_id, permissao_id) VALUES (?, ?)",
                     (perfil_id, permissao_id),
                 )
+
+    # Fase 92 — liga exige_2fa para os perfis da lista acima. Sempre
+    # reafirmado no re-seed (idempotente); nunca desliga um perfil que um
+    # administrador tenha ligado manualmente para outro perfil além destes
+    # dois (por isso é um UPDATE ... SET 1 ..., nunca um "resetar todos
+    # para 0 antes").
+    for nome_perfil in PERFIS_QUE_EXIGEM_2FA:
+        if nome_perfil in ids_perfil:
+            conn.execute("UPDATE perfis SET exige_2fa = 1 WHERE id = ?", (ids_perfil[nome_perfil],))
 
     email = (admin_email or os.environ.get("ALPHAFITUS_ADMIN_EMAIL") or "admin@alphafitus.com.br").strip().lower()
     ja_existe_admin = conn.execute("SELECT id FROM usuarios WHERE email = ?", (email,)).fetchone()

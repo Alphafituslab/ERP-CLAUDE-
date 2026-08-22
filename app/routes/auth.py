@@ -127,6 +127,21 @@ def login():
         (_iso(_now()), ip, usuario["id"]),
     )
     tokens = _emitir_tokens(conn, usuario["id"], ip, dispositivo)
+    # Fase 92 — o token já sai válido (senão a pessoa não conseguiria
+    # chamar /2fa/setup e /2fa/confirmar para resolver a pendência); esta
+    # flag só avisa o FRONTEND para levar direto à tela de configurar 2FA
+    # em vez de deixar a pendência ser descoberta só no primeiro 403 de
+    # alguma outra tela (`app/context.py::get_current_user` é quem
+    # realmente bloqueia o resto da API até a confirmação).
+    tokens["exige_configurar_2fa"] = bool(
+        conn.execute(
+            """
+            SELECT 1 FROM usuario_perfil up JOIN perfis pf ON pf.id = up.perfil_id
+            WHERE up.usuario_id = ? AND pf.exige_2fa = 1 LIMIT 1
+            """,
+            (usuario["id"],),
+        ).fetchone()
+    )
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                      acao="login_sucesso", ip=ip, dispositivo=dispositivo)
     return jsonify(tokens)

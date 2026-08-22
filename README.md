@@ -4827,3 +4827,30 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   perfil, adicionar/remover pessoas), exatamente o "deixar cadastrar qual
   setor aprova" pedido: a configuração é o próprio cadastro de Perfis, não
   uma tela nova.
+- (Entregue na Fase 92) 2FA obrigatório por perfil — pedido do usuário por
+  "máxima proteção"; o 2FA (TOTP, RFC 6238, compatível com Google/Microsoft
+  Authenticator) já existia desde antes, mas era 100% opcional (cada
+  usuário ativava por conta própria em "Minha Conta"). Nova coluna
+  `perfis.exige_2fa` (`schema_fase92.sql`) torna essa exigência uma
+  propriedade do PERFIL, não do usuário — assim, promover alguém a um
+  perfil que exige 2FA já vale a partir do próximo login, sem migração de
+  dado por pessoa. `seed.py::PERFIS_QUE_EXIGEM_2FA` liga por padrão para
+  "Administrador" e "Financeiro" (recomendação aceita pelo usuário: as duas
+  contas com mais poder no sistema — permissões e dinheiro). **Onde o
+  bloqueio de verdade acontece:** `app/context.py::get_current_user` — o
+  único ponto por onde toda rota autenticada passa — nega (403,
+  `codigo=2fa_obrigatorio_pendente`) qualquer chamada de um usuário sem
+  `dois_fatores_ativo` cujo perfil exija, EXCETO uma lista branca mínima
+  (`/auth/me`, `/auth/logout`, `/auth/2fa/setup`, `/auth/2fa/confirmar`) —
+  sem essa lista branca a pessoa ficaria trancada para sempre, sem conseguir
+  nem chegar nas rotas que resolvem a própria pendência. O LOGIN em si
+  continua liberando o token normalmente mesmo pendente (senão o token
+  nunca existiria para chamar as rotas da lista branca); é o RESTO da API
+  que fica bloqueado. No frontend, `chamarApi` (ponto único por onde toda
+  chamada passa) reconhece esse código de erro e redireciona para uma tela
+  cheia dedicada (`#/configurar-2fa-obrigatorio`, não um modal — não pode
+  ter "x" para fechar) que já chama `/2fa/setup` e mostra o QR/chave na
+  hora; isso cobre tanto quem acabou de logar quanto uma sessão JÁ ABERTA
+  antes do perfil passar a exigir 2FA (o backend é sempre a fonte de
+  verdade, nunca um cálculo feito só no momento do login). A tela de Perfis
+  agora mostra um selo "exige 2FA" nos perfis marcados, para transparência.
