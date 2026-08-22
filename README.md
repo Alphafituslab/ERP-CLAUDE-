@@ -4743,3 +4743,19 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   item (ex.: B12 = 10g, amido de milho = 50kg), não uma porcentagem — os
   itens variam demais em escala/unidade para uma regra percentual única
   fazer sentido.
+- (Entregue na Fase 88) Pré-checagem de Saldo ao Criar Pedido/OP — antes
+  desta fase, o único jeito de saber se havia saldo suficiente era tentar
+  confirmar/liberar de verdade e torcer para não dar erro. Dois novos
+  endpoints, **só leitura, nunca reservam nada**: `GET /producao/ordens/
+  <id>/disponibilidade` (extraído de `liberar()` via a nova função
+  compartilhada `_verificar_disponibilidade_composicao` — chamada duas
+  vezes, uma na pré-checagem e outra dentro do próprio `liberar()`, já
+  que `_alocar_fefo_producao` sempre foi puramente leitura) e `GET
+  /comercial/pedidos/<id>/pre-checagem-estoque` (mesma ideia, reaproveita
+  `_alocar_fefo`). O frontend chama os dois de forma oportunista — na
+  tela de uma Ordem de Produção 'planejada' e de um Pedido de Venda
+  'rascunho' — e mostra um aviso amarelo/vermelho **não-bloqueante**
+  quando o saldo parece insuficiente; o botão de liberar/confirmar
+  continua sempre disponível, porque o saldo pode mudar até lá (chegada
+  de matéria-prima, cancelamento de outro pedido) — o gate de verdade
+  continua sendo só na hora de liberar/confirmar, exatamente como antes.

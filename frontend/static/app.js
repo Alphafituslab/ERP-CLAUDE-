@@ -2831,6 +2831,20 @@
     app.innerHTML = '<div class="carregando">Carregando ordem…</div>';
     const ordem = await chamarApi(`/producao/ordens/${ordemId}`);
 
+    // Fase 88 — pré-checagem de saldo, só um aviso NÃO-bloqueante (nunca
+    // impede nada) enquanto a ordem ainda está 'planejada' — o gate real
+    // continua sendo só na hora de liberar.
+    let disponibilidadeHtml = "";
+    if (ordem.status === "planejada") {
+      const disp = await chamarApi(`/producao/ordens/${ordemId}/disponibilidade`).catch(() => null);
+      if (disp && !disp.todos_suficientes) {
+        const faltantes = disp.itens.filter((i) => !i.suficiente)
+          .map((i) => `${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)} (precisa ${i.quantidade_planejada}, disponível ${i.disponivel} ${escapeHtml(i.unidade)})`)
+          .join("; ");
+        disponibilidadeHtml = `<p class="mensagem-erro">Saldo insuficiente para liberar esta ordem hoje: ${faltantes}. Pode mudar até lá — isto é só um aviso.</p>`;
+      }
+    }
+
     // Fase 13 — Custeio de Produção: dado financeiro sensível, só busca
     // se o usuário tiver a permissão nova `custeio.visualizar` (que é
     // independente de `producao.visualizar` de propósito — ver
@@ -3141,6 +3155,7 @@
            <div><span class="rotulo">Quantidade planejada</span><br>${ordem.quantidade_planejada} ${escapeHtml(ordem.unidade)}</div>
          </div>
          ${ordem.motivo_cancelamento ? `<p class="mensagem-erro">Cancelada: ${escapeHtml(ordem.motivo_cancelamento)}</p>` : ""}
+         ${disponibilidadeHtml}
          <div class="barra-acoes">
            <span></span>
            <div style="display:flex;gap:8px;flex-wrap:wrap;">
@@ -7165,6 +7180,20 @@
     }
     state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
 
+    // Fase 88 — pré-checagem de saldo, só um aviso NÃO-bloqueante enquanto
+    // o pedido ainda está 'rascunho' — o gate real continua sendo só na
+    // hora de confirmar.
+    let preChecagemHtml = "";
+    if (pedido.status === "rascunho" && pedido.itens.length > 0) {
+      const preChecagem = await chamarApi(`/comercial/pedidos/${pedidoId}/pre-checagem-estoque`).catch(() => null);
+      if (preChecagem && !preChecagem.todos_suficientes) {
+        const faltantes = preChecagem.itens.filter((i) => !i.suficiente)
+          .map((i) => `${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)} (precisa ${i.necessario}, disponível ${i.disponivel})`)
+          .join("; ");
+        preChecagemHtml = `<p class="mensagem-erro">Saldo insuficiente para confirmar este pedido hoje: ${faltantes}. Pode mudar até lá — isto é só um aviso.</p>`;
+      }
+    }
+
     const podeEditarItens = temPermissao("comercial", "criar_pedido");
     const podeConfirmar = temPermissao("comercial", "confirmar_pedido");
     const podeExpedir = temPermissao("comercial", "expedir_pedido");
@@ -7225,6 +7254,7 @@
            <div><span class="rotulo">Valor total do pedido</span><br>R$ ${Number(pedido.valor_total).toFixed(2)}</div>
          </div>
          ${pedido.motivo_cancelamento ? `<p class="mensagem-erro">Cancelado: ${escapeHtml(pedido.motivo_cancelamento)}</p>` : ""}
+         ${preChecagemHtml}
          ${confirmacaoPendente ? `
          <div class="subcartao">
            <p class="mensagem-erro" style="margin-top:0;">

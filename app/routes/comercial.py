@@ -677,6 +677,35 @@ def remover_item(pedido_id, item_linha_id):
     return jsonify(_pedido_detalhado(conn, pedido_id))
 
 
+@bp.get("/pedidos/<int:pedido_id>/pre-checagem-estoque")
+@requires_permission("comercial", "visualizar")
+def pre_checagem_estoque(pedido_id):
+    """Fase 88 — pré-checagem só de leitura de saldo por item do rascunho,
+    pensada para o frontend mostrar um aviso NÃO-BLOQUEANTE antes de
+    tentar confirmar de verdade. Reaproveita a mesma `_alocar_fefo` que
+    `confirmar_pedido_internamente` usa para o gate real (PASSO 1, mais
+    abaixo) — que é puramente leitura — sem nunca gravar nenhuma reserva."""
+    conn = get_db()
+    _pedido_ou_404(conn, pedido_id)
+    itens = conn.execute("SELECT * FROM pedido_venda_itens WHERE pedido_id = ?", (pedido_id,)).fetchall()
+
+    reservado_planejado = {}
+    resultado_itens = []
+    for item in itens:
+        item = dict(item)
+        alocacoes, coberto = _alocar_fefo(conn, item["item_id"], item["quantidade"], reservado_planejado)
+        for alocacao in alocacoes:
+            chave = (alocacao["lote_id"], alocacao["posicao_id"])
+            reservado_planejado[chave] = reservado_planejado.get(chave, 0) + alocacao["quantidade"]
+        item_row = conn.execute("SELECT codigo, descricao FROM itens WHERE id = ?", (item["item_id"],)).fetchone()
+        resultado_itens.append({
+            "item_id": item["item_id"], "codigo": item_row["codigo"], "descricao": item_row["descricao"],
+            "necessario": item["quantidade"], "disponivel": round(coberto, 6),
+            "suficiente": coberto + 0.0000001 >= item["quantidade"],
+        })
+    return jsonify({"itens": resultado_itens, "todos_suficientes": all(i["suficiente"] for i in resultado_itens)})
+
+
 def confirmar_pedido_internamente(conn, pedido_id, usuario_id):
     """Núcleo da confirmação de um pedido de venda (alocação FEFO +
     mudança de status) — extraído para função própria na Fase 36 para que

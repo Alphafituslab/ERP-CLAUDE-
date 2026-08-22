@@ -328,6 +328,46 @@ def criar():
     return jsonify(_ordem_detalhada(conn, ordem_id)), 201
 
 
+def _verificar_disponibilidade_composicao(conn, composicao):
+    """Fase 88 — extraído de `liberar()` para ser reaproveitado tanto pelo
+    gate real (que grava reserva) quanto por `GET /<id>/disponibilidade`
+    abaixo, uma pré-checagem só de leitura para avisar ANTES de tentar
+    liberar de verdade. `_alocar_fefo_producao` já é puramente leitura
+    (nunca escreve nada), então chamar esta função duas vezes (uma na
+    pré-checagem, outra em `liberar()`) é seguro e não duplica nenhuma
+    regra de negócio — só a chamada em si."""
+    resultado = []
+    for componente in composicao:
+        alocacoes, coberto = _alocar_fefo_producao(conn, componente["item_id"], componente["quantidade_planejada"])
+        resultado.append({
+            **componente,
+            "alocacoes": alocacoes,
+            "disponivel": round(coberto, 6),
+            "suficiente": coberto + 0.0000001 >= componente["quantidade_planejada"],
+        })
+    return resultado
+
+
+@bp.get("/<int:ordem_id>/disponibilidade")
+@requires_permission("producao", "visualizar")
+def disponibilidade(ordem_id):
+    """Fase 88 — pré-checagem só de leitura, pensada para o frontend
+    avisar (sem bloquear) se uma ordem 'planejada' provavelmente não vai
+    conseguir ser liberada por falta de saldo — nunca reserva nada."""
+    conn = get_db()
+    ordem = _ordem_ou_404(conn, ordem_id)
+    composicao = _composicao_planejada(conn, ordem)
+    verificacao = _verificar_disponibilidade_composicao(conn, composicao)
+    itens_resultado = [
+        {
+            "item_id": v["item_id"], "codigo": v["codigo"], "descricao": v["descricao"], "unidade": v["unidade"],
+            "quantidade_planejada": v["quantidade_planejada"], "disponivel": v["disponivel"], "suficiente": v["suficiente"],
+        }
+        for v in verificacao
+    ]
+    return jsonify({"itens": itens_resultado, "todos_suficientes": all(v["suficiente"] for v in verificacao)})
+
+
 @bp.post("/<int:ordem_id>/liberar")
 @requires_permission("producao", "liberar")
 def liberar(ordem_id):
@@ -348,18 +388,13 @@ def liberar(ordem_id):
     ordem = dict(ordem)
 
     composicao = _composicao_planejada(conn, ordem)
-    alocacoes_por_item = {}
-    faltas = []
-    for componente in composicao:
-        alocacoes, coberto = _alocar_fefo_producao(conn, componente["item_id"], componente["quantidade_planejada"])
-        if coberto + 0.0000001 < componente["quantidade_planejada"]:
-            faltas.append(
-                f"{componente['codigo']} — {componente['descricao']} "
-                f"(precisa {componente['quantidade_planejada']} {componente['unidade']}, "
-                f"disponível {round(coberto, 6)} {componente['unidade']})"
-            )
-        else:
-            alocacoes_por_item[componente["item_id"]] = alocacoes
+    verificacao = _verificar_disponibilidade_composicao(conn, composicao)
+    alocacoes_por_item = {v["item_id"]: v["alocacoes"] for v in verificacao if v["suficiente"]}
+    faltas = [
+        f"{v['codigo']} — {v['descricao']} (precisa {v['quantidade_planejada']} {v['unidade']}, "
+        f"disponível {v['disponivel']} {v['unidade']})"
+        for v in verificacao if not v["suficiente"]
+    ]
 
     if faltas:
         raise ApiError(
