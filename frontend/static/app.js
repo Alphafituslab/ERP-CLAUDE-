@@ -413,7 +413,7 @@
     // painel_tempo_real.py) — mesmo um usuário sem nenhuma das três ainda
     // pode abrir a tela (só vê "nenhuma seção disponível"), então esconder
     // o ITEM DO MENU inteiro atrás de uma permissão fixa não faria sentido.
-    { rota: "#/painel-tempo-real", chave: "painel-tempo-real", label: "Painel Tempo Real (Chão de Fábrica)" },
+    { rota: "#/painel-tempo-real", chave: "painel-tempo-real", label: "Painel Tempo Real" },
     // Fase 76 — mesmo raciocínio acima: o Painel Executivo filtra suas
     // próprias seções (comercial/produção) pelas permissões que o usuário
     // já tem (ver app/routes/painel_executivo.py), então também fica sem
