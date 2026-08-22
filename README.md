@@ -4770,3 +4770,34 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   histórico e pré-preenche o preço unitário com a compra mais recente que
   tinha preço registrado — só um valor inicial, o usuário edita livremente
   antes de enviar.
+- (Entregue na Fase 90) Painel Tempo Real redesenhado em Kanban/pipeline —
+  fecha o projeto de 10 fases (81 a 90) iniciado a pedido do usuário para
+  transformar o antigo painel (3 seções soltas por módulo: Produção,
+  Comercial, Compras) num quadro único mostrando um pedido/matéria-prima
+  atravessando de verdade todas as etapas do negócio, do PCP solicitando
+  compra até a coleta pela transportadora. `app/routes/painel_tempo_real.py`
+  foi reescrito do zero: em vez de 3 seções por módulo, 8 COLUNAS por
+  ETAPA real (Aprovação Financeira pendente, Separação, Sugestões de
+  Compra do PCP, Compras em andamento, Quarentena/CQ, Etapas de Produção,
+  Abaixo do Estoque Mínimo, Expedido/Aguardando Coleta) — cada uma uma
+  query pequena e AO VIVO contra as tabelas já existentes das Fases
+  anteriores (nenhuma tabela nova, nenhum snapshot persistido, mesma
+  filosofia desde a Fase 75), gated pela MESMA permissão que já controla
+  a tela normal daquele módulo (nunca uma permissão nova "ver o painel
+  inteiro" — um perfil estreito continua vendo só as colunas que já
+  fazem sentido pra ele). A coluna "Separação" é o único uso do Catálogo
+  de Fluxo Configurável (Fase 81) neste conjunto, com `LEFT JOIN` +
+  `COALESCE` para mostrar corretamente um pedido confirmado que ninguém
+  ainda visitou (a etapa só é materializada na primeira visita à tela do
+  pedido — sem essa combinação, o painel ficaria incompleto até alguém
+  abrir cada pedido manualmente). "Cara de Power BI" sem nenhuma
+  biblioteca nova: barra de contagem por coluna em CSS puro, e um selo de
+  "idade" do card (verde/amarelo/vermelho, reaproveitando as cores já
+  existentes de `.selo`) calculado no FRONTEND a partir do timestamp que
+  a API já devolve — nenhum cálculo de idade novo no backend. Continua
+  sem WebSocket (polling a cada 8s, mesma decisão de sempre). **Detalhe
+  de continuidade importante:** a coluna "Etapas de Produção" preservou a
+  capacidade do painel original (Fase 75) de iniciar/concluir uma etapa
+  direto pelo tablet do chão de fábrica, sem abrir o detalhe da ordem —
+  mostra tanto a etapa já em andamento (com "Concluir") quanto a próxima
+  da fila ainda não iniciada (com "Iniciar"), não só as já iniciadas.

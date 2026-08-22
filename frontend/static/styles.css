@@ -171,6 +171,36 @@ button, input, select {
 .painel-etapa-linha:first-of-type { border-top: none; }
 .painel-etapa-nome { font-weight: 600; flex: 1 1 auto; min-width: 100px; }
 
+/* Fase 90 — Painel Tempo Real redesenhado em Kanban/pipeline: uma coluna
+   por ETAPA do negócio (não mais uma seção por módulo) — rolagem
+   horizontal própria (`.tabela-scroll` já existe para tabelas largas;
+   aqui é o quadro inteiro que precisa rolar de lado em telas estreitas,
+   sem o corpo da página rolar junto). */
+.painel-kanban { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+.painel-kanban-coluna {
+  flex: 0 0 300px;
+  border: 1px solid var(--borda);
+  border-radius: 8px;
+  background: var(--superficie);
+  display: flex;
+  flex-direction: column;
+  max-height: 78vh;
+}
+.painel-kanban-coluna-cabecalho { padding: 10px 12px; border-bottom: 1px solid var(--borda); }
+.painel-kanban-coluna-titulo { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: 600; font-size: 13.5px; }
+.painel-kanban-barra-fundo { height: 4px; border-radius: 2px; background: var(--borda); margin-top: 6px; overflow: hidden; }
+.painel-kanban-barra { height: 100%; background: var(--dourado); border-radius: 2px; }
+.painel-kanban-coluna-corpo { padding: 8px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+.painel-kanban-card {
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  padding: 8px 10px;
+  background: var(--fundo);
+  font-size: 13px;
+}
+.painel-kanban-card-linha { display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-wrap: wrap; }
+.painel-kanban-card-acoes { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+
 .mensagem-erro {
   background: #fdecea;
   color: var(--vermelho);

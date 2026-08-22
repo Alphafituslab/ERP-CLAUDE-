@@ -3622,43 +3622,17 @@
     }, 8000);
   }
 
-  function seloSituacaoEtapaPainel(situacao) {
-    if (situacao === "concluida") return '<span class="selo ativo">Concluída</span>';
-    if (situacao === "em_andamento") return '<span class="selo amarelo">Em andamento</span>';
-    return '<span class="selo inativo">Pendente</span>';
-  }
-
-  function cardOrdemPainel(ordem, podeApontar) {
-    const etapasHtml = ordem.etapas.length
-      ? ordem.etapas
-          .map(
-            (e) => `<div class="painel-etapa-linha">
-              <span class="painel-etapa-nome">${escapeHtml(e.nome)}${e.tipo_unidade_valor ? ` <span class="texto-suave">(${escapeHtml(e.tipo_unidade_valor)})</span>` : ""}</span>
-              ${seloSituacaoEtapaPainel(e.situacao)}
-              ${
-                podeApontar && e.situacao === "pendente"
-                  ? `<button class="botao botao-tablet" data-acao="painel-iniciar-etapa" data-ordem-id="${ordem.id}" data-etapa-id="${e.id}">Iniciar</button>`
-                  : ""
-              }
-              ${
-                podeApontar && e.situacao === "em_andamento"
-                  ? `<button class="botao botao-tablet secundario" data-acao="painel-concluir-etapa" data-ordem-id="${ordem.id}" data-etapa-id="${e.id}" data-nome="${escapeHtml(e.nome)}" data-unidade="${escapeHtml(e.tipo_unidade_valor || "")}">Concluir</button>`
-                  : ""
-              }
-              ${e.situacao === "concluida" && e.valor_registrado !== null && e.valor_registrado !== undefined ? `<span class="texto-suave">${e.valor_registrado} ${escapeHtml(e.tipo_unidade_valor || "")}</span>` : ""}
-            </div>`
-          )
-          .join("")
-      : '<p class="texto-suave" style="margin:4px 0 0 0;">Nenhuma etapa cadastrada para esta ordem ainda.</p>';
-
-    return `<div class="painel-card-ordem">
-      <div class="painel-card-ordem-cabecalho">
-        <a href="#/producao/${ordem.id}"><strong>${escapeHtml(ordem.item_codigo)}</strong> — ${escapeHtml(ordem.item_descricao)}</a>
-        <span class="selo ${ordem.status === "em_producao" ? "amarelo" : "ativo"}">${escapeHtml(ordem.status)}</span>
-      </div>
-      <p class="texto-suave" style="margin:2px 0 8px 0;">Planejado: ${ordem.quantidade_planejada} ${escapeHtml(ordem.unidade)}</p>
-      ${etapasHtml}
-    </div>`;
+  // Fase 90 — "há quanto tempo" um card está parado nesta coluna,
+  // calculado no FRONTEND a partir do timestamp que a API já devolve
+  // (nenhum cálculo de idade novo no backend) — reaproveita as cores já
+  // existentes de `.selo` (ativo=verde, amarelo, bloqueado=vermelho) em
+  // vez de inventar uma paleta nova só para isto.
+  function agingSeloPainel(timestampIso) {
+    if (!timestampIso) return "";
+    const horas = (Date.now() - new Date(timestampIso).getTime()) / 3600000;
+    const cor = horas < 4 ? "ativo" : horas < 24 ? "amarelo" : "bloqueado";
+    const texto = horas < 1 ? "há poucos minutos" : horas < 24 ? `há ${Math.floor(horas)}h` : `há ${Math.floor(horas / 24)}d`;
+    return `<span class="selo ${cor}">${texto}</span>`;
   }
 
   function modalConcluirEtapaPainel(ordemId, etapaId, nomeEtapa, unidadeValor) {
@@ -3685,6 +3659,101 @@
       </form>`);
   }
 
+  // Fase 90 — um cartão por item de coluna. Cada `chave` de coluna tem um
+  // formato de linha próprio (os dados vêm de tabelas bem diferentes:
+  // pedido, lote, etapa, item...), mas todos compartilham a mesma casca
+  // visual (`.painel-kanban-card`) — só o CONTEÚDO muda por `switch`.
+  function cartaoItemPainel(colunaChave, item, permissoes) {
+    switch (colunaChave) {
+      case "aprovacao_financeira": {
+        // Segregação de função (solicitante != aprovador) é sempre
+        // reforçada pelo SERVIDOR ao clicar em "Aprovar" — aqui só
+        // decidimos se MOSTRA o botão pela permissão, sem saber quem foi
+        // o solicitante (evitaria uma consulta extra por card).
+        const podeAprovar = permissoes.podeAprovarPedidoVenda;
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha">
+            <a href="#/pedido/${item.pedido_venda_id}"><strong>${escapeHtml(item.numero)}</strong></a>
+            ${agingSeloPainel(item.solicitado_em)}
+          </div>
+          <div class="texto-suave">${escapeHtml(item.cliente_nome)} — R$ ${Number(item.valor_pedido).toFixed(2)}</div>
+          <div class="texto-suave">${item.motivo_solicitacao === "acima_do_limite" ? "Acima do limite de crédito" : "Aprovação obrigatória"}</div>
+          ${podeAprovar ? `<div class="painel-kanban-card-acoes">
+            <button class="botao secundario pequeno" data-acao="aprovar-confirmacao-pedido" data-pendente-id="${item.pendente_id}" data-pedido-id="${item.pedido_venda_id}">Aprovar</button>
+            <button class="botao perigo pequeno" data-acao="abrir-rejeitar-confirmacao-pedido" data-pendente-id="${item.pendente_id}" data-pedido-id="${item.pedido_venda_id}">Rejeitar</button>
+          </div>` : ""}
+        </div>`;
+      }
+      case "separacao":
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha">
+            <a href="#/pedido/${item.pedido_venda_id}"><strong>${escapeHtml(item.numero)}</strong></a>
+            ${agingSeloPainel(item.confirmado_em)}
+          </div>
+          <div class="texto-suave">${escapeHtml(item.cliente_nome)}</div>
+          <div>${item.status_separacao === "em_andamento" ? '<span class="selo amarelo">Em andamento</span>' : '<span class="selo inativo">Pendente</span>'}</div>
+        </div>`;
+      case "solicitacao_compra":
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha">
+            <a href="#/aps-sugestoes-compra"><strong>${escapeHtml(item.item_codigo)}</strong></a>
+            ${agingSeloPainel(item.gerada_em)}
+          </div>
+          <div class="texto-suave">${escapeHtml(item.item_descricao)}</div>
+          <div class="texto-suave">Sugerido: ${_fmtQtd(item.quantidade_sugerida)}</div>
+        </div>`;
+      case "compras_em_andamento":
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha">
+            <a href="#/compras-pedidos/${item.id}"><strong>${escapeHtml(item.numero)}</strong></a>
+            ${agingSeloPainel(item.enviado_em || item.criado_em)}
+          </div>
+          <div class="texto-suave">${escapeHtml(item.fornecedor_nome)}</div>
+          <div><span class="selo amarelo">${escapeHtml(item.status)}</span></div>
+        </div>`;
+      case "quarentena_cq":
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha">
+            <a href="#/lotes/${item.id}"><strong>${escapeHtml(item.codigo_lote)}</strong></a>
+            ${agingSeloPainel(item.criado_em)}
+          </div>
+          <div class="texto-suave">${escapeHtml(item.item_codigo)} — ${escapeHtml(item.item_descricao)}</div>
+          <div><span class="selo amarelo">${escapeHtml(item.status)}</span></div>
+        </div>`;
+      case "producao_etapas": {
+        const emAndamento = !!item.iniciado_em;
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha">
+            <a href="#/producao/${item.ordem_producao_id}"><strong>${escapeHtml(item.numero)}</strong></a>
+            ${emAndamento ? agingSeloPainel(item.iniciado_em) : '<span class="selo inativo">Não iniciada</span>'}
+          </div>
+          <div class="texto-suave">${escapeHtml(item.item_codigo)} — ${escapeHtml(item.item_descricao)}</div>
+          <div>${escapeHtml(item.nome)}${item.centro_trabalho_nome ? ` <span class="texto-suave">(${escapeHtml(item.centro_trabalho_nome)})</span>` : ""}</div>
+          ${permissoes.podeApontarProducao ? `<div class="painel-kanban-card-acoes">
+            ${!emAndamento ? `<button class="botao botao-tablet pequeno" data-acao="painel-iniciar-etapa" data-ordem-id="${item.ordem_producao_id}" data-etapa-id="${item.etapa_id}">Iniciar</button>` : ""}
+            ${emAndamento ? `<button class="botao botao-tablet secundario pequeno" data-acao="painel-concluir-etapa" data-ordem-id="${item.ordem_producao_id}" data-etapa-id="${item.etapa_id}" data-nome="${escapeHtml(item.nome)}" data-unidade="${escapeHtml(item.tipo_unidade_valor || "")}">Concluir</button>` : ""}
+          </div>` : ""}
+        </div>`;
+      }
+      case "estoque_minimo":
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha"><a href="#/itens"><strong>${escapeHtml(item.codigo)}</strong></a></div>
+          <div class="texto-suave">${escapeHtml(item.descricao)}</div>
+          <div class="texto-suave">${_fmtQtd(item.estoque_atual)} / mín. ${_fmtQtd(item.estoque_minimo)} ${escapeHtml(item.unidade_medida)}</div>
+        </div>`;
+      case "expedicao_coleta":
+        return `<div class="painel-kanban-card">
+          <div class="painel-kanban-card-linha">
+            <a href="#/pedido/${item.pedido_venda_id}"><strong>${escapeHtml(item.numero)}</strong></a>
+            ${agingSeloPainel(item.expedido_em)}
+          </div>
+          <div class="texto-suave">${escapeHtml(item.cliente_nome)}</div>
+        </div>`;
+      default:
+        return "";
+    }
+  }
+
   async function renderPainelTempoReal(silencioso) {
     if (!silencioso) app.innerHTML = '<div class="carregando">Carregando painel em tempo real…</div>';
     let painel;
@@ -3695,39 +3764,32 @@
       throw erro;
     }
 
-    const podeApontar = temPermissao("producao", "apontar");
-    const secaoHtml = (secao) => {
-      if (secao.chave === "producao") {
-        return `<div class="cartao">
-          <h3 style="margin-top:0;">${escapeHtml(secao.titulo)}</h3>
-          ${
-            secao.ordens.length
-              ? `<div class="painel-grade-ordens">${secao.ordens.map((o) => cardOrdemPainel(o, podeApontar)).join("")}</div>`
-              : '<p class="texto-suave">Nenhuma ordem liberada ou em produção agora.</p>'
-          }
-        </div>`;
-      }
-      // comercial / compras — lista simples de pedidos em movimento.
-      const rotulo = secao.chave === "comercial" ? "cliente_nome" : "fornecedor_nome";
-      return `<div class="cartao">
-        <h3 style="margin-top:0;">${escapeHtml(secao.titulo)}</h3>
-        ${
-          secao.pedidos.length
-            ? `<table><thead><tr><th>Número</th><th>${secao.chave === "comercial" ? "Cliente" : "Fornecedor"}</th><th>Status</th><th>Criado em</th></tr></thead>
-               <tbody>${secao.pedidos.map((p) => `<tr><td>${escapeHtml(p.numero)}</td><td>${escapeHtml(p[rotulo])}</td><td><span class="selo amarelo">${escapeHtml(p.status)}</span></td><td>${fmtData(p.criado_em)}</td></tr>`).join("")}</tbody></table>`
-            : `<p class="texto-suave">Nenhum pedido em movimento agora.</p>`
-        }
-      </div>`;
+    const permissoes = {
+      podeApontarProducao: temPermissao("producao", "apontar"),
+      podeAprovarPedidoVenda: temPermissao("comercial", "aprovar_pedido_acima_limite_credito"),
     };
+    const maiorContagem = Math.max(1, ...painel.colunas.map((c) => c.contagem));
+
+    const colunaHtml = (coluna) => `
+      <div class="painel-kanban-coluna">
+        <div class="painel-kanban-coluna-cabecalho">
+          <div class="painel-kanban-coluna-titulo"><span>${escapeHtml(coluna.titulo)}</span><span class="texto-suave">${coluna.contagem}</span></div>
+          <div class="painel-kanban-barra-fundo"><div class="painel-kanban-barra" style="width:${Math.round((coluna.contagem / maiorContagem) * 100)}%"></div></div>
+        </div>
+        <div class="painel-kanban-coluna-corpo">
+          ${coluna.itens.length ? coluna.itens.map((item) => cartaoItemPainel(coluna.chave, item, permissoes)).join("") : '<p class="texto-suave" style="margin:4px;">Vazio agora.</p>'}
+        </div>
+      </div>`;
 
     renderShell(
-      `<h2>Painel Tempo Real — Chão de Fábrica</h2>
-       <p class="texto-suave">Atualiza sozinho a cada poucos segundos — o que aparece aqui depende do que você
-       tem permissão de ver em cada módulo, o mesmo critério já usado no resto do sistema.</p>
+      `<h2>Painel Tempo Real</h2>
+       <p class="texto-suave">Atualiza sozinho a cada poucos segundos — cada coluna é uma etapa real do negócio,
+       do pedido do PCP à coleta pela transportadora. O que aparece depende do que você tem permissão de ver em
+       cada módulo, o mesmo critério já usado no resto do sistema.</p>
        ${
-         painel.secoes.length
-           ? painel.secoes.map(secaoHtml).join("")
-           : '<div class="cartao"><p class="texto-suave">Seu perfil não tem permissão de visualizar nenhuma seção deste painel (Produção, Comercial ou Compras) — fale com um administrador se acha que deveria.</p></div>'
+         painel.colunas.length
+           ? `<div class="painel-kanban">${painel.colunas.map(colunaHtml).join("")}</div>`
+           : '<div class="cartao"><p class="texto-suave">Seu perfil não tem permissão de visualizar nenhuma coluna deste painel — fale com um administrador se acha que deveria.</p></div>'
        }`,
       "painel-tempo-real"
     );
