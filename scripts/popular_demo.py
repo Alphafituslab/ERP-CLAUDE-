@@ -485,7 +485,20 @@ admin.post(f"/solicitacoes-material/{solicitacao_material['id']}/entregar", {
 admin.post(f"/solicitacoes-material/{solicitacao_material['id']}/confirmar-recebimento")
 log(f"solicitação de EPI {solicitacao_material['numero']} — aprovada, entregue e com recebimento confirmado (ciclo completo)")
 
+# ============================================================
+# 11) Catálogo de Fluxo Configurável (Fase 81) — etapa "Separação" do
+#     pedido de venda já criado acima, ciclo completo iniciar → concluir.
+# ============================================================
+etapas_pedido_venda = admin.get(f"/fluxo/pedido_venda/{pedido_venda['id']}/etapas")
+etapa_separacao = next((e for e in etapas_pedido_venda if e["codigo"] == "separacao"), None)
+if etapa_separacao and etapa_separacao["status"] == "pendente":
+    admin.post(f"/fluxo/pedido_venda/{pedido_venda['id']}/etapas/{etapa_separacao['tipo_etapa_fluxo_id']}/iniciar")
+    admin.post(f"/fluxo/pedido_venda/{pedido_venda['id']}/etapas/{etapa_separacao['tipo_etapa_fluxo_id']}/concluir",
+               {"observacao": "Separado no almoxarifado (exemplo de demonstração)."})
+    log(f"etapa de fluxo 'Separação' do pedido {pedido_venda['numero']} concluída (Fase 81)")
+
 log("")
 log("Concluído — instalação populada com um exemplo completo em Itens, Fornecedores, Estoque/Lotes,")
 log("Análises (QMS), Fórmulas, Produção (OPs), Comercial, App de Vendas (Portfólio + rascunho modelo),")
-log("Compras, Financeiro (contas a receber e a pagar), Desvios de Qualidade e Solicitações de Materiais/EPI.")
+log("Compras, Financeiro (contas a receber e a pagar), Desvios de Qualidade, Solicitações de Materiais/EPI")
+log("e o Catálogo de Fluxo Configurável (etapa de Separação do pedido de venda).")

@@ -443,6 +443,14 @@ PERMISSOES_PADRAO = [
     ("solicitacoes_material", "aprovar", "Aprovar ou rejeitar uma solicitação de material/EPI pendente", 0),
     ("solicitacoes_material", "entregar", "Registrar a entrega de uma solicitação já aprovada", 0),
     ("solicitacoes_material", "cadastrar_catalogo", "Cadastrar/editar os materiais e EPIs disponíveis para solicitação", 0),
+
+    # Fase 81 — Catálogo de Fluxo Configurável (base do Painel Kanban, Fase 90). Cobre só as
+    # etapas que NÃO têm uma coluna de status própria em nenhuma tabela existente (ex.:
+    # "Separação" de um pedido de venda, "Coleta pela Transportadora" na Fase 86) — o restante
+    # do pipeline continua lido ao vivo das tabelas de sempre (pedidos_venda, ordens_producao,
+    # lotes, pedidos_compra), sem duplicar nada aqui.
+    ("fluxo", "configurar", "Cadastrar/editar os tipos de etapa do catálogo de fluxo multi-módulo", 0),
+    ("fluxo", "apontar", "Iniciar/concluir uma etapa manual do fluxo (ex.: Separação de um pedido)", 0),
 ]
 
 PERFIS_PADRAO = [
@@ -462,6 +470,10 @@ PERFIS_PADRAO = [
         "producao.configurar_etapas",
         # Fase 80 — qualquer setor pode solicitar material/EPI.
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
+        # Fase 81 — PCP é quem decide se cadastra uma etapa nova no catálogo
+        # de fluxo do painel (mesmo raciocínio de "producao.configurar_etapas"
+        # acima, agora estendido para fora da Ordem de Produção).
+        "fluxo.configurar", "fluxo.apontar",
     ]),
     ("Produção", "Execução da produção (MES)", 1, [
         "itens.visualizar", "lotes.visualizar", "formulas.visualizar",
@@ -513,6 +525,9 @@ PERFIS_PADRAO = [
         # PERMISSOES_PADRAO acima.
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
         "solicitacoes_material.entregar", "solicitacoes_material.cadastrar_catalogo",
+        # Fase 81 — Estoque é quem fisicamente separa um pedido de venda,
+        # então é quem aponta a etapa "Separação" no painel.
+        "fluxo.apontar",
     ]),
     ("Compras", "Compras e homologação de fornecedores", 1, [
         "itens.visualizar", "fornecedores.visualizar", "fornecedores.cadastrar",
@@ -563,6 +578,9 @@ PERFIS_PADRAO = [
         # arriscada) ficam de propósito fora daqui, só no Administrador.
         "fiscal.visualizar", "fiscal.emitir",
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
+        # Fase 81 — Comercial também pode apontar etapas manuais do fluxo
+        # (ex.: confirmar que a Separação de um pedido foi concluída).
+        "fluxo.apontar",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",

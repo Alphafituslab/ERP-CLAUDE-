@@ -7001,12 +7001,43 @@
       </form>`);
   }
 
+  // =======================================================================
+  // FASE 81 — Catálogo de Fluxo Configurável (etapas manuais tipo checklist,
+  // ex.: "Separação" de um pedido de venda) — genérico o bastante para ser
+  // reaproveitado por qualquer entidade_tipo (pedido_venda, ordem_producao,
+  // pedido_compra, lote) que ganhar uma seção assim no futuro.
+  // =======================================================================
+  function cartaoEtapasFluxo(entidadeTipo, entidadeId, etapas) {
+    if (!etapas.length) return "";
+    const seloEtapaFluxo = (status) => {
+      const mapa = { pendente: ["inativo", "Pendente"], em_andamento: ["amarelo", "Em andamento"], concluida: ["ativo", "Concluída"] };
+      const par = mapa[status] || ["inativo", status];
+      return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+    };
+    const linhas = etapas.map((et) => `
+      <div class="linha-detalhe">
+        <div><span class="rotulo">${escapeHtml(et.nome)}</span><br>${seloEtapaFluxo(et.status)}</div>
+        <div>${et.iniciado_em ? `<span class="rotulo">Iniciado</span><br>${fmtData(et.iniciado_em)}` : ""}</div>
+        <div>${et.concluido_em ? `<span class="rotulo">Concluído</span><br>${fmtData(et.concluido_em)}` : ""}</div>
+        <div>
+          ${et.status === "pendente" ? `<button class="botao secundario pequeno" data-acao="iniciar-etapa-fluxo" data-entidade-tipo="${entidadeTipo}" data-entidade-id="${entidadeId}" data-tipo-id="${et.tipo_etapa_fluxo_id}">Iniciar</button>` : ""}
+          ${et.status === "em_andamento" ? `<button class="botao pequeno" data-acao="concluir-etapa-fluxo" data-entidade-tipo="${entidadeTipo}" data-entidade-id="${entidadeId}" data-tipo-id="${et.tipo_etapa_fluxo_id}">Concluir</button>` : ""}
+        </div>
+      </div>`).join("");
+    return `<div class="cartao">
+      <h3 style="margin-top:0;">Etapas de Fluxo</h3>
+      ${linhas}
+    </div>`;
+  }
+
   async function renderPedidoDetalhe(pedidoId) {
     app.innerHTML = '<div class="carregando">Carregando pedido…</div>';
     const podeVerFiscal = temPermissao("fiscal", "visualizar");
-    const [pedido, itens, notasFiscais] = await Promise.all([
+    const podeApontarFluxo = temPermissao("fluxo", "apontar");
+    const [pedido, itens, notasFiscais, etapasFluxo] = await Promise.all([
       chamarApi(`/comercial/pedidos/${pedidoId}`), chamarApi("/itens"),
       podeVerFiscal ? chamarApi(`/fiscal/notas?pedido_id=${pedidoId}`) : Promise.resolve([]),
+      podeApontarFluxo ? chamarApi(`/fluxo/pedido_venda/${pedidoId}/etapas`) : Promise.resolve([]),
     ]);
     state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
 
@@ -7102,6 +7133,7 @@
          ${itensHtml}
        </div>
        ${contaReceberHtml}
+       ${podeApontarFluxo ? cartaoEtapasFluxo("pedido_venda", pedido.id, etapasFluxo) : ""}
        ${podeVerFiscal ? cartaoNotaFiscalDoPedido(pedido, notasFiscais) : ""}`,
       "comercial"
     );
@@ -9910,6 +9942,18 @@
         await chamarApi(`/formulas/${alvo.dataset.id}/ativar`, { method: "POST" });
         definirFlash("ok", "Fórmula ativada.");
         return renderFormulas();
+
+      // ---- Fase 81: Catálogo de Fluxo Configurável (etapas manuais genéricas) ----
+      case "iniciar-etapa-fluxo": {
+        await chamarApi(`/fluxo/${alvo.dataset.entidadeTipo}/${alvo.dataset.entidadeId}/etapas/${alvo.dataset.tipoId}/iniciar`, { method: "POST" });
+        definirFlash("ok", "Etapa iniciada.");
+        return montarRota();
+      }
+      case "concluir-etapa-fluxo": {
+        await chamarApi(`/fluxo/${alvo.dataset.entidadeTipo}/${alvo.dataset.entidadeId}/etapas/${alvo.dataset.tipoId}/concluir`, { method: "POST" });
+        definirFlash("ok", "Etapa concluída.");
+        return montarRota();
+      }
 
       // ---- Fase 80: Solicitações de Materiais/EPI ----
       case "nova-solicitacao-material": {

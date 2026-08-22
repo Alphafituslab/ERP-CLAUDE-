@@ -47,7 +47,7 @@ def create_app(test_config: dict = None) -> Flask:
         relatorios, rastreabilidade, custeio, memorial, aps, memorial_catalogos,
         memorial_anexos, memorial_padronizacao, vendas_app, memorial_administracao, sistema, compras,
         cotacoes, fiscal, boletos, tipos_etapa_producao, painel_tempo_real, painel_executivo,
-        solicitacoes_material,
+        solicitacoes_material, fluxo,
     )
     app.register_blueprint(auth.bp)
     app.register_blueprint(usuarios.bp)
@@ -86,6 +86,7 @@ def create_app(test_config: dict = None) -> Flask:
     app.register_blueprint(painel_tempo_real.bp)
     app.register_blueprint(painel_executivo.bp)
     app.register_blueprint(solicitacoes_material.bp)
+    app.register_blueprint(fluxo.bp)
 
     @app.get("/api/v1/saude")
     def saude():

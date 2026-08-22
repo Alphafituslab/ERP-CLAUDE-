@@ -4583,3 +4583,32 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   SEM nenhum perfil padrão — cabe ao Administrador designar, pela tela de
   Perfis já existente, quem tem autoridade para aprovar essas solicitações
   na empresa real.
+- (Entregue na Fase 81) Catálogo de Fluxo Configurável — primeira peça de um
+  projeto maior (redesenho do Painel Tempo Real em formato Kanban/pipeline,
+  ainda em andamento nas próximas fases) para acompanhar um pedido/matéria-
+  prima atravessando de verdade todas as etapas do negócio, com espaço para
+  cadastrar etapas novas sem precisar de código. **Escopo desta fase, de
+  propósito:** a maior parte do pipeline já tem uma coluna de status de
+  verdade em alguma tabela existente (`pedidos_venda.status`,
+  `ordens_producao.status` + `ordem_producao_etapas`, `pedidos_compra.
+  status`, `sugestoes_compra_mrp.status`, `lotes.status`) — duplicar isso
+  aqui criaria duas fontes de verdade para a mesma coisa, o problema que
+  este projeto sempre evitou (o Painel Tempo Real desde a Fase 44 sempre lê
+  ao vivo, nunca guarda snapshot). Por isso `tipos_etapa_fluxo`/
+  `fluxo_instancias` cobrem DELIBERADAMENTE só o que hoje não tem nenhuma
+  coluna de status própria — a primeira etapa semeada é "Separação" de um
+  pedido de venda (o espaço entre "confirmado" e "expedido" que hoje não
+  tem nenhum checkpoint). Uma etapa cadastrada pelo Administrador ou PCP
+  (`fluxo.configurar`) é materializada de forma PREGUIÇOSA: a primeira vez
+  que a tela de uma entidade é aberta depois do cadastro, a etapa nova
+  aparece "pendente" automaticamente, mesmo em pedidos que já existiam
+  antes — sem nenhuma migração de backfill. Etapas com `origem='sistema'`
+  (nenhuma ainda nesta fase; a primeira será "Coleta pela Transportadora"
+  mais adiante) são pensadas para serem marcadas automaticamente por uma
+  rota real via `app/fluxo_service.py::marcar_concluida(...)` no momento
+  exato de uma transição de negócio — nunca inferidas batendo o relógio.
+  Etapas `origem='manual'` (o caso de "Separação" hoje) são um checklist
+  livre: qualquer usuário com `fluxo.apontar` inicia/conclui pela tela, sem
+  nenhum outro efeito colateral no sistema. Testado no detalhe do Pedido de
+  Venda (novo card "Etapas de Fluxo"); o Painel Tempo Real em si ainda não
+  foi redesenhado — isso vem numa fase posterior deste mesmo projeto.
