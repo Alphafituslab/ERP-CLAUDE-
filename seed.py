@@ -474,6 +474,15 @@ PERFIS_PADRAO = [
         # de fluxo do painel (mesmo raciocínio de "producao.configurar_etapas"
         # acima, agora estendido para fora da Ordem de Produção).
         "fluxo.configurar", "fluxo.apontar",
+        # Fase 82 — PCP passa a poder rodar o MRP e gerar sugestões de
+        # compra a partir da necessidade calculada (mesma tela/rota que
+        # Compras já usa desde a Fase 54) — "solicita" a compra de matéria-
+        # prima. Decidir o que fazer com a sugestão (atender/descartar) e
+        # convertê-la num Pedido de Compra real continua EXCLUSIVO de
+        # Compras ("producao.decidir_sugestao_compra"/"compras.
+        # criar_pedido", perfil "Compras" abaixo) — "aprova e confirma a
+        # compra" continua sendo uma responsabilidade só deles.
+        "producao.gerar_sugestao_compra",
     ]),
     ("Produção", "Execução da produção (MES)", 1, [
         "itens.visualizar", "lotes.visualizar", "formulas.visualizar",

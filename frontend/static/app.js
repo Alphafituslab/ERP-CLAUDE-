@@ -3768,8 +3768,15 @@
 
     const abaBotao = (valor, rotulo) => `<button class="botao ${status === valor ? "primario" : "secundario"} pequeno" data-acao="filtrar-sugestoes-compra" data-status="${valor}">${rotulo}</button>`;
 
+    // Fase 82 — mesma tela e mesma API para os dois perfis; só o TÍTULO
+    // muda de acordo com quem está olhando: quem tem `compras.criar_pedido`
+    // converte a sugestão num Pedido de Compra de verdade ("Sugestões"),
+    // quem não tem (ex.: PCP, que só pode gerar/ver) está, na prática,
+    // "solicitando" que Compras providencie ("Solicitações").
+    const tituloTela = podeGerarPedido ? "Sugestões de Compra (MRP)" : "Solicitações de Compra (MRP)";
+
     renderShell(
-      `<h2>Sugestões de Compra (MRP)</h2>
+      `<h2>${tituloTela}</h2>
        <div class="cartao">
          <p class="texto-suave">Cada sugestão é gerada a partir da necessidade calculada pelo MRP na tela anterior —
          ela NÃO cria uma conta a pagar de verdade (não há preço nem vencimento reais ainda). Quando Compras de fato

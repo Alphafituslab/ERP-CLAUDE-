@@ -4612,3 +4612,17 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   nenhum outro efeito colateral no sistema. Testado no detalhe do Pedido de
   Venda (novo card "Etapas de Fluxo"); o Painel Tempo Real em si ainda não
   foi redesenhado — isso vem numa fase posterior deste mesmo projeto.
+- (Entregue na Fase 82) PCP pode gerar Sugestão de Compra — antes desta
+  fase, só o perfil Compras conseguia rodar o MRP e transformar a
+  necessidade calculada numa sugestão de compra (`producao.
+  gerar_sugestao_compra`), mesmo o PCP sendo quem primeiro enxerga que uma
+  Ordem de Produção não vai ter matéria-prima suficiente. Mudança mínima
+  de propósito: PCP ganhou só essa permissão em `seed.py` — decidir o que
+  fazer com a sugestão (atender/descartar, `producao.
+  decidir_sugestao_compra`) e convertê-la num Pedido de Compra real
+  (`compras.criar_pedido`) continuam EXCLUSIVOS do perfil Compras, sem
+  nenhuma mudança de código além do rótulo da tela (que passa a se chamar
+  "Solicitações de Compra (MRP)" para quem não tem `compras.
+  criar_pedido`, e "Sugestões de Compra (MRP)" para quem tem) — na
+  prática, isso já implementa "PCP solicita, Compras aprova e confirma"
+  reaproveitando 100% do mecanismo de MRP que já existia desde a Fase 54.
