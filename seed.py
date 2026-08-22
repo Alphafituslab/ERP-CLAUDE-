@@ -464,10 +464,14 @@ PERMISSOES_PADRAO = [
     ("comercial", "gerenciar_coleta", "Cadastrar transportadoras e agendar/confirmar/cancelar a coleta de um pedido expedido", 0),
 ]
 
-# Fase 92 — perfis para os quais o 2FA (TOTP) não é mais opcional. É uma
-# lista separada (em vez de um 5º elemento em cada tupla de PERFIS_PADRAO)
-# de propósito: evita reescrever as ~14 tuplas já existentes só para
-# acrescentar um campo que só se aplica a duas delas.
+# Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
+# é RECOMENDADO (banner em Minha Conta). A Fase 92 original bloqueava a
+# API inteira até a pessoa configurar; a Fase 94 tornou isso não-bloqueante
+# a pedido do usuário ("deixar eu escolher quando iniciar... habilitar e
+# desabilitar"). Continua uma lista separada (em vez de um 5º elemento em
+# cada tupla de PERFIS_PADRAO) de propósito: evita reescrever as ~14
+# tuplas já existentes só para acrescentar um campo que só se aplica a
+# duas delas.
 PERFIS_QUE_EXIGEM_2FA = ("Administrador", "Financeiro")
 
 PERFIS_PADRAO = [

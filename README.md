@@ -4871,3 +4871,33 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   rebuild propaga o ícone novo para o instalador, o .exe, o desinstalador
   e os atalhos (que apontam para o ícone do .exe, não embutem um próprio)
   de uma vez só.
+- (Entregue na Fase 94) 2FA deixa de bloquear — usuário pediu para "escolher
+  quando iniciar" e "ter a opção de habilitar e desabilitar". A Fase 92
+  bloqueava a API inteira (403 `2fa_obrigatorio_pendente`) até a pessoa
+  configurar o 2FA; essa trava foi REMOVIDA de `app/context.py::
+  get_current_user`. `perfis.exige_2fa` continua existindo, mas agora é só
+  uma RECOMENDAÇÃO: `GET /auth/me` devolve `recomenda_2fa` (calculado a
+  partir dos perfis do usuário) e "Minha Conta" mostra um aviso não-
+  bloqueante quando aplicável — a pessoa decide quando ativar. Nova rota
+  `POST /auth/2fa/desativar` (exige a senha atual, mesma régua de
+  reautenticação de `trocar_senha`) fecha a lacuna que faltava: antes não
+  existia NENHUM jeito de desligar o 2FA depois de ativado pela própria
+  tela; agora "Minha Conta" mostra "Desativar 2FA" sempre que estiver
+  ativo. Selo da tela de Perfis renomeado de "exige 2FA" para "recomenda
+  2FA", para não sugerir um bloqueio que não existe mais.
+- (Entregue na Fase 95) 2FA: confiar neste dispositivo por 24h — pedido do
+  usuário, já com 2FA ativado na conta real: "pedir a senha do
+  autenticador 1x ao dia". Nova tabela `dispositivos_confiaveis_2fa`
+  (`schema_fase95.sql`, mesmo padrão de token opaco hasheado de `sessoes`/
+  refresh token — o valor em texto puro nunca é guardado). A cada
+  confirmação bem-sucedida de código TOTP (`POST /auth/2fa/verificar`), o
+  backend emite um `dispositivo_confiavel_token` novo, válido por 24h;
+  `POST /auth/login` aceita esse token de volta e, se ainda válido PARA
+  AQUELE usuário, pula a etapa de 2FA — a SENHA continua sendo exigida
+  sempre, só o código do app autenticador não se repete dentro da mesma
+  janela. Guardado no frontend em `localStorage` (`alphafitus_
+  dispositivo_2fa`), sobrevivendo a logout/login normais (é isso que faz
+  o pedido funcionar de verdade — só expira depois de 24h ou é revogado).
+  `POST /auth/2fa/desativar` revoga todos os dispositivos confiáveis do
+  usuário, para uma reativação futura não herdar confiança de uma
+  configuração anterior.

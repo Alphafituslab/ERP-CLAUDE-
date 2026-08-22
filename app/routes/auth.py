@@ -40,6 +40,34 @@ def _criar_sessao(conn, usuario_id, ip, dispositivo):
     return refresh_token, cur.lastrowid
 
 
+DISPOSITIVO_CONFIAVEL_2FA_TTL_HORAS = 24
+
+
+def _criar_dispositivo_confiavel_2fa(conn, usuario_id, ip, dispositivo):
+    """Fase 95 — emitido só depois de uma verificação TOTP bem-sucedida
+    (nunca no login comum), reaproveitando o mesmo padrão de token opaco
+    hasheado dos refresh tokens (`security.gerar_refresh_token`/
+    `hash_refresh_token`): o valor em texto puro só existe nesta resposta,
+    o banco guarda apenas o hash."""
+    token = security.gerar_refresh_token()
+    expira_em = _iso(_now() + datetime.timedelta(hours=DISPOSITIVO_CONFIAVEL_2FA_TTL_HORAS))
+    conn.execute(
+        "INSERT INTO dispositivos_confiaveis_2fa (usuario_id, token_hash, ip, dispositivo, expira_em) VALUES (?, ?, ?, ?, ?)",
+        (usuario_id, security.hash_refresh_token(token), ip, dispositivo, expira_em),
+    )
+    return token
+
+
+def _dispositivo_confiavel_2fa_valido(conn, usuario_id, token):
+    if not token:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM dispositivos_confiaveis_2fa WHERE usuario_id = ? AND token_hash = ? AND revogado = 0 AND expira_em > ?",
+        (usuario_id, security.hash_refresh_token(token), _iso(_now())),
+    ).fetchone()
+    return row is not None
+
+
 def _emitir_tokens(conn, usuario_id, ip, dispositivo):
     refresh_token, sessao_id = _criar_sessao(conn, usuario_id, ip, dispositivo)
     jti = secrets.token_hex(16)
@@ -116,7 +144,18 @@ def login():
         (usuario["id"],),
     )
 
-    if usuario["dois_fatores_ativo"]:
+    # Fase 95 — "pedir o código do autenticador só 1x ao dia": se este
+    # navegador já guarda um token de dispositivo confiável ainda válido
+    # (emitido na ÚLTIMA vez que o código TOTP foi confirmado com
+    # sucesso, ver `verificar_2fa` abaixo), pula a etapa de 2FA — a SENHA
+    # continua sendo exigida sempre, só o código do app autenticador não
+    # se repete dentro da mesma janela de 24h.
+    dispositivo_confiavel_token = dados.get("dispositivo_confiavel_token")
+    pula_2fa = usuario["dois_fatores_ativo"] and _dispositivo_confiavel_2fa_valido(
+        conn, usuario["id"], dispositivo_confiavel_token
+    )
+
+    if usuario["dois_fatores_ativo"] and not pula_2fa:
         login_ticket = security.emitir_login_ticket(usuario["id"])
         audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                          acao="login_senha_ok_aguardando_2fa", ip=ip, dispositivo=dispositivo)
@@ -127,23 +166,9 @@ def login():
         (_iso(_now()), ip, usuario["id"]),
     )
     tokens = _emitir_tokens(conn, usuario["id"], ip, dispositivo)
-    # Fase 92 — o token já sai válido (senão a pessoa não conseguiria
-    # chamar /2fa/setup e /2fa/confirmar para resolver a pendência); esta
-    # flag só avisa o FRONTEND para levar direto à tela de configurar 2FA
-    # em vez de deixar a pendência ser descoberta só no primeiro 403 de
-    # alguma outra tela (`app/context.py::get_current_user` é quem
-    # realmente bloqueia o resto da API até a confirmação).
-    tokens["exige_configurar_2fa"] = bool(
-        conn.execute(
-            """
-            SELECT 1 FROM usuario_perfil up JOIN perfis pf ON pf.id = up.perfil_id
-            WHERE up.usuario_id = ? AND pf.exige_2fa = 1 LIMIT 1
-            """,
-            (usuario["id"],),
-        ).fetchone()
-    )
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
-                     acao="login_sucesso", ip=ip, dispositivo=dispositivo)
+                     acao="login_sucesso_2fa_dispositivo_confiavel" if pula_2fa else "login_sucesso",
+                     ip=ip, dispositivo=dispositivo)
     return jsonify(tokens)
 
 
@@ -186,6 +211,10 @@ def verificar_2fa():
         (_iso(_now()), ip, usuario_id),
     )
     tokens = _emitir_tokens(conn, usuario_id, ip, dispositivo)
+    # Fase 95 — a partir desta confirmação bem-sucedida, este navegador
+    # fica "confiável" por 24h (não precisa repetir o código do
+    # autenticador em novos logins nessa janela — só a senha).
+    tokens["dispositivo_confiavel_token"] = _criar_dispositivo_confiavel_2fa(conn, usuario_id, ip, dispositivo)
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
                      acao="login_sucesso_2fa", ip=ip, dispositivo=dispositivo)
     return jsonify(tokens)
@@ -227,6 +256,40 @@ def confirmar_2fa():
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                      acao="2fa_ativado", ip=client_ip(), dispositivo=client_device())
     return jsonify({"dois_fatores_ativo": True})
+
+
+@bp.post("/2fa/desativar")
+@requires_auth
+def desativar_2fa():
+    """Fase 94 — pedido do usuário: "ter a opção de habilitar e
+    desabilitar" o 2FA a qualquer momento, mesmo num perfil que
+    RECOMENDA ativar (a exigência deixou de ser bloqueante — ver a nota
+    completa no topo deste arquivo/README, seção Fase 94). Exige a senha
+    atual — mesma régua de "reautenticação para mexer num controle de
+    segurança da própria conta" já usada em `trocar_senha` acima; sem
+    isso, uma sessão esquecida aberta em outro computador poderia
+    desligar a proteção sem ninguém perceber."""
+    usuario = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    senha_atual = (dados.get("senha_atual") or "").strip()
+    conn = get_db()
+
+    if not usuario["dois_fatores_ativo"]:
+        raise ApiError("Este usuário não tem 2FA ativo.", status=400)
+    if not security.verify_password(senha_atual, usuario["senha_hash"]):
+        raise ApiError("Senha atual incorreta.", status=400)
+
+    conn.execute(
+        "UPDATE usuarios SET dois_fatores_ativo = 0, dois_fatores_secret = NULL WHERE id = ?",
+        (usuario["id"],),
+    )
+    # Fase 95 — revoga qualquer dispositivo confiável já emitido: se o 2FA
+    # for ativado de novo depois, ninguém deve conseguir pular a etapa
+    # usando um token de confiança de uma configuração anterior.
+    conn.execute("UPDATE dispositivos_confiaveis_2fa SET revogado = 1 WHERE usuario_id = ?", (usuario["id"],))
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
+                     acao="2fa_desativado", ip=client_ip(), dispositivo=client_device())
+    return jsonify({"dois_fatores_ativo": False})
 
 
 @bp.post("/refresh")
@@ -357,7 +420,7 @@ def me():
     conn = get_db()
     perfis = conn.execute(
         """
-        SELECT pf.id, pf.nome FROM usuario_perfil up
+        SELECT pf.id, pf.nome, pf.exige_2fa FROM usuario_perfil up
         JOIN perfis pf ON pf.id = up.perfil_id
         WHERE up.usuario_id = ?
         """,
@@ -369,6 +432,12 @@ def me():
         "email": usuario["email"],
         "dois_fatores_ativo": bool(usuario["dois_fatores_ativo"]),
         "notificar_por_email": bool(usuario["notificar_por_email"]),
-        "perfis": [dict(p) for p in perfis],
+        # Fase 94 — "exige_2fa" no perfil virou só uma RECOMENDAÇÃO exibida
+        # em Minha Conta (a Fase 92 bloqueava a API inteira até configurar;
+        # o usuário pediu para escolher quando e poder desativar depois):
+        # a pessoa decide quando ativar, e pode desativar quando quiser —
+        # nada na API bloqueia mais nada por causa disso.
+        "recomenda_2fa": any(p["exige_2fa"] for p in perfis),
+        "perfis": [{"id": p["id"], "nome": p["nome"]} for p in perfis],
         "permissoes": permissoes_do_usuario(conn, usuario["id"]),
     })

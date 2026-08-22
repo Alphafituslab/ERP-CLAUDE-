@@ -124,13 +124,6 @@
       if (resp.status === 401 && !semAuth) {
         limparSessao();
         navegarPara("#/login");
-      } else if (dados.erro === "2fa_obrigatorio_pendente" && location.hash !== "#/configurar-2fa-obrigatorio") {
-        // Fase 92 — pega tanto quem acabou de logar (a próxima chamada
-        // qualquer, ex.: /auth/me, já vem com esse 403) quanto uma sessão
-        // já aberta ANTES do perfil passar a exigir 2FA (o backend é a
-        // única fonte de verdade aqui — não dá pra confiar em nada
-        // calculado no login, que pode ter acontecido horas atrás).
-        navegarPara("#/configurar-2fa-obrigatorio");
       }
       const erro = new Error(dados.mensagem || `Erro ${resp.status} na requisição.`);
       erro.status = resp.status;
@@ -325,7 +318,6 @@
           case "auditoria": return renderAuditoria();
           case "notificacoes": return renderNotificacoes();
           case "conta": return renderMinhaConta();
-          case "configurar-2fa-obrigatorio": return renderConfigurar2faObrigatorio();
           case "itens": return renderItens();
           case "fornecedores": return renderFornecedores();
           case "lotes": return param ? renderLoteDetalhe(Number(param)) : renderLotes();
@@ -952,7 +944,7 @@
     const linhas = perfis
       .map(
         (p) => `<tr>
-          <td>${escapeHtml(p.nome)} ${!p.editavel ? '<span class="selo bloqueado">sistema</span>' : ""}${p.exige_2fa ? '<span class="selo amarelo">exige 2FA</span>' : ""}</td>
+          <td>${escapeHtml(p.nome)} ${!p.editavel ? '<span class="selo bloqueado">sistema</span>' : ""}${p.exige_2fa ? '<span class="selo amarelo">recomenda 2FA</span>' : ""}</td>
           <td class="texto-suave">${escapeHtml(p.descricao || "—")}</td>
           <td>${p.permissoes.length}</td>
           <td>
@@ -1391,8 +1383,12 @@
 
        <div class="cartao">
          <h3 style="margin-top:0;">Autenticação em duas etapas</h3>
+         ${me.recomenda_2fa && !me.dois_fatores_ativo
+           ? '<p class="texto-suave">Seu perfil recomenda ativar o 2FA para uma camada extra de proteção — ative quando for conveniente para você.</p>'
+           : ""}
          ${me.dois_fatores_ativo
-           ? '<p class="mensagem-ok">2FA está ativo na sua conta.</p>'
+           ? `<p class="mensagem-ok">2FA está ativo na sua conta.</p>
+              <button class="botao secundario" data-acao="abrir-desativar-2fa">Desativar 2FA</button>`
            : `<p class="texto-suave">2FA está desativado. Ative para uma camada extra de segurança.</p>
               <button class="botao" data-acao="iniciar-2fa">Ativar 2FA</button>`}
        </div>
@@ -1430,32 +1426,17 @@
       </form>`);
   }
 
-  // Fase 92 — 2FA obrigatório por perfil. Tela cheia (não é modal, de
-  // propósito: um modal tem um "x"/clique-fora para fechar, e a pessoa
-  // precisa ser realmente impedida de seguir em frente até confirmar —
-  // o backend já bloqueia toda a API mesmo assim, isto aqui é só a
-  // experiência de chegar direto na solução em vez de descobrir a
-  // pendência por tentativa e erro em cada tela).
-  async function renderConfigurar2faObrigatorio() {
-    app.innerHTML = '<div class="carregando">Preparando configuração de 2FA…</div>';
-    const setup = await chamarApi("/auth/2fa/setup", { method: "POST" });
-    renderShell(
-      `<h2>Configuração obrigatória de segurança</h2>
-       <div class="cartao">
-         <p class="mensagem-erro" style="margin-top:0;">Seu perfil exige autenticação em duas etapas (2FA) —
-         o restante do sistema fica bloqueado até você concluir esta configuração.</p>
-         <p class="texto-suave">Adicione esta chave no seu aplicativo autenticador (Google Authenticator, Microsoft
-         Authenticator etc.) e depois digite o código de 6 dígitos gerado para confirmar.</p>
-         <div class="campo"><label>Chave manual</label><div class="mono cartao">${escapeHtml(setup.secret)}</div></div>
-         <div class="campo"><label>URI (para leitores compatíveis)</label><div class="mono cartao">${escapeHtml(setup.otpauth_uri)}</div></div>
-         <form data-form="confirmar-2fa-obrigatorio">
-           <div class="campo"><label>Código de 6 dígitos</label><input name="codigo" inputmode="numeric" maxlength="6" required autofocus></div>
-           <button class="botao" type="submit">Confirmar e ativar</button>
-         </form>
-         <p class="texto-suave" style="margin-top:16px;">Prefere fazer isso depois de outro computador? <a href="#" data-acao="logout">Sair agora</a>.</p>
-       </div>`,
-      "configurar-2fa-obrigatorio"
-    );
+  function modalDesativar2fa() {
+    abrirModal(`
+      <h3>Desativar autenticação em duas etapas</h3>
+      <p class="texto-suave">Confirme sua senha atual para desativar o 2FA desta conta.</p>
+      <form data-form="desativar-2fa">
+        <div class="campo"><label>Senha atual</label><input name="senha_atual" type="password" required autofocus></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Desativar 2FA</button>
+        </div>
+      </form>`);
   }
 
   // =======================================================================
@@ -10329,6 +10310,9 @@
         modalConfirmar2fa(resp.secret, resp.otpauth_uri);
         return;
       }
+      case "abrir-desativar-2fa":
+        modalDesativar2fa();
+        return;
       case "encerrar-sessao":
         await chamarApi(`/auth/sessoes/${alvo.dataset.id}/encerrar`, { method: "POST" });
         definirFlash("ok", "Sessão encerrada.");
@@ -11242,7 +11226,15 @@
         const email = dados.get("email");
         const senha = dados.get("senha");
         const lembrar = !!dados.get("lembrar");
-        const resp = await chamarApi("/auth/login", { method: "POST", semAuth: true, body: { email, senha } });
+        // Fase 95 — se este navegador já confirmou o código do
+        // autenticador nas últimas 24h, manda o token de confiança junto;
+        // o backend decide se ainda vale (usuário errado, expirado ou
+        // revogado simplesmente ignora o token e pede 2FA normalmente).
+        const dispositivoConfiavelToken = localStorage.getItem("alphafitus_dispositivo_2fa") || undefined;
+        const resp = await chamarApi("/auth/login", {
+          method: "POST", semAuth: true,
+          body: { email, senha, dispositivo_confiavel_token: dispositivoConfiavelToken },
+        });
         if (resp.requires_2fa) {
           ticket2fa = resp.login_ticket;
           credenciaisPendentes2fa = { email, senha, lembrar };
@@ -11264,6 +11256,11 @@
         state.accessToken = resp.access_token;
         state.refreshToken = resp.refresh_token;
         localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
+        // Fase 95 — guarda o token de "este dispositivo é confiável por
+        // 24h", pra não pedir o código do autenticador de novo até lá.
+        if (resp.dispositivo_confiavel_token) {
+          localStorage.setItem("alphafitus_dispositivo_2fa", resp.dispositivo_confiavel_token);
+        }
         state.usuarioAtual = await chamarApi("/auth/me");
         if (credenciaisPendentes2fa) {
           aplicarLembrarEmail(credenciaisPendentes2fa.email, credenciaisPendentes2fa.lembrar);
@@ -11498,10 +11495,12 @@
         definirFlash("ok", "2FA ativado com sucesso.");
         return renderMinhaConta();
       }
-      case "confirmar-2fa-obrigatorio": {
-        await chamarApi("/auth/2fa/confirmar", { method: "POST", body: { codigo: dados.get("codigo") } });
-        definirFlash("ok", "2FA ativado — obrigado por proteger sua conta.");
-        return navegarPara("#/dashboard");
+      case "desativar-2fa": {
+        await chamarApi("/auth/2fa/desativar", { method: "POST", body: { senha_atual: dados.get("senha_atual") } });
+        localStorage.removeItem("alphafitus_dispositivo_2fa");
+        fecharModais();
+        definirFlash("ok", "2FA desativado.");
+        return renderMinhaConta();
       }
 
       // ---- Fase 2: Itens ----

@@ -35,18 +35,6 @@ def get_db() -> sqlite3.Connection:
     return g.db_conn
 
 
-# Fase 92 — 2FA obrigatório por perfil. Lista branca mínima de rotas que
-# continuam acessíveis mesmo com o 2FA obrigatório ainda pendente — sem
-# isso, a pessoa ficaria trancada para sempre (não teria como chamar
-# /2fa/setup e /2fa/confirmar, as próprias rotas que resolvem a pendência).
-_ROTAS_LIVRES_COM_2FA_PENDENTE = {
-    "/api/v1/auth/me",
-    "/api/v1/auth/logout",
-    "/api/v1/auth/2fa/setup",
-    "/api/v1/auth/2fa/confirmar",
-}
-
-
 def close_db(exception=None):
     # IMPORTANTE: `exception` só vem preenchido aqui para uma exceção
     # verdadeiramente NÃO tratada (que não bateu em nenhum @app.errorhandler
@@ -129,28 +117,6 @@ def get_current_user() -> dict:
         usuario["ultimo_acesso_em"] = agora
     except sqlite3.Error:
         pass
-
-    # Fase 92 — 2FA obrigatório por perfil (Administrador/Financeiro por
-    # padrão, ver seed.py::PERFIS_QUE_EXIGEM_2FA). O LOGIN em si (POST
-    # /auth/login, /auth/2fa/verificar) não passa por aqui — ele continua
-    # liberando o token normalmente mesmo com a pendência, senão a pessoa
-    # nunca conseguiria chegar às rotas da lista branca abaixo para
-    # resolver a pendência. É AQUI, no restante da API, que a pendência
-    # trava de verdade: só os 4 caminhos da lista branca continuam
-    # respondendo normalmente até o usuário confirmar o 2FA.
-    if not usuario["dois_fatores_ativo"] and request.path not in _ROTAS_LIVRES_COM_2FA_PENDENTE:
-        exige_2fa = conn.execute(
-            """
-            SELECT 1 FROM usuario_perfil up JOIN perfis pf ON pf.id = up.perfil_id
-            WHERE up.usuario_id = ? AND pf.exige_2fa = 1 LIMIT 1
-            """,
-            (usuario_id,),
-        ).fetchone()
-        if exige_2fa:
-            raise ApiError(
-                "Seu perfil exige autenticação de dois fatores (2FA). Configure em Minha Conta antes de continuar.",
-                status=403, codigo="2fa_obrigatorio_pendente",
-            )
 
     g.usuario_atual = usuario
     return usuario

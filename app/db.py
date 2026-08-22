@@ -129,6 +129,7 @@ SCHEMA_FILES = [
     "schema_fase85.sql",  # Fase 85 — Liberação do lote condicionada à NF-e de Entrada (configurável)
     "schema_fase86.sql",  # Fase 86 — Transportadora / Coleta (MVP)
     "schema_fase92.sql",  # Fase 92 — 2FA obrigatório por perfil (Administrador e Financeiro por padrão)
+    "schema_fase95.sql",  # Fase 95 — 2FA: confiar neste dispositivo por 24h (não repetir o código em todo login)
 ]
 
 
