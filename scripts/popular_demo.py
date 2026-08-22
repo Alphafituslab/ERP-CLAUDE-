@@ -319,6 +319,26 @@ for produto in produtos_acabados:
     for reserva in reservas:
         admin.post(f"/producao/ordens/{ordem['id']}/consumir", {"lote_id": reserva["lote_id"], "quantidade": reserva["quantidade"]})
 
+    # Fase 84 — só no primeiro produto, para não poluir o log: uma etapa de
+    # Encapsulamento numa máquina específica + um apontamento diário de
+    # produção, demonstrando o painel "quem está rodando o quê, em qual
+    # máquina, hoje" sem precisar de uma ordem separada para isso.
+    if produto is produtos_acabados[0]:
+        centros_trabalho_demo = admin.get("/aps/centros-trabalho")
+        encapsuladora_demo = next((c for c in centros_trabalho_demo if c["nome"] == "Encapsuladora 1"), None)
+        if encapsuladora_demo:
+            ordem_com_etapa = admin.post(f"/producao/ordens/{ordem['id']}/etapas", {
+                "nome": "Encapsulamento (demo)", "centro_trabalho_id": encapsuladora_demo["id"],
+            })
+            etapa_demo_id = ordem_com_etapa["etapas"][-1]["id"]
+            admin.post(f"/producao/ordens/{ordem['id']}/etapas/{etapa_demo_id}/iniciar")
+            admin.post(f"/producao/ordens/{ordem['id']}/apontamentos-diarios", {
+                "quantidade": round(rendimento * 0.3, 2), "unidade": unidade,
+                "observacao": "Produção do turno da manhã (exemplo de demonstração).",
+            })
+            admin.post(f"/producao/ordens/{ordem['id']}/etapas/{etapa_demo_id}/concluir", {"quantidade_perda": 0})
+            log(f"  etapa 'Encapsulamento' na {encapsuladora_demo['nome']} + apontamento diário registrados (Fase 84)")
+
     ordem_concluida = admin.post(f"/producao/ordens/{ordem['id']}/concluir", {"quantidade_produzida": rendimento})
     lote_produzido_id = ordem_concluida["lote_produzido_id"]
     aprovar_lote_qms(lote_produzido_id, f"produto acabado {item_pa['codigo']}")

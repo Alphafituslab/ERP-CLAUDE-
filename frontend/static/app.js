@@ -2696,7 +2696,24 @@
   // para oferecer um `<select>` em vez de só um campo de nome livre — sem
   // perder a opção de nome livre de sempre (Fase 50), que continua abaixo
   // do seletor como alternativa para quem não usa o catálogo.
-  function modalNovaEtapaOrdem(ordemId, tipos) {
+  // Fase 84 — seletor opcional de centro de trabalho (ex.: qual das 4
+  // encapsuladoras/4 linhas de envase) para uma etapa específica —
+  // diferente do agendamento da ordem inteira (Fase 25), esse é POR
+  // etapa, sem exigir nenhum centro em especial.
+  function opcoesCentroTrabalhoEtapa(centrosTrabalho, selecionadoId) {
+    const opcoes = (centrosTrabalho || [])
+      .filter((c) => c.status === "ativo")
+      .map((c) => `<option value="${c.id}" ${selecionadoId === c.id ? "selected" : ""}>${escapeHtml(c.nome)}</option>`)
+      .join("");
+    return `<div class="campo"><label>Centro de trabalho / máquina (opcional)</label>
+      <select name="centro_trabalho_id">
+        <option value="">— nenhum —</option>
+        ${opcoes}
+      </select>
+    </div>`;
+  }
+
+  function modalNovaEtapaOrdem(ordemId, tipos, centrosTrabalho) {
     const opcoesTipo = (tipos || [])
       .filter((t) => t.status === "ativo")
       .map((t) => `<option value="${t.id}">${escapeHtml(t.nome)}${t.unidade_valor ? ` (${escapeHtml(t.unidade_valor)})` : ""}</option>`)
@@ -2715,6 +2732,7 @@
         <div class="campo"><label>Nome da etapa</label>
           <input name="nome" placeholder="Preenchido automaticamente se você escolher um tipo acima">
         </div>
+        ${opcoesCentroTrabalhoEtapa(centrosTrabalho)}
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Cadastrar etapa</button>
@@ -2722,13 +2740,14 @@
       </form>`);
   }
 
-  function modalEditarEtapaOrdem(ordemId, etapa) {
+  function modalEditarEtapaOrdem(ordemId, etapa, centrosTrabalho) {
     abrirModal(`
       <h3>Editar etapa</h3>
       <form data-form="editar-etapa-ordem" data-id="${ordemId}" data-etapa-id="${etapa.id}">
         <div class="campo"><label>Nome da etapa</label>
           <input name="nome" required value="${escapeHtml(etapa.nome)}">
         </div>
+        ${opcoesCentroTrabalhoEtapa(centrosTrabalho, etapa.centro_trabalho_id)}
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Salvar</button>
@@ -2758,6 +2777,24 @@
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Concluir etapa</button>
+        </div>
+      </form>`);
+  }
+
+  function modalNovoApontamentoDiario(ordemId, unidadePadrao) {
+    const hoje = new Date().toISOString().slice(0, 10);
+    abrirModal(`
+      <h3>Registrar produção do dia</h3>
+      <form data-form="criar-apontamento-diario" data-id="${ordemId}">
+        <div class="campo"><label>Data</label><input name="data" type="date" value="${hoje}" required></div>
+        <div class="campo"><label>Quantidade produzida hoje</label>
+          <input name="quantidade" type="number" step="any" min="0" required>
+        </div>
+        <div class="campo"><label>Unidade</label><input name="unidade" value="${escapeHtml(unidadePadrao || "")}" required></div>
+        <div class="campo"><label>Observação (opcional)</label><textarea name="observacao" placeholder="ex.: turno da manhã"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Registrar</button>
         </div>
       </form>`);
   }
@@ -2797,7 +2834,12 @@
     const agendamento = await chamarApi(`/aps/ordens/${ordemId}/agendamento`).catch(() => null);
     const podeAgendar = temPermissao("producao", "agendar");
     const podeVerCentros = temPermissao("centros_trabalho", "visualizar");
-    const centrosTrabalho = podeAgendar && podeVerCentros ? await chamarApi("/aps/centros-trabalho") : [];
+    // Fase 84 — a lista de centros de trabalho agora também alimenta o
+    // seletor de "qual encapsuladora/linha de envase" na etapa (quem
+    // aponta etapa, ex.: perfil "Produção", tem `centros_trabalho.
+    // visualizar` mas nem sempre `producao.agendar`) — por isso não fica
+    // mais restrita a `podeAgendar`, só a `podeVerCentros`.
+    const centrosTrabalho = podeVerCentros ? await chamarApi("/aps/centros-trabalho") : [];
 
     const podeLiberar = temPermissao("producao", "liberar");
     const podeApontar = temPermissao("producao", "apontar");
@@ -2821,12 +2863,13 @@
              a perda agregada da ordem passa a ser somada automaticamente a partir das etapas concluídas — e o
              Custo com Perdas mostra a fatia do custo atribuível a cada uma.</p>
              <table>
-               <thead><tr><th>#</th><th>Etapa</th><th>Situação</th><th>Valor apontado</th><th>Perda</th><th>Motivo</th><th>Ações</th></tr></thead>
+               <thead><tr><th>#</th><th>Etapa</th><th>Centro de trabalho</th><th>Situação</th><th>Valor apontado</th><th>Perda</th><th>Motivo</th><th>Ações</th></tr></thead>
                <tbody>${
                  etapas.length
                    ? etapas.map((e) => `<tr>
                        <td>${e.sequencia}</td>
                        <td>${escapeHtml(e.nome)}</td>
+                       <td class="texto-suave">${e.centro_trabalho_nome ? escapeHtml(e.centro_trabalho_nome) : "—"}</td>
                        <td>${seloEtapaOrdem(e.situacao)}</td>
                        <td>${e.valor_registrado !== null && e.valor_registrado !== undefined ? `${e.valor_registrado} ${escapeHtml(e.tipo_unidade_valor || "")}` : "—"}</td>
                        <td>${e.status === "concluida" ? `${e.quantidade_perda} ${escapeHtml(ordem.unidade)}` : "—"}</td>
@@ -2845,12 +2888,45 @@
                            : ""
                        }</td>
                      </tr>`).join("")
-                   : '<tr><td colspan="7" class="texto-suave">Nenhuma etapa cadastrada — a ordem continua no fluxo de perda agregada de sempre.</td></tr>'
+                   : '<tr><td colspan="8" class="texto-suave">Nenhuma etapa cadastrada — a ordem continua no fluxo de perda agregada de sempre.</td></tr>'
                }</tbody>
              </table>
              ${
                podeApontar && ordemAceitaEtapas
                  ? `<button class="botao secundario pequeno" style="margin-top:12px;" data-acao="abrir-nova-etapa-ordem" data-id="${ordem.id}">+ Nova etapa</button>`
+                 : ""
+             }
+           </div>`
+        : "";
+
+    // Fase 84 — Apontamento Diário de Produção: log corrido, só para
+    // visibilidade em tempo real (nunca lido pela reconciliação final de
+    // `quantidade_produzida` em "Concluir ordem"). Card só aparece
+    // enquanto a ordem ainda aceita apontamento, ou se já houver algum
+    // registrado antes.
+    const apontamentosDiarios = podeApontar ? await chamarApi(`/producao/ordens/${ordemId}/apontamentos-diarios`) : [];
+    const apontamentosDiariosHtml =
+      apontamentosDiarios.length || (podeApontar && ordemAceitaEtapas)
+        ? `<div class="cartao">
+             <h3 style="margin-top:0;">Produção do dia (apontamento diário)</h3>
+             <p class="texto-suave" style="margin-top:-8px;">Log corrido para acompanhamento em tempo real —
+             não substitui a quantidade produzida final registrada ao concluir a ordem.</p>
+             <table>
+               <thead><tr><th>Data</th><th>Quantidade</th><th>Observação</th><th>Registrado por</th></tr></thead>
+               <tbody>${
+                 apontamentosDiarios.length
+                   ? apontamentosDiarios.map((a) => `<tr>
+                       <td>${escapeHtml(a.data)}</td>
+                       <td>${a.quantidade} ${escapeHtml(a.unidade)}</td>
+                       <td class="texto-suave">${escapeHtml(a.observacao || "—")}</td>
+                       <td class="texto-suave">${escapeHtml(a.registrado_por_nome || "—")}</td>
+                     </tr>`).join("")
+                   : '<tr><td colspan="4" class="texto-suave">Nenhum apontamento diário registrado ainda.</td></tr>'
+               }</tbody>
+             </table>
+             ${
+               podeApontar && ordemAceitaEtapas
+                 ? `<button class="botao secundario pequeno" style="margin-top:12px;" data-acao="abrir-novo-apontamento-diario" data-id="${ordem.id}" data-unidade="${escapeHtml(ordem.unidade)}">+ Registrar produção do dia</button>`
                  : ""
              }
            </div>`
@@ -3067,6 +3143,7 @@
        </div>
        ${agendamentoHtml}
        ${etapasHtml}
+       ${apontamentosDiariosHtml}
        ${perdaHtml}
        ${custoHtml}`,
       "producao"
@@ -10030,15 +10107,22 @@
       // ---- Fase 50: Etapas do processo (perda por etapa) ----
       case "abrir-nova-etapa-ordem": {
         const tipos = await chamarApi("/producao/tipos-etapa?apenas_ativos=1");
-        modalNovaEtapaOrdem(Number(alvo.dataset.id), tipos);
+        const centrosParaEtapa = temPermissao("centros_trabalho", "visualizar") ? await chamarApi("/aps/centros-trabalho") : [];
+        modalNovaEtapaOrdem(Number(alvo.dataset.id), tipos, centrosParaEtapa);
         return;
       }
       case "abrir-editar-etapa-ordem": {
         const ordem = await chamarApi(`/producao/ordens/${alvo.dataset.id}`);
         const etapa = ordem.etapas.find((e) => e.id === Number(alvo.dataset.etapaId));
-        modalEditarEtapaOrdem(ordem.id, etapa);
+        const centrosParaEtapa = temPermissao("centros_trabalho", "visualizar") ? await chamarApi("/aps/centros-trabalho") : [];
+        modalEditarEtapaOrdem(ordem.id, etapa, centrosParaEtapa);
         return;
       }
+      // ---- Fase 84: Apontamento Diário de Produção ----
+      case "abrir-novo-apontamento-diario":
+        modalNovoApontamentoDiario(Number(alvo.dataset.id), alvo.dataset.unidade);
+        return;
+
       // ---- Fase 75: início/fim de cada etapa (apontamento em tempo real) ----
       case "iniciar-etapa-ordem": {
         const ordemId = Number(alvo.dataset.id);
@@ -11296,9 +11380,13 @@
       case "criar-etapa-ordem": {
         const ordemId = Number(form.dataset.id);
         const tipoEtapaId = dados.get("tipo_etapa_id");
+        const centroTrabalhoId = dados.get("centro_trabalho_id");
         await chamarApi(`/producao/ordens/${ordemId}/etapas`, {
           method: "POST",
-          body: { nome: dados.get("nome") || undefined, tipo_etapa_id: tipoEtapaId ? Number(tipoEtapaId) : undefined },
+          body: {
+            nome: dados.get("nome") || undefined, tipo_etapa_id: tipoEtapaId ? Number(tipoEtapaId) : undefined,
+            centro_trabalho_id: centroTrabalhoId ? Number(centroTrabalhoId) : undefined,
+          },
         });
         fecharModais();
         definirFlash("ok", "Etapa cadastrada.");
@@ -11306,11 +11394,25 @@
       }
       case "editar-etapa-ordem": {
         const ordemId = Number(form.dataset.id);
+        const centroTrabalhoId = dados.get("centro_trabalho_id");
         await chamarApi(`/producao/ordens/${ordemId}/etapas/${form.dataset.etapaId}`, {
-          method: "PUT", body: { nome: dados.get("nome") },
+          method: "PUT", body: { nome: dados.get("nome"), centro_trabalho_id: centroTrabalhoId ? Number(centroTrabalhoId) : null },
         });
         fecharModais();
         definirFlash("ok", "Etapa atualizada.");
+        return renderOrdemDetalhe(ordemId);
+      }
+      case "criar-apontamento-diario": {
+        const ordemId = Number(form.dataset.id);
+        await chamarApi(`/producao/ordens/${ordemId}/apontamentos-diarios`, {
+          method: "POST",
+          body: {
+            data: dados.get("data"), quantidade: Number(dados.get("quantidade")),
+            unidade: dados.get("unidade"), observacao: dados.get("observacao") || null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Produção do dia registrada.");
         return renderOrdemDetalhe(ordemId);
       }
       case "concluir-etapa-ordem": {

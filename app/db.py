@@ -125,6 +125,7 @@ SCHEMA_FILES = [
     "schema_fase80.sql",  # Fase 80 — Solicitações de Materiais/EPI (pedido → aprovação → entrega → confirmação)
     "schema_fase81.sql",  # Fase 81 — Catálogo de Fluxo Configurável (multi-entidade), base do Painel Kanban
     "schema_fase83.sql",  # Fase 83 — Aprovação Financeira obrigatória em todo Pedido de Venda
+    "schema_fase84.sql",  # Fase 84 — Granel intermediário como etapa + Centro de Trabalho por etapa + Apontamento Diário
 ]
 
 

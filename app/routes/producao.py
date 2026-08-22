@@ -120,9 +120,10 @@ def _etapas_da_ordem(conn, ordem_id):
     regra em JavaScript."""
     rows = conn.execute(
         """
-        SELECT oe.*, tep.unidade_valor AS tipo_unidade_valor
+        SELECT oe.*, tep.unidade_valor AS tipo_unidade_valor, ct.nome AS centro_trabalho_nome
         FROM ordem_producao_etapas oe
         LEFT JOIN tipos_etapa_producao tep ON tep.id = oe.tipo_etapa_id
+        LEFT JOIN centros_trabalho ct ON ct.id = oe.centro_trabalho_id
         WHERE oe.ordem_producao_id = ?
         ORDER BY oe.sequencia
         """,
@@ -535,6 +536,22 @@ def criar_etapa(ordem_id):
     if not nome:
         raise ApiError("Informe nome (ou tipo_etapa_id, para usar o nome do catálogo).", status=400)
 
+    # Fase 84 — qual recurso físico (ex.: "Encapsuladora 2", "Linha de
+    # Envase 3") rodou ESTA etapa específica. Opcional, e DIFERENTE do
+    # centro de trabalho da Fase 25 (`ordem_producao_agendamentos`), que é
+    # a ordem INTEIRA agendada num recurso só, pela duração toda — aqui
+    # cada etapa pode ter o seu próprio, sem nenhum UNIQUE.
+    centro_trabalho_id = dados.get("centro_trabalho_id") or None
+    if centro_trabalho_id is not None:
+        try:
+            centro_trabalho_id = int(centro_trabalho_id)
+        except (TypeError, ValueError):
+            raise ApiError("centro_trabalho_id deve ser um número inteiro.", status=400)
+        if not conn.execute(
+            "SELECT id FROM centros_trabalho WHERE id = ? AND status = 'ativo'", (centro_trabalho_id,)
+        ).fetchone():
+            raise ApiError("Centro de trabalho não encontrado ou inativo.", status=404)
+
     ordem = _ordem_ou_404(conn, ordem_id)
     if ordem["status"] not in STATUS_QUE_PERMITEM_CONSUMO:
         raise ApiError(
@@ -565,16 +582,16 @@ def criar_etapa(ordem_id):
 
     cur = conn.execute(
         """
-        INSERT INTO ordem_producao_etapas (ordem_producao_id, sequencia, nome, tipo_etapa_id, criado_por)
-        VALUES (?, ?, ?, ?, ?)
+        INSERT INTO ordem_producao_etapas (ordem_producao_id, sequencia, nome, tipo_etapa_id, centro_trabalho_id, criado_por)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (ordem_id, sequencia, nome, tipo_etapa_id, usuario_atual["id"]),
+        (ordem_id, sequencia, nome, tipo_etapa_id, centro_trabalho_id, usuario_atual["id"]),
     )
     etapa_id = cur.lastrowid
     audit.registrar(conn, tabela="ordem_producao_etapas", registro_id=etapa_id, usuario_id=usuario_atual["id"],
                      acao="etapa_cadastrada",
                      valor_novo={"ordem_producao_id": ordem_id, "sequencia": sequencia, "nome": nome,
-                                 "tipo_etapa_id": tipo_etapa_id},
+                                 "tipo_etapa_id": tipo_etapa_id, "centro_trabalho_id": centro_trabalho_id},
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(_ordem_detalhada(conn, ordem_id)), 201
 
@@ -634,9 +651,31 @@ def editar_etapa(ordem_id, etapa_id):
     if etapa["status"] != "pendente":
         raise ApiError("Só é possível editar uma etapa ainda 'pendente' (esta já foi concluída).", status=400)
 
-    conn.execute("UPDATE ordem_producao_etapas SET nome = ? WHERE id = ?", (nome, etapa_id))
+    # Fase 84 — permite escolher/trocar o centro de trabalho (ex.: qual
+    # encapsuladora/linha de envase) depois de a etapa já ter sido
+    # cadastrada, enquanto ainda estiver 'pendente'. `centro_trabalho_id`
+    # omitido no corpo MANTÉM o que já estava; envie null explicitamente
+    # para limpar.
+    centro_trabalho_id = etapa["centro_trabalho_id"]
+    if "centro_trabalho_id" in dados:
+        centro_trabalho_id = dados.get("centro_trabalho_id")
+        if centro_trabalho_id is not None:
+            try:
+                centro_trabalho_id = int(centro_trabalho_id)
+            except (TypeError, ValueError):
+                raise ApiError("centro_trabalho_id deve ser um número inteiro.", status=400)
+            if not conn.execute(
+                "SELECT id FROM centros_trabalho WHERE id = ? AND status = 'ativo'", (centro_trabalho_id,)
+            ).fetchone():
+                raise ApiError("Centro de trabalho não encontrado ou inativo.", status=404)
+
+    conn.execute(
+        "UPDATE ordem_producao_etapas SET nome = ?, centro_trabalho_id = ? WHERE id = ?",
+        (nome, centro_trabalho_id, etapa_id),
+    )
     audit.registrar(conn, tabela="ordem_producao_etapas", registro_id=etapa_id, usuario_id=usuario_atual["id"],
-                     acao="etapa_editada", valor_anterior={"nome": etapa["nome"]}, valor_novo={"nome": nome},
+                     acao="etapa_editada", valor_anterior={"nome": etapa["nome"], "centro_trabalho_id": etapa["centro_trabalho_id"]},
+                     valor_novo={"nome": nome, "centro_trabalho_id": centro_trabalho_id},
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(_ordem_detalhada(conn, ordem_id))
 
@@ -722,6 +761,78 @@ def concluir_etapa(ordem_id, etapa_id):
                                  "valor_registrado": valor_registrado},
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(_ordem_detalhada(conn, ordem_id))
+
+
+# ============================================================
+# FASE 84 — Apontamento Diário de Produção. Log CORRIDO, paralelo à
+# reconciliação final de `quantidade_produzida` em `concluir()` abaixo —
+# nunca lido nem validado por ela. Existe só para o painel em tempo real
+# mostrar o que está sendo produzido AGORA, dia a dia, sem esperar a
+# ordem inteira ser concluída (pedido do colaborador escrever "a produção
+# do dia" enquanto a ordem ainda está em andamento).
+# ============================================================
+@bp.get("/<int:ordem_id>/apontamentos-diarios")
+@requires_permission("producao", "visualizar")
+def listar_apontamentos_diarios(ordem_id):
+    conn = get_db()
+    _ordem_ou_404(conn, ordem_id)
+    rows = conn.execute(
+        """
+        SELECT ap.*, u.nome AS registrado_por_nome
+        FROM ordem_producao_apontamentos_diarios ap LEFT JOIN usuarios u ON u.id = ap.registrado_por
+        WHERE ap.ordem_producao_id = ? ORDER BY ap.data DESC, ap.id DESC
+        """,
+        (ordem_id,),
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@bp.post("/<int:ordem_id>/apontamentos-diarios")
+@requires_permission("producao", "apontar")
+def criar_apontamento_diario(ordem_id):
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+
+    ordem = _ordem_ou_404(conn, ordem_id)
+    if ordem["status"] not in STATUS_QUE_PERMITEM_CONSUMO:
+        raise ApiError(
+            "Só é possível registrar apontamento diário numa ordem 'liberada' ou 'em_producao' "
+            f"(status atual: '{ordem['status']}').",
+            status=400,
+        )
+
+    try:
+        quantidade = float(dados.get("quantidade"))
+    except (TypeError, ValueError):
+        raise ApiError("Informe quantidade (numérica, maior que zero).", status=400)
+    if quantidade <= 0:
+        raise ApiError("quantidade deve ser maior que zero.", status=400)
+    unidade = (dados.get("unidade") or ordem["unidade"] or "").strip()
+    if not unidade:
+        raise ApiError("Informe unidade.", status=400)
+    data_apontamento = (dados.get("data") or _hoje_iso_data()).strip()
+
+    etapa_id = dados.get("etapa_id") or None
+    if etapa_id is not None:
+        etapa_id = int(etapa_id)
+        _etapa_ou_404(conn, ordem_id, etapa_id)
+
+    cur = conn.execute(
+        """
+        INSERT INTO ordem_producao_apontamentos_diarios
+            (ordem_producao_id, etapa_id, data, quantidade, unidade, observacao, registrado_por)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (ordem_id, etapa_id, data_apontamento, quantidade, unidade, dados.get("observacao"), usuario_atual["id"]),
+    )
+    apontamento_id = cur.lastrowid
+    audit.registrar(conn, tabela="ordem_producao_apontamentos_diarios", registro_id=apontamento_id, usuario_id=usuario_atual["id"],
+                     acao="apontamento_diario_registrado",
+                     valor_novo={"ordem_producao_id": ordem_id, "data": data_apontamento, "quantidade": quantidade, "unidade": unidade},
+                     ip=client_ip(), dispositivo=client_device())
+    row = conn.execute("SELECT * FROM ordem_producao_apontamentos_diarios WHERE id = ?", (apontamento_id,)).fetchone()
+    return jsonify(dict(row)), 201
 
 
 @bp.post("/<int:ordem_id>/concluir")

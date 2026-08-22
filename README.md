@@ -4656,3 +4656,35 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   reaproveita a mesma função e já herda o comportamento automaticamente,
   sem nenhuma alteração de código lá — mas qualquer fluxo externo que
   chamava "Confirmar" esperando 200 direto agora sempre recebe 202.
+- (Entregue na Fase 84) Granel intermediário como etapa + Centro de
+  Trabalho por etapa + Apontamento Diário de Produção — três mudanças
+  pequenas e independentes na mesma fase, todas dentro da Ordem de
+  Produção já existente:
+  1. Novo tipo no catálogo de etapas (Fase 75) — "Descarregamento/Estoque
+     Intermediário" (kg) — para o usuário registrar a quantidade de
+     "produto a granel em pó" que sai da Mistura antes de ir para
+     Encapsulamento/Envase, DENTRO da mesma ordem (decisão explícita do
+     usuário: sem gerar um lote/CQ separado para isso). `ordem_padrao`
+     dos tipos existentes foi renumerado (`UPDATE`, não é estrutural) para
+     refletir a sequência real: Pesagem → Mistura → Descarregamento →
+     Granulação → Compressão → Encapsulamento → Envase → Rotulagem →
+     Embalagem.
+  2. `ordem_producao_etapas.centro_trabalho_id` (nova coluna, opcional) —
+     permite escolher qual das 4 encapsuladoras/4 linhas de envase (8
+     `centros_trabalho` novos, semeados nesta mesma migração) rodou UMA
+     etapa específica. **Deliberadamente diferente** de
+     `ordem_producao_agendamentos.centro_trabalho_id` (Fase 25): aquele é
+     o recurso físico que a ORDEM INTEIRA usa para agendamento de
+     capacidade (`UNIQUE` por ordem — um só centro de trabalho pela
+     duração toda); este é por ETAPA, sem nenhum `UNIQUE`, porque a mesma
+     ordem pode passar por máquinas diferentes em etapas diferentes. A
+     lista de centros de trabalho no frontend passou a carregar para
+     quem tem só `centros_trabalho.visualizar` (antes exigia também
+     `producao.agendar`, que nem todo perfil que aponta etapa tem).
+  3. `ordem_producao_apontamentos_diarios` (tabela nova) — log CORRIDO de
+     produção do dia, pedido explícito do usuário ("produção do dia
+     escrita pelo colaborador"). Deliberadamente **nunca** lido nem
+     validado por `quantidade_produzida` (a reconciliação final, gravada
+     uma única vez em "Concluir ordem") — existe só para o painel em
+     tempo real mostrar o que está sendo produzido agora, sem esperar a
+     ordem inteira terminar.
