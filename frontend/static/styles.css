@@ -266,6 +266,13 @@ button, input, select {
 .botao-menu-mobile { display: none; font-size: 20px; }
 .fundo-menu-mobile { display: none; }
 
+/* Botão de recolher/mostrar o menu lateral inteiro em tela LARGA (desktop
+   — diferente do hambúrguer acima, que é só para a gaveta de celular/
+   tablet, ver media query mais abaixo). Pedido de quem quer mais espaço
+   de tela mesmo no computador; a barra volta inteira com um clique. */
+.botao-menu-desktop { font-size: 14px; }
+.layout.menu-lateral-oculto .barra-lateral { display: none; }
+
 /* =========================================================================
    FASE 38 — Responsividade para celular/tablet.
 
@@ -285,6 +292,12 @@ button, input, select {
    ========================================================================= */
 @media (max-width: 900px) {
   .botao-menu-mobile { display: inline-block; }
+  /* A gaveta de celular/tablet já tem seu próprio jeito de abrir/fechar
+     (hambúrguer acima) — o botão de recolher de desktop não faz sentido
+     aqui, e `menu-lateral-oculto` nunca chega a ser alternado nesta
+     largura de tela mesmo (o botão que o aciona já está escondido). */
+  .botao-menu-desktop { display: none; }
+  .layout.menu-lateral-oculto .barra-lateral { display: flex; }
 
   .barra-lateral {
     position: fixed;
