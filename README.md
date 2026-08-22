@@ -4727,3 +4727,19 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   iniciar/concluir (nem no frontend, nem na API — `fluxo_service.
   iniciar_etapa`/`concluir_etapa` agora recusam com 400) — ela só existe
   para ser lida, nunca para ser operada manualmente por engano.
+- (Entregue na Fase 87) Alerta de Estoque Mínimo — `itens.estoque_minimo`
+  já existia no banco desde a Fase 2, mas era 100% inerte (só CRUD
+  passthrough, nunca comparado contra nada). Novo helper
+  `app/routes/estoque.py::saldo_total_disponivel_item` (mesma agregação
+  que o MRP, Fase 39, já fazia lote a lote — extraída para ser
+  reaproveitada em vez de duplicada; `aps.py::_calcular_mrp` foi
+  atualizado para chamar essa mesma função) alimenta dois campos novos na
+  resposta de `GET /itens`/`GET /itens/<id>`: `estoque_atual` e
+  `abaixo_do_minimo` — calculados só para itens que TÊM um mínimo
+  cadastrado (a maioria não tem, e o cálculo não é gratuito). Tela de
+  Itens ganhou uma coluna "Estoque" com selo "Abaixo do mínimo"/"OK" por
+  linha, mais um aviso agregado no topo quando algum item estiver abaixo.
+  **Decisão confirmada com o usuário:** o valor é um número ABSOLUTO por
+  item (ex.: B12 = 10g, amido de milho = 50kg), não uma porcentagem — os
+  itens variam demais em escala/unidade para uma regra percentual única
+  fazer sentido.

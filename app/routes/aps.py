@@ -27,7 +27,7 @@ from .. import audit
 from ..context import ApiError, client_device, client_ip, get_db
 from ..permissions import requires_permission
 from .compras import criar_pedido_compra_interno
-from .estoque import saldo_real_disponivel_producao
+from .estoque import saldo_total_disponivel_item
 from .producao import _composicao_planejada
 
 bp = Blueprint("aps", __name__, url_prefix="/api/v1/aps")
@@ -484,13 +484,11 @@ def _calcular_mrp(conn):
 
     resultado = []
     for entrada in por_item.values():
-        lotes_aprovados = conn.execute(
-            "SELECT id FROM lotes WHERE item_id = ? AND status IN ('aprovado', 'aprovado_com_ressalva')",
-            (entrada["item_id"],),
-        ).fetchall()
-        disponivel = round(
-            sum(max(0.0, saldo_real_disponivel_producao(conn, lote["id"])) for lote in lotes_aprovados), 6
-        )
+        # Fase 87 — mesma agregação extraída para app/routes/estoque.py::
+        # saldo_total_disponivel_item, reaproveitada aqui em vez de
+        # duplicar a query lote a lote (agora também usada pelo alerta de
+        # estoque mínimo em Itens).
+        disponivel = saldo_total_disponivel_item(conn, entrada["item_id"])
         falta = round(max(0.0, entrada["necessidade_total"] - disponivel), 6)
 
         fornecedores = conn.execute(

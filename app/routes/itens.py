@@ -5,6 +5,7 @@ from flask import Blueprint, g, jsonify, request
 from .. import audit
 from ..context import ApiError, client_device, client_ip, get_db
 from ..permissions import requires_permission
+from .estoque import saldo_total_disponivel_item
 
 bp = Blueprint("itens", __name__, url_prefix="/api/v1/itens")
 
@@ -67,6 +68,23 @@ def _gerar_codigo_item(conn, tipo):
         proximo += 1
 
 
+def _com_estoque_minimo(item):
+    """Fase 87 — `itens.estoque_minimo` já existia no banco desde a Fase 2
+    mas nunca era comparado contra nada. Só calcula o saldo real (query
+    cara, uma por lote aprovado do item) quando o item de fato TEM um
+    mínimo cadastrado — a grande maioria não tem, e não vale a pena pagar
+    o custo da agregação à toa para eles."""
+    if item.get("estoque_minimo") is None:
+        item["estoque_atual"] = None
+        item["abaixo_do_minimo"] = None
+        return item
+    conn = get_db()
+    estoque_atual = saldo_total_disponivel_item(conn, item["id"])
+    item["estoque_atual"] = estoque_atual
+    item["abaixo_do_minimo"] = estoque_atual < item["estoque_minimo"]
+    return item
+
+
 @bp.get("")
 @requires_permission("itens", "visualizar")
 def listar():
@@ -76,7 +94,7 @@ def listar():
         rows = conn.execute("SELECT * FROM itens WHERE tipo = ? ORDER BY codigo", (tipo,)).fetchall()
     else:
         rows = conn.execute("SELECT * FROM itens ORDER BY codigo").fetchall()
-    return jsonify([dict(r) for r in rows])
+    return jsonify([_com_estoque_minimo(dict(r)) for r in rows])
 
 
 @bp.get("/<int:item_id>")
@@ -86,7 +104,7 @@ def obter(item_id):
     row = conn.execute("SELECT * FROM itens WHERE id = ?", (item_id,)).fetchone()
     if row is None:
         raise ApiError("Item não encontrado.", status=404)
-    return jsonify(dict(row))
+    return jsonify(_com_estoque_minimo(dict(row)))
 
 
 @bp.post("")

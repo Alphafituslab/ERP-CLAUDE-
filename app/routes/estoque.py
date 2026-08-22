@@ -222,6 +222,18 @@ def saldo_real_disponivel_producao(conn, lote_id, excluir_ordem_id=None):
     return lote["quantidade"] - consumido - reservado_vendas - reservado_producao - saida_estoque
 
 
+def saldo_total_disponivel_item(conn, item_id):
+    """Fase 87 — soma `saldo_real_disponivel_producao` sobre todos os
+    lotes aprovados/aprovado_com_ressalva deste item, a MESMA agregação
+    que `aps.py::_calcular_mrp` já faz lote a lote — extraída para cá para
+    ser reaproveitada por qualquer tela (Itens, painel, MRP) sem duplicar
+    a query em três lugares."""
+    lotes = conn.execute(
+        "SELECT id FROM lotes WHERE item_id = ? AND status IN ('aprovado', 'aprovado_com_ressalva')", (item_id,)
+    ).fetchall()
+    return round(sum(max(0.0, saldo_real_disponivel_producao(conn, l["id"])) for l in lotes), 6)
+
+
 # ============================================================
 # POSIÇÕES DE ARMAZENAGEM
 # ============================================================

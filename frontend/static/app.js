@@ -1472,6 +1472,17 @@
     const podeCadastrar = temPermissao("itens", "cadastrar");
     const podeEditar = temPermissao("itens", "editar");
 
+    // Fase 87 — `estoque_atual`/`abaixo_do_minimo` só vêm preenchidos
+    // (não-null) para itens que têm `estoque_minimo` cadastrado — a
+    // maioria não tem, e não faz sentido mostrar nada de estoque para eles
+    // nesta coluna (a tela de Estoque/WMS continua sendo o lugar certo
+    // para ver saldo de QUALQUER item, com ou sem mínimo definido).
+    const colunaEstoque = (i) => {
+      if (i.estoque_minimo === null || i.estoque_minimo === undefined) return '<span class="texto-suave">—</span>';
+      const badge = i.abaixo_do_minimo ? '<span class="selo bloqueado">Abaixo do mínimo</span>' : '<span class="selo ativo">OK</span>';
+      return `${_fmtQtd(i.estoque_atual)} / mín. ${_fmtQtd(i.estoque_minimo)} ${escapeHtml(i.unidade_medida)}<br>${badge}`;
+    };
+
     const linhas = itens
       .map(
         (i) => `<tr>
@@ -1479,6 +1490,7 @@
           <td>${escapeHtml(i.descricao)}</td>
           <td class="texto-suave">${escapeHtml(i.tipo)}</td>
           <td>${escapeHtml(i.unidade_medida)}</td>
+          <td>${colunaEstoque(i)}</td>
           <td>${i.requer_fornecedor_homologado ? "Sim" : "Não"}</td>
           <td><span class="selo ${i.status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(i.status)}</span></td>
           <td>${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-item" data-id="${i.id}">Editar</button>` : ""}</td>
@@ -1486,18 +1498,22 @@
       )
       .join("");
 
+    const totalAbaixoDoMinimo = itens.filter((i) => i.abaixo_do_minimo).length;
+
     renderShell(
       `<h2>Itens</h2>
        <div class="cartao">
          <p class="texto-suave">Matérias-primas, embalagens e demais materiais controlados. Itens marcados como
-         "exige fornecedor homologado" só podem ser recebidos de fornecedores previamente aprovados.</p>
+         "exige fornecedor homologado" só podem ser recebidos de fornecedores previamente aprovados. Cadastrar um
+         "Estoque mínimo" (edite o item) faz esta tela avisar quando o saldo real cair abaixo dele.</p>
+         ${totalAbaixoDoMinimo > 0 ? `<p class="mensagem-erro">${totalAbaixoDoMinimo} item(ns) abaixo do estoque mínimo cadastrado.</p>` : ""}
          <div class="barra-acoes">
            <span class="texto-suave">${itens.length} item(ns)</span>
            ${podeCadastrar ? `<button class="botao" data-acao="novo-item">+ Novo item</button>` : ""}
          </div>
          <table>
-           <thead><tr><th>Código</th><th>Descrição</th><th>Tipo</th><th>Unidade</th><th>Exige homologação</th><th>Status</th><th>Ações</th></tr></thead>
-           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum item cadastrado.</td></tr>'}</tbody>
+           <thead><tr><th>Código</th><th>Descrição</th><th>Tipo</th><th>Unidade</th><th>Estoque</th><th>Exige homologação</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="8" class="texto-suave">Nenhum item cadastrado.</td></tr>'}</tbody>
          </table>
        </div>`,
       "itens"
