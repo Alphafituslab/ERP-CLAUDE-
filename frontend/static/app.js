@@ -329,6 +329,8 @@
           case "compras-pedidos": return param ? renderPedidoCompraDetalhe(Number(param)) : renderPedidosCompra();
           case "compras-cotacoes": return param ? renderCotacaoDetalhe(Number(param)) : renderCotacoes();
           case "estoque": return renderEstoque();
+          case "solicitacoes-material": return param ? renderSolicitacaoMaterialDetalhe(Number(param)) : renderSolicitacoesMateriais();
+          case "materiais-catalogo": return renderCatalogoMateriaisEpi();
           case "comercial": return renderComercial();
           case "pedido": return param ? renderPedidoDetalhe(Number(param)) : renderComercial();
           case "app-vendas": return param === "portfolio" ? renderPortfolioVendas() : renderAppVendas();
@@ -442,6 +444,14 @@
       tipo: "grupo", chave: "grupo-estoque", nome: "Estoque",
       itens: [
         { rota: "#/estoque", chave: "estoque", label: "Estoque (WMS)", permissao: ["estoque", "visualizar"] },
+      ],
+    },
+    {
+      // Fase 80 — Solicitações de Materiais/EPI.
+      tipo: "grupo", chave: "grupo-materiais", nome: "Materiais & EPI",
+      itens: [
+        { rota: "#/solicitacoes-material", chave: "solicitacoes-material", label: "Solicitações de Materiais/EPI", permissao: ["solicitacoes_material", "visualizar"] },
+        { rota: "#/materiais-catalogo", chave: "materiais-catalogo", label: "Catálogo de Materiais/EPI", permissao: ["solicitacoes_material", "cadastrar_catalogo"] },
       ],
     },
     {
@@ -2124,6 +2134,302 @@
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Encerrar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // SOLICITAÇÕES DE MATERIAIS/EPI — Fase 80
+  // =======================================================================
+  // Fluxo: solicitação (qualquer setor) → aprovação (segregação de função:
+  // quem pede não pode aprovar o próprio pedido, mesma trava de
+  // desvios/formulas/pedido-compra) → entrega (normalmente por um setor
+  // diferente, ex.: Estoque) → confirmação de recebimento pelo próprio
+  // solicitante — com comprovante em PDF ao final (Ficha de EPI conforme a
+  // NR-6, quando o item é EPI) e trilha de auditoria em cada etapa.
+  const ROTULOS_STATUS_SOLICITACAO_MATERIAL = {
+    pendente: "Pendente", aprovada: "Aprovada", rejeitada: "Rejeitada",
+    entregue: "Entregue", recebimento_confirmado: "Recebimento confirmado", cancelada: "Cancelada",
+  };
+  const SELO_STATUS_SOLICITACAO_MATERIAL = {
+    pendente: "amarelo", aprovada: "azul", rejeitada: "bloqueado",
+    entregue: "azul", recebimento_confirmado: "ativo", cancelada: "inativo",
+  };
+
+  function parseItensSolicitacaoMaterialTexto(texto, materiaisPorCodigo) {
+    return (texto || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((linha) => {
+        const [codigo, quantidade, especificacao] = linha.split(";").map((p) => (p || "").trim());
+        const material = materiaisPorCodigo[codigo];
+        if (!material) throw new Error(`Material de código "${codigo}" não encontrado. Confira o código no Catálogo de Materiais/EPI.`);
+        if (!quantidade) throw new Error(`Linha "${linha}" precisa de uma quantidade (formato: codigo;quantidade;especificacao_opcional).`);
+        return { material_id: material.id, quantidade_solicitada: Number(quantidade), especificacao: especificacao || undefined };
+      });
+  }
+
+  async function renderSolicitacoesMateriais() {
+    app.innerHTML = '<div class="carregando">Carregando solicitações…</div>';
+    const solicitacoes = await chamarApi("/solicitacoes-material");
+    const podeSolicitar = temPermissao("solicitacoes_material", "solicitar");
+    const podeCadastrarCatalogo = temPermissao("solicitacoes_material", "cadastrar_catalogo");
+
+    const linhas = solicitacoes
+      .map(
+        (s) => `<tr>
+          <td class="mono"><a href="#/solicitacoes-material/${s.id}">${escapeHtml(s.numero)}</a></td>
+          <td>${escapeHtml(s.solicitante_nome)}</td>
+          <td>${escapeHtml(s.setor_solicitante || "—")}</td>
+          <td>${escapeHtml(s.prioridade)}</td>
+          <td><span class="selo ${SELO_STATUS_SOLICITACAO_MATERIAL[s.status]}">${ROTULOS_STATUS_SOLICITACAO_MATERIAL[s.status]}</span></td>
+          <td>${fmtData(s.criado_em)}</td>
+          <td><a class="botao secundario pequeno" href="#/solicitacoes-material/${s.id}">Ver</a></td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<h2>Solicitações de Materiais/EPI</h2>
+       <p class="texto-suave">Pedido de material ou EPI, com aprovação obrigatória por outra pessoa (segregação
+       de função), entrega feita por um setor diferente do aprovador e confirmação de recebimento pelo próprio
+       solicitante — tudo com trilha de auditoria e um comprovante em PDF ao final (Ficha de EPI conforme a
+       NR-6, quando aplicável).</p>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${solicitacoes.length} solicitação(ões)</span>
+           <div style="display:flex;gap:8px;">
+             ${podeCadastrarCatalogo ? `<a class="botao secundario" href="#/materiais-catalogo">Catálogo de Materiais/EPI</a>` : ""}
+             ${podeSolicitar ? `<button class="botao" data-acao="nova-solicitacao-material">+ Nova solicitação</button>` : ""}
+           </div>
+         </div>
+         <table>
+           <thead><tr><th>Número</th><th>Solicitante</th><th>Setor</th><th>Prioridade</th><th>Status</th><th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhuma solicitação registrada.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "solicitacoes-material"
+    );
+  }
+
+  function modalNovaSolicitacaoMaterial() {
+    const materiais = (state.cache.materiaisSolicitaveis || []).filter((m) => m.status === "ativo");
+    const referencia = materiais
+      .map((m) => `${escapeHtml(m.codigo)} — ${escapeHtml(m.descricao)}${m.e_epi ? " (EPI, C.A. " + escapeHtml(m.numero_ca || "não informado") + ")" : ""}`)
+      .join("<br>");
+    abrirModal(
+      `<h3>Nova solicitação de material/EPI</h3>
+       <form data-form="nova-solicitacao-material">
+         <div class="campo"><label>Setor solicitante</label><input name="setor_solicitante" placeholder="ex.: Produção, Laboratório"></div>
+         <div class="campo"><label>Prioridade</label>
+           <select name="prioridade">
+             <option value="baixa">Baixa</option><option value="media" selected>Média</option>
+             <option value="alta">Alta</option><option value="urgente">Urgente</option>
+           </select>
+         </div>
+         <div class="campo"><label>Justificativa</label><textarea name="justificativa" required placeholder="Por que este material/EPI é necessário"></textarea></div>
+         <div class="campo">
+           <label>Itens (um por linha: <span class="mono">codigo;quantidade;especificacao_opcional</span>)</label>
+           <textarea name="itens" required placeholder="EPI0000;2;Tamanho M"></textarea>
+           <div class="dica">Materiais disponíveis:<br>${referencia || "Nenhum material ativo cadastrado ainda — cadastre em Catálogo de Materiais/EPI."}</div>
+         </div>
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Solicitar</button>
+         </div>
+       </form>`,
+      { largo: true }
+    );
+  }
+
+  function modalRejeitarSolicitacaoMaterial(solicitacaoId) {
+    abrirModal(`
+      <h3>Rejeitar solicitação</h3>
+      <form data-form="rejeitar-solicitacao-material" data-id="${solicitacaoId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required placeholder="Explique por que esta solicitação está sendo rejeitada"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar rejeição</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEntregarSolicitacaoMaterial(solicitacao) {
+    const linhas = solicitacao.itens
+      .map(
+        (it) => `<div class="campo">
+          <label>${escapeHtml(it.material_codigo)} — ${escapeHtml(it.material_descricao)}${it.especificacao ? " (" + escapeHtml(it.especificacao) + ")" : ""} — solicitado: ${it.quantidade_solicitada}</label>
+          <input name="qtd_item_${it.id}" type="number" step="any" min="0" value="${it.quantidade_solicitada}" required>
+        </div>`
+      )
+      .join("");
+    abrirModal(`
+      <h3>Entregar solicitação ${escapeHtml(solicitacao.numero)}</h3>
+      <p class="texto-suave">Informe a quantidade efetivamente entregue de cada item — pode ser menor que o
+      solicitado em caso de entrega parcial.</p>
+      <form data-form="entregar-solicitacao-material" data-id="${solicitacao.id}"
+            data-itens-ids="${solicitacao.itens.map((it) => it.id).join(",")}">
+        ${linhas}
+        <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Confirmar entrega</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarSolicitacaoMaterial(solicitacaoId) {
+    abrirModal(`
+      <h3>Cancelar solicitação</h3>
+      <form data-form="cancelar-solicitacao-material" data-id="${solicitacaoId}">
+        <div class="campo"><label>Motivo (opcional)</label><textarea name="motivo"></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Confirmar cancelamento</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderSolicitacaoMaterialDetalhe(solicitacaoId) {
+    app.innerHTML = '<div class="carregando">Carregando solicitação…</div>';
+    const solicitacao = await chamarApi(`/solicitacoes-material/${solicitacaoId}`);
+    const podeAprovar = temPermissao("solicitacoes_material", "aprovar");
+    const podeEntregar = temPermissao("solicitacoes_material", "entregar");
+    const souSolicitante = state.usuarioAtual && solicitacao.solicitante_id === state.usuarioAtual.id;
+
+    const linhasItens = solicitacao.itens
+      .map(
+        (it) => `<tr>
+          <td>${escapeHtml(it.material_codigo)} — ${escapeHtml(it.material_descricao)}${it.material_e_epi ? ' <span class="selo azul">EPI</span>' : ""}</td>
+          <td>${it.material_e_epi ? escapeHtml(it.material_numero_ca || "—") : "—"}</td>
+          <td>${it.quantidade_solicitada}</td>
+          <td>${it.quantidade_entregue != null ? it.quantidade_entregue : "—"}</td>
+          <td>${escapeHtml(it.especificacao || "—")}</td>
+        </tr>`
+      )
+      .join("");
+
+    const blocoDecisao =
+      solicitacao.status === "pendente"
+        ? podeAprovar
+          ? souSolicitante
+            ? `<p class="texto-suave">Você fez esta solicitação — a aprovação precisa ser feita por outra pessoa (segregação de função).</p>`
+            : `<div class="barra-acoes"><span></span><div style="display:flex;gap:8px;">
+                 <button class="botao" data-acao="aprovar-solicitacao-material" data-id="${solicitacao.id}">Aprovar</button>
+                 <button class="botao perigo" data-acao="abrir-rejeitar-solicitacao-material" data-id="${solicitacao.id}">Rejeitar</button>
+               </div></div>`
+          : `<p class="texto-suave">Aguardando aprovação de alguém com permissão para decidir sobre solicitações.</p>`
+        : "";
+
+    renderShell(
+      `<a class="link-voltar" href="#/solicitacoes-material">&larr; Voltar para Solicitações de Materiais/EPI</a>
+       <h2>Solicitação ${escapeHtml(solicitacao.numero)}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><div class="rotulo">Solicitante</div>${escapeHtml(solicitacao.solicitante_nome)}</div>
+           <div><div class="rotulo">Setor</div>${escapeHtml(solicitacao.setor_solicitante || "—")}</div>
+           <div><div class="rotulo">Prioridade</div>${escapeHtml(solicitacao.prioridade)}</div>
+           <div><div class="rotulo">Status</div><span class="selo ${SELO_STATUS_SOLICITACAO_MATERIAL[solicitacao.status]}">${ROTULOS_STATUS_SOLICITACAO_MATERIAL[solicitacao.status]}</span></div>
+           <div><div class="rotulo">Criado em</div>${fmtData(solicitacao.criado_em)}</div>
+           ${solicitacao.aprovador_nome ? `<div><div class="rotulo">Decidido por</div>${escapeHtml(solicitacao.aprovador_nome)} em ${fmtData(solicitacao.decidido_em)}</div>` : ""}
+           ${solicitacao.entregador_nome ? `<div><div class="rotulo">Entregue por</div>${escapeHtml(solicitacao.entregador_nome)} em ${fmtData(solicitacao.entregue_em)}</div>` : ""}
+           ${solicitacao.recebimento_confirmado_em ? `<div><div class="rotulo">Recebimento confirmado em</div>${fmtData(solicitacao.recebimento_confirmado_em)}</div>` : ""}
+         </div>
+         <p class="texto-suave"><strong>Justificativa:</strong> ${escapeHtml(solicitacao.justificativa)}</p>
+         ${solicitacao.motivo_rejeicao ? `<p class="mensagem-erro">Motivo da rejeição: ${escapeHtml(solicitacao.motivo_rejeicao)}</p>` : ""}
+         ${solicitacao.motivo_cancelamento ? `<p class="mensagem-erro">Motivo do cancelamento: ${escapeHtml(solicitacao.motivo_cancelamento)}</p>` : ""}
+         ${solicitacao.observacoes_entrega ? `<p class="texto-suave"><strong>Observações da entrega:</strong> ${escapeHtml(solicitacao.observacoes_entrega)}</p>` : ""}
+         ${blocoDecisao}
+         ${solicitacao.status === "aprovada" && podeEntregar ? `<div class="barra-acoes"><span></span><button class="botao" data-acao="abrir-entregar-solicitacao-material" data-id="${solicitacao.id}">Registrar entrega</button></div>` : ""}
+         ${solicitacao.status === "entregue" && souSolicitante ? `<div class="barra-acoes"><span></span><button class="botao" data-acao="confirmar-recebimento-solicitacao-material" data-id="${solicitacao.id}">Confirmar recebimento</button></div>` : ""}
+         ${solicitacao.status === "pendente" && souSolicitante ? `<div class="barra-acoes"><span></span><button class="botao perigo" data-acao="abrir-cancelar-solicitacao-material" data-id="${solicitacao.id}">Cancelar solicitação</button></div>` : ""}
+         ${solicitacao.status === "entregue" || solicitacao.status === "recebimento_confirmado" ? `<div class="barra-acoes"><span></span><button class="botao secundario" data-acao="baixar-comprovante-solicitacao-material" data-id="${solicitacao.id}" data-numero="${escapeHtml(solicitacao.numero)}">Baixar comprovante (PDF)</button></div>` : ""}
+         <table>
+           <thead><tr><th>Item</th><th>C.A.</th><th>Qtd. solicitada</th><th>Qtd. entregue</th><th>Especificação</th></tr></thead>
+           <tbody>${linhasItens}</tbody>
+         </table>
+       </div>`,
+      "solicitacoes-material"
+    );
+  }
+
+  // ---- Catálogo de Materiais/EPI ----
+  async function renderCatalogoMateriaisEpi() {
+    app.innerHTML = '<div class="carregando">Carregando catálogo…</div>';
+    const materiais = await chamarApi("/solicitacoes-material/materiais?incluir_inativos=1");
+    state.cache.materiaisSolicitaveis = materiais;
+    const podeCadastrar = temPermissao("solicitacoes_material", "cadastrar_catalogo");
+
+    const linhas = materiais
+      .map(
+        (m) => `<tr>
+          <td class="mono">${escapeHtml(m.codigo)}</td>
+          <td>${escapeHtml(m.descricao)}</td>
+          <td>${escapeHtml(m.categoria || "—")}</td>
+          <td>${m.e_epi ? `<span class="selo azul">EPI</span> ${escapeHtml(m.numero_ca || "sem C.A.")}` : "—"}</td>
+          <td>${escapeHtml(m.unidade_medida)}</td>
+          <td><span class="selo ${m.status === "ativo" ? "ativo" : "inativo"}">${m.status === "ativo" ? "Ativo" : "Inativo"}</span></td>
+          <td>${podeCadastrar ? `<button class="botao secundario pequeno" data-acao="editar-material-catalogo" data-id="${m.id}">Editar</button>` : ""}</td>
+        </tr>`
+      )
+      .join("");
+
+    renderShell(
+      `<a class="link-voltar" href="#/solicitacoes-material">&larr; Voltar para Solicitações de Materiais/EPI</a>
+       <h2>Catálogo de Materiais/EPI</h2>
+       <p class="texto-suave">Materiais e Equipamentos de Proteção Individual disponíveis para solicitação. Um
+       material inativo continua aparecendo no histórico de solicitações antigas, mas deixa de poder ser
+       escolhido numa solicitação nova.</p>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${materiais.length} material(is)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-material-catalogo">+ Novo material/EPI</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Código</th><th>Descrição</th><th>Categoria</th><th>EPI / C.A.</th><th>Unidade</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum material cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "materiais-catalogo"
+    );
+  }
+
+  function modalNovoMaterialCatalogo() {
+    abrirModal(`
+      <h3>Novo material/EPI</h3>
+      <form data-form="novo-material-catalogo">
+        <div class="campo"><label>Descrição</label><input name="descricao" required></div>
+        <div class="campo"><label>Código (opcional — gerado automaticamente se deixado em branco)</label><input name="codigo"></div>
+        <div class="campo"><label>Categoria (opcional)</label><input name="categoria" placeholder="ex.: EPI Mãos, Papelaria, Limpeza"></div>
+        <label class="campo-lembrar"><input type="checkbox" name="e_epi"> É um EPI (Equipamento de Proteção Individual)</label>
+        <div class="campo"><label>Número do C.A. (Certificado de Aprovação, se EPI)</label><input name="numero_ca"></div>
+        <div class="campo"><label>Unidade de medida</label><input name="unidade_medida" value="un" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Cadastrar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarMaterialCatalogo(material) {
+    abrirModal(`
+      <h3>Editar ${escapeHtml(material.codigo)}</h3>
+      <form data-form="editar-material-catalogo" data-id="${material.id}">
+        <div class="campo"><label>Descrição</label><input name="descricao" value="${escapeHtml(material.descricao)}" required></div>
+        <div class="campo"><label>Categoria (opcional)</label><input name="categoria" value="${escapeHtml(material.categoria || "")}"></div>
+        <label class="campo-lembrar"><input type="checkbox" name="e_epi" ${material.e_epi ? "checked" : ""}> É um EPI</label>
+        <div class="campo"><label>Número do C.A.</label><input name="numero_ca" value="${escapeHtml(material.numero_ca || "")}"></div>
+        <div class="campo"><label>Unidade de medida</label><input name="unidade_medida" value="${escapeHtml(material.unidade_medida)}" required></div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${material.status === "ativo" ? "selected" : ""}>Ativo</option>
+            <option value="inativo" ${material.status === "inativo" ? "selected" : ""}>Inativo</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
         </div>
       </form>`);
   }
@@ -9605,6 +9911,48 @@
         definirFlash("ok", "Fórmula ativada.");
         return renderFormulas();
 
+      // ---- Fase 80: Solicitações de Materiais/EPI ----
+      case "nova-solicitacao-material": {
+        state.cache.materiaisSolicitaveis = await chamarApi("/solicitacoes-material/materiais");
+        modalNovaSolicitacaoMaterial();
+        return;
+      }
+      case "aprovar-solicitacao-material": {
+        if (!confirm("Aprovar esta solicitação? A partir daí ela fica liberada para entrega.")) return;
+        await chamarApi(`/solicitacoes-material/${alvo.dataset.id}/aprovar`, { method: "POST" });
+        definirFlash("ok", "Solicitação aprovada.");
+        return renderSolicitacaoMaterialDetalhe(Number(alvo.dataset.id));
+      }
+      case "abrir-rejeitar-solicitacao-material":
+        modalRejeitarSolicitacaoMaterial(Number(alvo.dataset.id));
+        return;
+      case "abrir-entregar-solicitacao-material": {
+        const solicitacaoParaEntrega = await chamarApi(`/solicitacoes-material/${alvo.dataset.id}`);
+        modalEntregarSolicitacaoMaterial(solicitacaoParaEntrega);
+        return;
+      }
+      case "confirmar-recebimento-solicitacao-material": {
+        if (!confirm("Confirmar que você recebeu os itens desta solicitação?")) return;
+        await chamarApi(`/solicitacoes-material/${alvo.dataset.id}/confirmar-recebimento`, { method: "POST" });
+        definirFlash("ok", "Recebimento confirmado.");
+        return renderSolicitacaoMaterialDetalhe(Number(alvo.dataset.id));
+      }
+      case "abrir-cancelar-solicitacao-material":
+        modalCancelarSolicitacaoMaterial(Number(alvo.dataset.id));
+        return;
+      case "baixar-comprovante-solicitacao-material":
+        await baixarArquivo(`/solicitacoes-material/${alvo.dataset.id}/comprovante/pdf`, `Comprovante-${alvo.dataset.numero}.pdf`);
+        return;
+      case "novo-material-catalogo":
+        modalNovoMaterialCatalogo();
+        return;
+      case "editar-material-catalogo": {
+        const materiaisCatalogo = await chamarApi("/solicitacoes-material/materiais?incluir_inativos=1");
+        const materialParaEditar = materiaisCatalogo.find((m) => String(m.id) === alvo.dataset.id);
+        modalEditarMaterialCatalogo(materialParaEditar);
+        return;
+      }
+
       // ---- Fase 3: Ordens de Produção ----
       case "nova-ordem":
         modalNovaOrdem();
@@ -10737,6 +11085,90 @@
         fecharModais();
         definirFlash("ok", "Desvio encerrado.");
         return renderDesvios();
+      }
+
+      // ---- Fase 80: Solicitações de Materiais/EPI ----
+      case "nova-solicitacao-material": {
+        const materiaisPorCodigo = {};
+        (state.cache.materiaisSolicitaveis || []).forEach((m) => { materiaisPorCodigo[m.codigo] = m; });
+        const itensSolicitados = parseItensSolicitacaoMaterialTexto(dados.get("itens"), materiaisPorCodigo);
+        if (!itensSolicitados.length) throw new Error("Informe ao menos um item.");
+        const novaSolicitacao = await chamarApi("/solicitacoes-material", {
+          method: "POST",
+          body: {
+            setor_solicitante: dados.get("setor_solicitante") || null,
+            prioridade: dados.get("prioridade"),
+            justificativa: dados.get("justificativa"),
+            itens: itensSolicitados,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Solicitação criada — aguardando aprovação.");
+        return navegarPara(`#/solicitacoes-material/${novaSolicitacao.id}`);
+      }
+      case "rejeitar-solicitacao-material": {
+        const solicitacaoRejeitadaId = Number(form.dataset.id);
+        await chamarApi(`/solicitacoes-material/${solicitacaoRejeitadaId}/rejeitar`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Solicitação rejeitada.");
+        return renderSolicitacaoMaterialDetalhe(solicitacaoRejeitadaId);
+      }
+      case "entregar-solicitacao-material": {
+        const solicitacaoEntregueId = Number(form.dataset.id);
+        const itensIdsEntrega = form.dataset.itensIds.split(",").map(Number);
+        const itensEntregues = itensIdsEntrega.map((itemId) => ({
+          item_id: itemId,
+          quantidade_entregue: Number(dados.get(`qtd_item_${itemId}`)),
+        }));
+        await chamarApi(`/solicitacoes-material/${solicitacaoEntregueId}/entregar`, {
+          method: "POST", body: { itens: itensEntregues, observacoes: dados.get("observacoes") || null },
+        });
+        fecharModais();
+        definirFlash("ok", "Entrega registrada.");
+        return renderSolicitacaoMaterialDetalhe(solicitacaoEntregueId);
+      }
+      case "cancelar-solicitacao-material": {
+        const solicitacaoCanceladaId = Number(form.dataset.id);
+        await chamarApi(`/solicitacoes-material/${solicitacaoCanceladaId}/cancelar`, {
+          method: "POST", body: { motivo: dados.get("motivo") || null },
+        });
+        fecharModais();
+        definirFlash("ok", "Solicitação cancelada.");
+        return renderSolicitacaoMaterialDetalhe(solicitacaoCanceladaId);
+      }
+      case "novo-material-catalogo": {
+        await chamarApi("/solicitacoes-material/materiais", {
+          method: "POST",
+          body: {
+            descricao: dados.get("descricao"),
+            codigo: dados.get("codigo") || null,
+            categoria: dados.get("categoria") || null,
+            e_epi: !!dados.get("e_epi"),
+            numero_ca: dados.get("numero_ca") || null,
+            unidade_medida: dados.get("unidade_medida"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Material cadastrado.");
+        return renderCatalogoMateriaisEpi();
+      }
+      case "editar-material-catalogo": {
+        await chamarApi(`/solicitacoes-material/materiais/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            descricao: dados.get("descricao"),
+            categoria: dados.get("categoria") || null,
+            e_epi: !!dados.get("e_epi"),
+            numero_ca: dados.get("numero_ca") || null,
+            unidade_medida: dados.get("unidade_medida"),
+            status: dados.get("status"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Material atualizado.");
+        return renderCatalogoMateriaisEpi();
       }
 
       // ---- Fase 3: Fórmulas ----

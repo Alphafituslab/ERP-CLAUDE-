@@ -325,6 +325,7 @@ body {
   --menu-qualidade: #2bb3c0;
   --menu-producao: #e0923c;
   --menu-estoque: #9a7fe0;
+  --menu-materiais: #d1477a;
   --menu-comercial: #3fbf7f;
   --menu-financeiro: #d8b23a;
   --menu-relatorios: #6c8ef2;
@@ -333,6 +334,7 @@ body {
 [data-grupo="grupo-qualidade"] { --cor-grupo: var(--menu-qualidade); }
 [data-grupo="grupo-producao"] { --cor-grupo: var(--menu-producao); }
 [data-grupo="grupo-estoque"] { --cor-grupo: var(--menu-estoque); }
+[data-grupo="grupo-materiais"] { --cor-grupo: var(--menu-materiais); }
 [data-grupo="grupo-comercial"] { --cor-grupo: var(--menu-comercial); }
 [data-grupo="grupo-financeiro"] { --cor-grupo: var(--menu-financeiro); }
 [data-grupo="grupo-relatorios"] { --cor-grupo: var(--menu-relatorios); }
@@ -420,6 +422,7 @@ body {
 [data-grupo="grupo-qualidade"] > summary::before { content: "🧪"; }
 [data-grupo="grupo-producao"] > summary::before { content: "🏭"; }
 [data-grupo="grupo-estoque"] > summary::before { content: "📦"; }
+[data-grupo="grupo-materiais"] > summary::before { content: "🥽"; }
 [data-grupo="grupo-comercial"] > summary::before { content: "💼"; }
 [data-grupo="grupo-financeiro"] > summary::before { content: "💰"; }
 [data-grupo="grupo-relatorios"] > summary::before { content: "📊"; }

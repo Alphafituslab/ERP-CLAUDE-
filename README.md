@@ -4551,3 +4551,35 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   padrão GET-mais-fraco/PUT-mais-forte já usado no limiar de divergência
   de contagem, Fase 32/34). Com isso, a seção "Administração" do Memorial
   Técnico está 100% completa.
+- (Entregue na Fase 80) Solicitações de Materiais/EPI — novo módulo, novo
+  grupo "Materiais & EPI" no menu. Fluxo completo: qualquer setor abre uma
+  solicitação (`solicitacoes_material.solicitar`) → alguém com a permissão
+  `solicitacoes_material.aprovar` decide (aprovar/rejeitar) — com a MESMA
+  trava de segregação de função usada desde a Fase 1 na aprovação de lote
+  (quem solicitou nunca pode aprovar o próprio pedido) — → só depois de
+  aprovada o setor de entrega (normalmente Estoque, único perfil padrão
+  com `solicitacoes_material.entregar`) pode registrar a entrega, inclusive
+  parcial (quantidade entregue por item pode ser menor que a solicitada) →
+  o PRÓPRIO solicitante confirma o recebimento, fechando o ciclo com uma
+  segunda assinatura eletrônica (sem isso, a "prova de entrega" seria só a
+  palavra de quem entregou). Cada etapa grava um registro de auditoria
+  (`app/audit.py`, mesma tabela imutável de todo o resto do sistema).
+  Catálogo próprio (`materiais_solicitaveis`, tela "Catálogo de Materiais/
+  EPI"), DELIBERADAMENTE sem vínculo com a tabela `itens` — é um domínio
+  diferente (consumível/EPI entregue a uma pessoa, não matéria-prima/
+  produto rastreado por lote com FEFO) e o SQLite não permite alterar um
+  CHECK constraint existente sem recriar a tabela inteira, um risco
+  desnecessário para um catálogo que não precisa de nada da infraestrutura
+  de lote/estoque. Um item do catálogo marcado como EPI pode levar o
+  número do Certificado de Aprovação (C.A.); ao final de uma entrega
+  (status `entregue` ou `recebimento_confirmado`), a tela oferece um
+  "Comprovante de Entrega" em PDF (`GET /solicitacoes-material/<id>/
+  comprovante/pdf`, mesmo padrão ReportLab do Certificado de Análise da
+  Fase 1) que, quando algum item da solicitação é EPI, se transforma numa
+  Ficha de Controle de Fornecimento de EPI com o texto de declaração de
+  recebimento exigido pela NR-6 — documento pensado para uma eventual
+  auditoria trabalhista, exatamente o pedido original desta fase. A
+  aprovação (`solicitacoes_material.aprovar`) foi deliberadamente deixada
+  SEM nenhum perfil padrão — cabe ao Administrador designar, pela tela de
+  Perfis já existente, quem tem autoridade para aprovar essas solicitações
+  na empresa real.

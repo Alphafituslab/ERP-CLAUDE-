@@ -46,6 +46,10 @@ O que este script faz, passando pelas mesmas rotas de API que a tela usa
   8. Cadastra um Pedido de Compra, recebe contra ele e gera uma conta a
      pagar com baixa parcial (Compras + Financeiro).
   9. Abre um Desvio de Qualidade de exemplo (QMS).
+ 10. Cadastra dois EPIs no catálogo da Fase 80 e roda um ciclo completo de
+     Solicitação de Materiais/EPI: solicita → aprova (usuária de qualidade,
+     diferente de quem solicitou) → entrega → confirma recebimento — até o
+     comprovante em PDF poder ser baixado na tela de detalhe.
 
 Idempotência: seguro rodar mais de uma vez — fornecedores/clientes são
 reaproveitados pelo CNPJ e o usuário de qualidade pelo e-mail; itens já
@@ -436,7 +440,52 @@ admin.post("/desvios", {
 })
 log("desvio de qualidade de exemplo aberto")
 
+# ============================================================
+# 10) Solicitações de Materiais/EPI (Fase 80) — ciclo completo
+# ============================================================
+log("cadastrando catálogo e rodando um ciclo completo de solicitação de EPI...")
+
+
+def obter_ou_criar_material_solicitavel(descricao, e_epi=False, numero_ca=None, categoria=None, unidade_medida="un"):
+    existentes = admin.get("/solicitacoes-material/materiais", params={"incluir_inativos": 1})
+    achado = next((m for m in existentes if m["descricao"] == descricao), None)
+    if achado:
+        return achado
+    material = admin.post("/solicitacoes-material/materiais", {
+        "descricao": descricao, "categoria": categoria, "e_epi": e_epi,
+        "numero_ca": numero_ca, "unidade_medida": unidade_medida,
+    })
+    log(f"material/EPI cadastrado: {material['codigo']} — {descricao}")
+    return material
+
+
+luva_nitrila = obter_ou_criar_material_solicitavel(
+    "Luva de Nitrila (par)", e_epi=True, numero_ca="12345", categoria="EPI Mãos", unidade_medida="par",
+)
+mascara_pff2 = obter_ou_criar_material_solicitavel(
+    "Máscara PFF2", e_epi=True, numero_ca="54321", categoria="EPI Respiratório",
+)
+
+solicitacao_material = admin.post("/solicitacoes-material", {
+    "setor_solicitante": "Produção", "prioridade": "alta",
+    "justificativa": "Reposição de EPI da linha de produção (exemplo de demonstração).",
+    "itens": [
+        {"material_id": luva_nitrila["id"], "quantidade_solicitada": 20, "especificacao": "Tamanho M"},
+        {"material_id": mascara_pff2["id"], "quantidade_solicitada": 10},
+    ],
+})
+# Aprovado pela usuária de qualidade (pessoa diferente de quem solicitou,
+# admin) — mesma segregação de função da aprovação de lote acima.
+qualidade.post(f"/solicitacoes-material/{solicitacao_material['id']}/aprovar")
+itens_para_entrega = admin.get(f"/solicitacoes-material/{solicitacao_material['id']}")["itens"]
+admin.post(f"/solicitacoes-material/{solicitacao_material['id']}/entregar", {
+    "itens": [{"item_id": item["id"], "quantidade_entregue": item["quantidade_solicitada"]} for item in itens_para_entrega],
+    "observacoes": "Entregue no almoxarifado (exemplo de demonstração).",
+})
+admin.post(f"/solicitacoes-material/{solicitacao_material['id']}/confirmar-recebimento")
+log(f"solicitação de EPI {solicitacao_material['numero']} — aprovada, entregue e com recebimento confirmado (ciclo completo)")
+
 log("")
 log("Concluído — instalação populada com um exemplo completo em Itens, Fornecedores, Estoque/Lotes,")
 log("Análises (QMS), Fórmulas, Produção (OPs), Comercial, App de Vendas (Portfólio + rascunho modelo),")
-log("Compras, Financeiro (contas a receber e a pagar) e Desvios de Qualidade.")
+log("Compras, Financeiro (contas a receber e a pagar), Desvios de Qualidade e Solicitações de Materiais/EPI.")

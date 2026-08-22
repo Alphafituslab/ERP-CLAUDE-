@@ -425,6 +425,24 @@ PERMISSOES_PADRAO = [
     # isso fica só com o Administrador (não entra em nenhum PERFIS_PADRAO
     # abaixo além dele).
     ("fiscal", "configurar_sped", "Configurar os parâmetros de apuração do SPED Fiscal (alíquotas de ICMS/IPI/PIS/COFINS)", 0),
+    # ---- Fase 80 (Solicitações de Materiais/EPI) ----
+    # "solicitar" é dada de propósito a quase todo perfil operacional
+    # abaixo (qualquer setor pode pedir material/EPI) — só "aprovar" fica
+    # de fora de qualquer perfil padrão: "alguém designado" para aprovar é
+    # uma escolha de cada instalação (SESMT, RH, um supervisor específico
+    # etc.), não um papel que já existe hoje no sistema — o Administrador
+    # decide quem tem essa permissão pela tela de Perfis, quando for usar
+    # o módulo. "entregar" vai para o perfil Estoque (mesmo raciocínio de
+    # "o outro setor" do pedido original — quem já mexe com o estoque
+    # físico é quem libera a entrega). Segregação de função verificada no
+    # código (quem solicita não pode aprovar o próprio pedido), mesmo
+    # padrão já usado em lotes.aprovar (Fase 1) e nas aprovações de
+    # baixa/estorno do Financeiro.
+    ("solicitacoes_material", "visualizar", "Ver solicitações de materiais/EPI", 0),
+    ("solicitacoes_material", "solicitar", "Criar uma solicitação de material ou EPI", 0),
+    ("solicitacoes_material", "aprovar", "Aprovar ou rejeitar uma solicitação de material/EPI pendente", 0),
+    ("solicitacoes_material", "entregar", "Registrar a entrega de uma solicitação já aprovada", 0),
+    ("solicitacoes_material", "cadastrar_catalogo", "Cadastrar/editar os materiais e EPIs disponíveis para solicitação", 0),
 ]
 
 PERFIS_PADRAO = [
@@ -442,6 +460,8 @@ PERFIS_PADRAO = [
         # início/fim continua sendo "producao.apontar", do perfil
         # "Produção" (chão de fábrica) abaixo.
         "producao.configurar_etapas",
+        # Fase 80 — qualquer setor pode solicitar material/EPI.
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     ("Produção", "Execução da produção (MES)", 1, [
         "itens.visualizar", "lotes.visualizar", "formulas.visualizar",
@@ -450,10 +470,12 @@ PERFIS_PADRAO = [
         # sequenciado pelo PCP), não pode criar/mudar centro de trabalho
         # nem reagendar — por isso só a permissão de visualizar.
         "centros_trabalho.visualizar",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     ("Laboratório", "Analistas de laboratório (LIMS)", 1, [
         "itens.visualizar", "fornecedores.visualizar", "lotes.visualizar",
         "analises.visualizar", "analises.solicitar", "analises.registrar_resultado", "analises.concluir",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     ("Qualidade", "Aprovação e liberação de lotes (QMS)", 1, [
         "auditoria.visualizar", "itens.visualizar", "fornecedores.visualizar", "fornecedores.homologar",
@@ -471,6 +493,7 @@ PERFIS_PADRAO = [
         # as permissões próprias de Comercial/Financeiro.
         "rastreabilidade.visualizar", "rastreabilidade.simular_recall", "rastreabilidade.bloquear_em_massa",
         "rastreabilidade.decidir_pedido_recall",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     ("Estoque", "Gestão de armazém (WMS)", 1, [
         "itens.visualizar", "itens.cadastrar", "itens.editar", "lotes.visualizar", "lotes.receber", "lotes.bloquear",
@@ -482,6 +505,14 @@ PERFIS_PADRAO = [
         # só visualizar, não cria/envia/cancela pedido (isso é decisão de
         # Compras, abaixo).
         "compras.visualizar",
+        # Fase 80 — quem já lida com estoque físico é "o outro setor" que
+        # o pedido original menciona: liberado a ENTREGAR uma solicitação
+        # já aprovada, e a manter o catálogo de materiais/EPI disponíveis.
+        # Aprovar continua fora daqui de propósito (segregação de função
+        # entre quem entrega e quem aprova) — ver a nota completa em
+        # PERMISSOES_PADRAO acima.
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
+        "solicitacoes_material.entregar", "solicitacoes_material.cadastrar_catalogo",
     ]),
     ("Compras", "Compras e homologação de fornecedores", 1, [
         "itens.visualizar", "fornecedores.visualizar", "fornecedores.cadastrar",
@@ -517,6 +548,7 @@ PERFIS_PADRAO = [
         # mesma régua do resto do módulo (ação mais arriscada, só
         # Administrador).
         "fiscal.visualizar", "fiscal.registrar_entrada",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     ("Comercial", "CRM e força de vendas interna", 1, [
         "itens.visualizar", "estoque.visualizar", "comercial.visualizar", "comercial.cadastrar_cliente",
@@ -530,6 +562,7 @@ PERFIS_PADRAO = [
         # "fiscal.configurar" (token do provedor) e "fiscal.cancelar" (mais
         # arriscada) ficam de propósito fora daqui, só no Administrador.
         "fiscal.visualizar", "fiscal.emitir",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",
@@ -539,6 +572,7 @@ PERFIS_PADRAO = [
         # régua de percentuais/expiração é decisão de administrador, não
         # do vendedor que usa o app no dia a dia.
         "vendas_app.usar", "vendas_app.enviar_pedido",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     # Deliberadamente SEM financeiro.criar_conta_pagar: quem lança a conta
     # (Compras, ao receber a NF) e quem autoriza o pagamento dela
@@ -581,6 +615,7 @@ PERFIS_PADRAO = [
         # do provedor) fica de propósito fora daqui, só no Administrador,
         # mesma régua da Fase 70 para "fiscal.configurar".
         "financeiro.gerar_boleto", "financeiro.cancelar_boleto",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     # Visão executiva agregada, deliberadamente SEM nenhuma permissão
     # operacional de módulo (não vê a lista de clientes, não vê lotes
@@ -617,6 +652,7 @@ PERFIS_PADRAO = [
         # Fase 27 — mesmo perfil também cuida da padronização de rótulo
         # (anexos já estão cobertos por memoriais.editar, acima).
         "memoriais.padronizar",
+        "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
 ]
 

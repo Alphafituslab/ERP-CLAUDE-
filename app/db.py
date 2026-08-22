@@ -122,6 +122,7 @@ SCHEMA_FILES = [
     "schema_fase77.sql",  # Fase 77 — Portfólio dinâmico no App de Vendas + Duplicar Pedido (Comercial e App de Vendas)
     "schema_fase78.sql",  # Fase 78 — SPED Fiscal (1/5): Notas Fiscais de Entrada (captura estruturada)
     "schema_fase79.sql",  # Fase 79 — SPED Fiscal (2/5): Configuração Fiscal (parâmetros de apuração)
+    "schema_fase80.sql",  # Fase 80 — Solicitações de Materiais/EPI (pedido → aprovação → entrega → confirmação)
 ]
 
 
