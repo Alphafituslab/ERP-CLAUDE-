@@ -113,6 +113,31 @@ button, input, select {
 
 .campo .dica { font-size: 12px; color: var(--texto-suave); margin-top: 4px; }
 
+/* Fase 91 — campo de busca de item cadastrado (ex.: Solicitações de
+   Materiais/EPI), lista de resultados que aparece abaixo do input
+   conforme digita. */
+.lista-busca-resultados:not(:empty) {
+  margin-top: 6px;
+  border: 1px solid var(--borda);
+  border-radius: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.item-busca-resultado {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+  border: none;
+  border-bottom: 1px solid var(--borda);
+  background: var(--superficie);
+  color: var(--texto);
+  font-size: 13px;
+  cursor: pointer;
+}
+.item-busca-resultado:last-child { border-bottom: none; }
+.item-busca-resultado:hover { background: var(--fundo); }
+
 .botao {
   display: inline-flex;
   align-items: center;

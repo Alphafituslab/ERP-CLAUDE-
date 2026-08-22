@@ -4801,3 +4801,29 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   direto pelo tablet do chão de fábrica, sem abrir o detalhe da ordem —
   mostra tanto a etapa já em andamento (com "Concluir") quanto a próxima
   da fila ainda não iniciada (com "Iniciar"), não só as já iniciadas.
+- (Entregue na Fase 91) Solicitações de Materiais/EPI — busca de item
+  cadastrado + notificação automática do setor de liberação. Dois ajustes
+  de acompanhamento à Fase 80: (1) o campo "Itens" da tela de nova
+  solicitação, que era uma caixa de texto livre no formato
+  `codigo;quantidade;especificacao` (exigia decorar/copiar o código do
+  Catálogo de Materiais/EPI), virou um campo de busca de verdade —
+  digita parte do código ou da descrição, resultados aparecem na hora, um
+  clique adiciona o item já ligado ao registro do catálogo a uma lista
+  editável (quantidade/especificação por linha, com opção de remover) —
+  só é possível solicitar material já cadastrado, exatamente o pedido
+  original; (2) `POST /solicitacoes-material` agora chama
+  `notificacoes_service.notificar_usuarios_com_permissao(modulo=
+  "solicitacoes_material", acao="aprovar", ...)` assim que a solicitação é
+  criada — a mesma notificação (painel de sino + tentativa de e-mail) já
+  usada desde a Fase 61 para outras aprovações pendentes, agora avisando
+  em tempo real quem pode liberar aquele pedido, sem precisar ficar
+  checando a tela manualmente. Como a Fase 80 tinha deixado
+  `solicitacoes_material.aprovar` sem NENHUM perfil padrão (só o
+  Administrador aprovava, por ter todas as permissões), esta fase também
+  cria o perfil padrão "Liberação de Materiais/EPI" (com
+  `solicitacoes_material.visualizar` + `.aprovar`) para dar um dono
+  imediato a essa responsabilidade — continua 100% reconfigurável pela
+  tela de Perfis já existente (renomear, mover a permissão para outro
+  perfil, adicionar/remover pessoas), exatamente o "deixar cadastrar qual
+  setor aprova" pedido: a configuração é o próprio cadastro de Perfis, não
+  uma tela nova.

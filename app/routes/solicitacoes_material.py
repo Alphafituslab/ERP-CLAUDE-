@@ -22,6 +22,7 @@ from reportlab.lib.units import cm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .. import audit
+from .. import notificacoes_service
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..pdf_marca import desenhar_cabecalho_logo
 from ..permissions import requires_permission
@@ -253,6 +254,17 @@ def criar_solicitacao():
     audit.registrar(conn, tabela="solicitacoes_material", registro_id=solicitacao_id, usuario_id=usuario_atual["id"],
                      acao="solicitacao_material_criada", valor_novo={"numero": numero, "prioridade": prioridade, "itens": len(itens_validados)},
                      ip=client_ip(), dispositivo=client_device())
+    # Envia para o setor de liberação — todo usuário com a permissão
+    # "solicitacoes_material.aprovar" (a mesma que libera o botão Aprovar
+    # abaixo). Quem for esse setor é decidido no cadastro de Perfis, não
+    # aqui — dar/tirar essa permissão de um perfil É a forma de configurar
+    # qual setor libera as solicitações, sem precisar de tela nova.
+    notificacoes_service.notificar_usuarios_com_permissao(
+        conn, modulo="solicitacoes_material", acao="aprovar",
+        tipo="solicitacao_material_pendente",
+        mensagem=f"Nova solicitação de material/EPI {numero} ({prioridade}) de {usuario_atual['nome']} aguardando liberação.",
+        excluir_usuario_id=usuario_atual["id"],
+    )
     return jsonify(_solicitacao_detalhada(conn, solicitacao_id)), 201
 
 

@@ -2176,20 +2176,6 @@
     entregue: "azul", recebimento_confirmado: "ativo", cancelada: "inativo",
   };
 
-  function parseItensSolicitacaoMaterialTexto(texto, materiaisPorCodigo) {
-    return (texto || "")
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean)
-      .map((linha) => {
-        const [codigo, quantidade, especificacao] = linha.split(";").map((p) => (p || "").trim());
-        const material = materiaisPorCodigo[codigo];
-        if (!material) throw new Error(`Material de código "${codigo}" não encontrado. Confira o código no Catálogo de Materiais/EPI.`);
-        if (!quantidade) throw new Error(`Linha "${linha}" precisa de uma quantidade (formato: codigo;quantidade;especificacao_opcional).`);
-        return { material_id: material.id, quantidade_solicitada: Number(quantidade), especificacao: especificacao || undefined };
-      });
-  }
-
   async function renderSolicitacoesMateriais() {
     app.innerHTML = '<div class="carregando">Carregando solicitações…</div>';
     const solicitacoes = await chamarApi("/solicitacoes-material");
@@ -2235,10 +2221,9 @@
 
   function modalNovaSolicitacaoMaterial() {
     const materiais = (state.cache.materiaisSolicitaveis || []).filter((m) => m.status === "ativo");
-    const referencia = materiais
-      .map((m) => `${escapeHtml(m.codigo)} — ${escapeHtml(m.descricao)}${m.e_epi ? " (EPI, C.A. " + escapeHtml(m.numero_ca || "não informado") + ")" : ""}`)
-      .join("<br>");
-    abrirModal(
+    const itensAdicionados = [];
+
+    const wrap = abrirModal(
       `<h3>Nova solicitação de material/EPI</h3>
        <form data-form="nova-solicitacao-material">
          <div class="campo"><label>Setor solicitante</label><input name="setor_solicitante" placeholder="ex.: Produção, Laboratório"></div>
@@ -2250,10 +2235,20 @@
          </div>
          <div class="campo"><label>Justificativa</label><textarea name="justificativa" required placeholder="Por que este material/EPI é necessário"></textarea></div>
          <div class="campo">
-           <label>Itens (um por linha: <span class="mono">codigo;quantidade;especificacao_opcional</span>)</label>
-           <textarea name="itens" required placeholder="EPI0000;2;Tamanho M"></textarea>
-           <div class="dica">Materiais disponíveis:<br>${referencia || "Nenhum material ativo cadastrado ainda — cadastre em Catálogo de Materiais/EPI."}</div>
+           <label>Buscar material/EPI cadastrado</label>
+           <input type="text" id="busca-item-solicitacao-material" placeholder="Digite o código ou a descrição..." autocomplete="off"
+             ${materiais.length === 0 ? "disabled" : ""}>
+           <div id="resultados-busca-item-solicitacao-material" class="lista-busca-resultados"></div>
+           ${materiais.length === 0 ? '<div class="mensagem-erro">Nenhum material ativo cadastrado — cadastre em Catálogo de Materiais/EPI antes de solicitar.</div>' : ""}
          </div>
+         <div class="campo">
+           <label>Itens da solicitação</label>
+           <table id="tabela-itens-solicitacao-material">
+             <thead><tr><th>Material</th><th>Quantidade</th><th>Especificação (opcional)</th><th></th></tr></thead>
+             <tbody></tbody>
+           </table>
+         </div>
+         <input type="hidden" name="itens_json">
          <div class="rodape-modal">
            <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
            <button type="submit" class="botao">Solicitar</button>
@@ -2261,6 +2256,98 @@
        </form>`,
       { largo: true }
     );
+
+    const campoBusca = wrap.querySelector("#busca-item-solicitacao-material");
+    const listaResultados = wrap.querySelector("#resultados-busca-item-solicitacao-material");
+    const corpoTabela = wrap.querySelector("#tabela-itens-solicitacao-material tbody");
+    const campoItensJson = wrap.querySelector('input[name="itens_json"]');
+
+    function sincronizarItensJson() {
+      campoItensJson.value = JSON.stringify(
+        itensAdicionados.map((i) => ({
+          material_id: i.material_id,
+          quantidade_solicitada: Number(i.quantidade) || 0,
+          especificacao: i.especificacao || undefined,
+        }))
+      );
+    }
+
+    function renderizarTabelaItens() {
+      corpoTabela.innerHTML = itensAdicionados.length
+        ? itensAdicionados
+            .map(
+              (item, indice) => `
+          <tr>
+            <td>${escapeHtml(item.codigo)} — ${escapeHtml(item.descricao)}</td>
+            <td><input type="number" step="any" min="0.0001" value="${item.quantidade}" data-indice-item="${indice}"
+              class="campo-quantidade-item-solicitacao" style="width:100px;"></td>
+            <td><input type="text" value="${escapeHtml(item.especificacao || "")}" data-indice-item="${indice}"
+              class="campo-especificacao-item-solicitacao"></td>
+            <td><button type="button" class="botao perigo pequeno" data-indice-item="${indice}" data-remover-item-solicitacao>Remover</button></td>
+          </tr>`
+            )
+            .join("")
+        : '<tr><td colspan="4" class="texto-suave">Nenhum item adicionado ainda — busque acima.</td></tr>';
+      sincronizarItensJson();
+    }
+
+    corpoTabela.addEventListener("input", (e) => {
+      const indice = Number(e.target.dataset.indiceItem);
+      if (Number.isNaN(indice)) return;
+      if (e.target.classList.contains("campo-quantidade-item-solicitacao")) {
+        itensAdicionados[indice].quantidade = e.target.value;
+      } else if (e.target.classList.contains("campo-especificacao-item-solicitacao")) {
+        itensAdicionados[indice].especificacao = e.target.value;
+      }
+      sincronizarItensJson();
+    });
+
+    corpoTabela.addEventListener("click", (e) => {
+      const botao = e.target.closest("[data-remover-item-solicitacao]");
+      if (!botao) return;
+      itensAdicionados.splice(Number(botao.dataset.indiceItem), 1);
+      renderizarTabelaItens();
+    });
+
+    campoBusca.addEventListener("input", () => {
+      const termo = campoBusca.value.trim().toLowerCase();
+      if (!termo) {
+        listaResultados.innerHTML = "";
+        return;
+      }
+      const encontrados = materiais
+        .filter((m) => m.codigo.toLowerCase().includes(termo) || m.descricao.toLowerCase().includes(termo))
+        .slice(0, 8);
+      listaResultados.innerHTML = encontrados.length
+        ? encontrados
+            .map(
+              (m) => `
+          <button type="button" class="item-busca-resultado" data-material-id="${m.id}">
+            <span class="mono">${escapeHtml(m.codigo)}</span> — ${escapeHtml(m.descricao)}${
+                m.e_epi ? ` <span class="texto-suave">(EPI, C.A. ${escapeHtml(m.numero_ca || "não informado")})</span>` : ""
+              }
+          </button>`
+            )
+            .join("")
+        : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nenhum material encontrado com esse termo.</p>';
+    });
+
+    listaResultados.addEventListener("click", (e) => {
+      const botao = e.target.closest(".item-busca-resultado");
+      if (!botao) return;
+      const materialId = Number(botao.dataset.materialId);
+      if (itensAdicionados.some((i) => i.material_id === materialId)) {
+        listaResultados.innerHTML = '<p class="mensagem-erro" style="padding:6px 2px;margin:0;">Este material já foi adicionado — ajuste a quantidade na lista abaixo.</p>';
+        return;
+      }
+      const material = materiais.find((m) => m.id === materialId);
+      itensAdicionados.push({ material_id: material.id, codigo: material.codigo, descricao: material.descricao, quantidade: 1, especificacao: "" });
+      campoBusca.value = "";
+      listaResultados.innerHTML = "";
+      renderizarTabelaItens();
+    });
+
+    renderizarTabelaItens();
   }
 
   function modalRejeitarSolicitacaoMaterial(solicitacaoId) {
@@ -11559,10 +11646,18 @@
 
       // ---- Fase 80: Solicitações de Materiais/EPI ----
       case "nova-solicitacao-material": {
-        const materiaisPorCodigo = {};
-        (state.cache.materiaisSolicitaveis || []).forEach((m) => { materiaisPorCodigo[m.codigo] = m; });
-        const itensSolicitados = parseItensSolicitacaoMaterialTexto(dados.get("itens"), materiaisPorCodigo);
-        if (!itensSolicitados.length) throw new Error("Informe ao menos um item.");
+        let itensSolicitados;
+        try {
+          itensSolicitados = JSON.parse(dados.get("itens_json") || "[]");
+        } catch {
+          throw new Error("Erro ao processar os itens da solicitação — tente adicionar novamente.");
+        }
+        if (!itensSolicitados.length) throw new Error("Busque e adicione ao menos um item cadastrado.");
+        for (const item of itensSolicitados) {
+          if (!item.quantidade_solicitada || item.quantidade_solicitada <= 0) {
+            throw new Error("Informe uma quantidade maior que zero para cada item adicionado.");
+          }
+        }
         const novaSolicitacao = await chamarApi("/solicitacoes-material", {
           method: "POST",
           body: {

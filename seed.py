@@ -495,6 +495,17 @@ PERFIS_PADRAO = [
         # compra" continua sendo uma responsabilidade só deles.
         "producao.gerar_sugestao_compra",
     ]),
+    # Fase 91 — "setor de liberação" das Solicitações de Materiais/EPI: até
+    # aqui, "solicitacoes_material.aprovar" não estava em NENHUM perfil
+    # padrão (só o Administrador aprovava, por ter TODAS as permissões).
+    # Este perfil dá a essa responsabilidade um dono explícito desde a
+    # instalação — mas continua tão configurável quanto qualquer outro
+    # perfil: em Perfis, dá pra renomear, trocar quem está nele, ou mover
+    # a permissão "aprovar" para outro perfil qualquer, se a empresa
+    # preferir outro setor decidindo isso (ex.: Segurança do Trabalho).
+    ("Liberação de Materiais/EPI", "Aprova ou rejeita solicitações de material/EPI pendentes", 1, [
+        "solicitacoes_material.visualizar", "solicitacoes_material.aprovar",
+    ]),
     ("Produção", "Execução da produção (MES)", 1, [
         "itens.visualizar", "lotes.visualizar", "formulas.visualizar",
         "producao.visualizar", "producao.apontar", "estoque.visualizar", "empresas.visualizar",
