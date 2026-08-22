@@ -263,6 +263,36 @@ def criar_pedido_compra_interno(conn, usuario_atual, fornecedor_id, itens_payloa
     return pedido_id
 
 
+def _ultimas_compras_item(conn, item_id, limite=2):
+    """Fase 89 — junta `itens_pedido_compra` + `pedidos_compra` +
+    `fornecedores` para responder "quando e por quanto compramos isso da
+    última vez, e de quem" — não existia nenhum relatório assim antes
+    desta fase (a única coisa parecida, `custeio.custo_medio_item`, faz
+    uma MÉDIA ponderada entre todos os lotes já recebidos, não mostra as
+    últimas compras individualmente)."""
+    rows = conn.execute(
+        """
+        SELECT pc.numero, pc.criado_em, pc.enviado_em, pc.status, f.nome AS fornecedor_nome,
+               ipc.quantidade_pedida, ipc.quantidade_recebida, ipc.preco_unitario, ipc.unidade
+        FROM itens_pedido_compra ipc
+        JOIN pedidos_compra pc ON pc.id = ipc.pedido_compra_id
+        JOIN fornecedores f ON f.id = pc.fornecedor_id
+        WHERE ipc.item_id = ?
+        ORDER BY pc.criado_em DESC
+        LIMIT ?
+        """,
+        (item_id, limite),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@bp.get("/itens/<int:item_id>/ultimas-compras")
+@requires_permission("compras", "visualizar")
+def ultimas_compras_item(item_id):
+    conn = get_db()
+    return jsonify(_ultimas_compras_item(conn, item_id))
+
+
 @bp.get("/pedidos")
 @requires_permission("compras", "visualizar")
 def listar_pedidos():

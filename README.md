@@ -4759,3 +4759,14 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   continua sempre disponível, porque o saldo pode mudar até lá (chegada
   de matéria-prima, cancelamento de outro pedido) — o gate de verdade
   continua sendo só na hora de liberar/confirmar, exatamente como antes.
+- (Entregue na Fase 89) Relatório "Últimas Compras por Item" — não
+  existia nenhum relatório assim antes desta fase (o mais parecido,
+  `custeio.custo_medio_item`, calcula uma MÉDIA ponderada entre todos os
+  lotes recebidos, nunca mostra as compras individuais). Nova função
+  `compras.py::_ultimas_compras_item` (junta `itens_pedido_compra` +
+  `pedidos_compra` + `fornecedores`, ordenado por mais recente) exposta
+  em `GET /compras/itens/<item_id>/ultimas-compras`. Usada no modal
+  "Gerar pedido de compra" (a partir de uma sugestão do MRP): mostra o
+  histórico e pré-preenche o preço unitário com a compra mais recente que
+  tinha preço registrado — só um valor inicial, o usuário edita livremente
+  antes de enviar.

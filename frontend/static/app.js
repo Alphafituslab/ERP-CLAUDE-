@@ -3856,7 +3856,7 @@
         .map((o) => `<a href="#/producao/${o.ordem_producao_id}">${escapeHtml(o.numero)}</a>`).join(", ");
       const acoesHtml = s.status === "pendente"
         ? `${podeDecidir ? `<button class="botao secundario pequeno" data-acao="atender-sugestao-compra" data-id="${s.id}" data-item="${escapeHtml(s.item_codigo)}">Atender</button>` : ""}
-           ${podeGerarPedido ? `<button class="botao pequeno" data-acao="gerar-pedido-de-sugestao" data-id="${s.id}"
+           ${podeGerarPedido ? `<button class="botao pequeno" data-acao="gerar-pedido-de-sugestao" data-id="${s.id}" data-item-id="${s.item_id}"
                data-item-codigo="${escapeHtml(s.item_codigo)}" data-item-unidade="${escapeHtml(s.item_unidade || "")}"
                data-quantidade="${s.quantidade_sugerida}" data-fornecedor-sugerido-id="${s.fornecedor_sugerido_id || ""}">Gerar pedido de compra</button>` : ""}
            ${podeDecidir ? `<button class="botao perigo pequeno" data-acao="descartar-sugestao-compra" data-id="${s.id}" data-item="${escapeHtml(s.item_codigo)}">Descartar</button>` : ""}`
@@ -3944,11 +3944,20 @@
       </form>`);
   }
 
-  function modalGerarPedidoDeSugestao(sugestao) {
+  function modalGerarPedidoDeSugestao(sugestao, ultimasCompras) {
     const fornecedores = state.cache.fornecedores || [];
     const opcoesFornecedor = fornecedores
       .map((f) => `<option value="${f.id}" ${f.id === sugestao.fornecedor_sugerido_id ? "selected" : ""}>${escapeHtml(f.nome)}</option>`)
       .join("");
+    // Fase 89 — pré-preenche o preço com a compra mais recente (se houver
+    // alguma com preço registrado) — só um valor inicial no campo, o
+    // usuário pode apagar/trocar livremente antes de enviar.
+    const ultimaComPreco = (ultimasCompras || []).find((c) => c.preco_unitario != null);
+    const historicoHtml = (ultimasCompras || []).length
+      ? `<div class="dica">Últimas compras deste item:<br>${ultimasCompras.map((c) =>
+          `${fmtData(c.criado_em)} — ${escapeHtml(c.fornecedor_nome)} — ${c.preco_unitario != null ? `R$ ${Number(c.preco_unitario).toFixed(2)}/${escapeHtml(c.unidade)}` : "sem preço registrado"} (${escapeHtml(c.numero)})`
+        ).join("<br>")}</div>`
+      : "";
     abrirModal(`
       <h3>Gerar pedido de compra — ${escapeHtml(sugestao.item_codigo)}</h3>
       <p class="texto-suave">Cria um Pedido de Compra formal (Fase 58) com este item, em <strong>rascunho</strong>,
@@ -3960,7 +3969,9 @@
         </div>
         <div class="campo">
           <label>Preço unitário negociado (opcional)</label>
-          <input name="preco_unitario" type="number" step="any" min="0" placeholder="ex.: 12.50">
+          <input name="preco_unitario" type="number" step="any" min="0" placeholder="ex.: 12.50"
+                 value="${ultimaComPreco ? ultimaComPreco.preco_unitario : ""}">
+          ${historicoHtml}
         </div>
         <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes"></textarea></div>
         <div class="rodape-modal">
@@ -10436,19 +10447,26 @@
       case "descartar-sugestao-compra":
         modalDescartarSugestaoCompra(Number(alvo.dataset.id), alvo.dataset.item);
         return;
-      case "gerar-pedido-de-sugestao":
+      case "gerar-pedido-de-sugestao": {
         // Não existe endpoint de GET de uma sugestão isolada (só a lista
         // com filtro de status) — por isso reconstruímos aqui um objeto
         // "sugestão-like" a partir dos data-* que renderApsSugestoesCompra
         // já coloca no próprio botão, em vez de fazer uma chamada extra.
+        const itemId = Number(alvo.dataset.itemId);
+        // Fase 89 — últimas compras deste item, para pré-preencher o
+        // preço unitário sem o usuário precisar ir consultar em outra
+        // tela; puramente informativo, nunca sobrepõe um preço já digitado.
+        const ultimasCompras = await chamarApi(`/compras/itens/${itemId}/ultimas-compras`).catch(() => []);
         modalGerarPedidoDeSugestao({
           id: Number(alvo.dataset.id),
+          item_id: itemId,
           item_codigo: alvo.dataset.itemCodigo,
           item_unidade: alvo.dataset.itemUnidade,
           quantidade_sugerida: Number(alvo.dataset.quantidade),
           fornecedor_sugerido_id: alvo.dataset.fornecedorSugeridoId ? Number(alvo.dataset.fornecedorSugeridoId) : null,
-        });
+        }, ultimasCompras);
         return;
+      }
       // ---- Fase 58: Pedido de Compra formal ----
       case "novo-pedido-compra":
         modalNovoPedidoCompra();
