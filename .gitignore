@@ -19,3 +19,4 @@ demo_log*.txt
 installer/dist/
 installer/build/
 installer/saida/
+backups_manuais/
