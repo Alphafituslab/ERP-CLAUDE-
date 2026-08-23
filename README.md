@@ -5012,3 +5012,28 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   regime (faixa do Simples Nacional, presunção do Lucro Presumido etc.) é
   uma conta tributária que este sistema deliberadamente não tenta
   adivinhar sozinho — decisão confirmada com o usuário.
+- (Entregue na Fase 100) Catálogo de Fluxo ganha tela de administração +
+  setor responsável por etapa. O Catálogo de Fluxo Configurável (Fase 81)
+  já permitia cadastrar novas etapas via `POST /fluxo/tipos-etapa`, mas
+  NUNCA tinha tela — só existia a API. Pedido do usuário: "colocar mais
+  opções de ações, deixar poder cadastrar cada uma delas e que cada setor
+  só possa ver a sua ação". Nova tela "Catálogo de Fluxo" (menu Produção
+  & PCP) lista/cria/edita etapas para qualquer entidade (Pedido de Venda,
+  Ordem de Produção, Pedido de Compra, Lote). Nova coluna
+  `tipos_etapa_fluxo.perfil_id` (`schema_fase100.sql`, opcional/nullable)
+  — sem perfil definido, uma etapa continua visível para qualquer um com
+  `fluxo.apontar` (comportamento de sempre, nenhuma etapa já cadastrada
+  muda); com um perfil escolhido, só quem pertence àquele setor específico
+  vê e age sobre ela. O filtro (`fluxo_service.etapas_da_entidade`, agora
+  recebendo o usuário atual) se aplica só na LISTAGEM por entidade — a
+  materialização da etapa em `fluxo_instancias` continua acontecendo para
+  todas as etapas ativas, independente de quem está olhando, pra ela já
+  estar pronta quando alguém do setor certo abrir a tela. Testado com um
+  usuário Administrador (que não pertence a nenhum perfil "Financeiro")
+  não vendo uma etapa restrita a Financeiro, e um usuário Financeiro
+  vendo — a filtragem é por pertencimento real ao perfil, não por ter
+  todas as permissões. Nova rota `GET /fluxo/perfis-disponiveis`
+  (permissão `fluxo.configurar`) devolve só id/nome dos perfis, para
+  popular o seletor de setor sem exigir `perfis.visualizar` (que
+  devolveria informação mais ampla do que quem cadastra uma etapa
+  precisa ver).

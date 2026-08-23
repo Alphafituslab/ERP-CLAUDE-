@@ -327,6 +327,7 @@
           case "producao": return param ? renderOrdemDetalhe(Number(param)) : renderOrdensProducao();
           case "centros-trabalho": return renderCentrosTrabalho();
           case "tipos-etapa-producao": return renderTiposEtapaProducao();
+          case "catalogo-fluxo": return renderCatalogoFluxo();
           case "painel-tempo-real": return renderPainelTempoReal();
           case "painel-executivo": return param ? renderLinhaDoTempoOrdemExecutivo(Number(param)) : renderPainelExecutivo();
           case "aps-agenda": return renderApsAgenda();
@@ -443,6 +444,7 @@
         { rota: "#/producao", chave: "producao", label: "Ordens de Produção", permissao: ["producao", "visualizar"] },
         { rota: "#/centros-trabalho", chave: "centros-trabalho", label: "Centros de Trabalho (APS)", permissao: ["centros_trabalho", "visualizar"] },
         { rota: "#/tipos-etapa-producao", chave: "tipos-etapa-producao", label: "Tipos de Etapa (Pesagem, Mistura...)", permissao: ["producao", "visualizar"] },
+        { rota: "#/catalogo-fluxo", chave: "catalogo-fluxo", label: "Catálogo de Fluxo", permissao: ["fluxo", "apontar"] },
         { rota: "#/aps-agenda", chave: "aps-agenda", label: "Agenda (APS)", permissao: ["producao", "visualizar"] },
         { rota: "#/aps-mrp", chave: "aps-mrp", label: "MRP (Necessidade de Materiais)", permissao: ["producao", "visualizar"] },
         { rota: "#/aps-sugestoes-compra", chave: "aps-sugestoes-compra", label: "Sugestões de Compra (MRP)", permissao: ["producao", "visualizar"] },
@@ -3699,6 +3701,107 @@
           <select name="status">
             <option value="ativo" ${t.status === "ativo" ? "selected" : ""}>Ativo</option>
             <option value="inativo" ${t.status === "inativo" ? "selected" : ""}>Inativo (some das opções ao cadastrar etapa nova)</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  // =======================================================================
+  // Fase 100 — Catálogo de Fluxo Configurável: tela de administração das
+  // etapas cadastradas em `tipos_etapa_fluxo` (Fase 81), que até aqui só
+  // existiam via API — sem nenhuma tela para cadastrar mais nenhuma.
+  // Cada etapa pode ser restrita a um único setor (perfil): sem setor
+  // definido, continua visível para qualquer um com `fluxo.apontar` (o
+  // comportamento de sempre); com um setor escolhido, só quem pertence a
+  // ele vê e age sobre aquela etapa especificamente.
+  // =======================================================================
+  const ROTULOS_ENTIDADE_FLUXO = {
+    pedido_venda: "Pedido de Venda", ordem_producao: "Ordem de Produção",
+    pedido_compra: "Pedido de Compra", lote: "Lote",
+  };
+
+  async function renderCatalogoFluxo() {
+    app.innerHTML = '<div class="carregando">Carregando catálogo de fluxo…</div>';
+    const tipos = await chamarApi("/fluxo/tipos-etapa?incluir_inativos=1");
+    const podeConfigurar = temPermissao("fluxo", "configurar");
+    if (podeConfigurar) state.cache.perfisDisponiveisFluxo = await chamarApi("/fluxo/perfis-disponiveis");
+
+    const linhas = tipos
+      .map((t) => `<tr>
+        <td>${escapeHtml(ROTULOS_ENTIDADE_FLUXO[t.entidade_tipo] || t.entidade_tipo)}</td>
+        <td class="mono">${escapeHtml(t.codigo)}</td>
+        <td>${escapeHtml(t.nome)}</td>
+        <td>${t.ordem_padrao}</td>
+        <td>${t.origem === "sistema" ? '<span class="selo azul">Automática</span>' : '<span class="selo inativo">Manual</span>'}</td>
+        <td>${t.perfil_nome ? escapeHtml(t.perfil_nome) : '<span class="texto-suave">Todos com permissão</span>'}</td>
+        <td><span class="selo ${t.status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(t.status)}</span></td>
+        <td>${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="editar-tipo-etapa-fluxo" data-id="${t.id}">Editar</button>` : ""}</td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Catálogo de Fluxo</h2>
+       <p class="texto-suave">Etapas que aparecem no cartão de acompanhamento de um Pedido de Venda, Ordem de
+       Produção, Pedido de Compra ou Lote (ex.: "Separação"). Cada etapa pode ser restrita a um único setor —
+       sem setor definido, qualquer um com permissão de apontar continua vendo e agindo sobre ela; com um setor
+       escolhido, só quem pertence àquele perfil vê a etapa. Etapas "Automáticas" são marcadas sozinhas por uma
+       ação real do sistema (ex.: confirmar uma coleta) e nunca aparecem com botão manual.</p>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${tipos.length} etapa(s) cadastrada(s)</span>
+           ${podeConfigurar ? `<button class="botao" data-acao="nova-etapa-fluxo">+ Nova etapa</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Onde aparece</th><th>Código</th><th>Nome</th><th>Ordem</th><th>Tipo</th><th>Setor responsável</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="8" class="texto-suave">Nenhuma etapa cadastrada ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "catalogo-fluxo"
+    );
+  }
+
+  function _opcoesPerfilFluxo(selecionadoId) {
+    const perfis = state.cache.perfisDisponiveisFluxo || [];
+    return `<option value="">Todos com permissão de apontar</option>` +
+      perfis.map((p) => `<option value="${p.id}" ${selecionadoId === p.id ? "selected" : ""}>${escapeHtml(p.nome)}</option>`).join("");
+  }
+
+  function modalNovaEtapaFluxo() {
+    const opcoesEntidade = Object.entries(ROTULOS_ENTIDADE_FLUXO)
+      .map(([valor, rotulo]) => `<option value="${valor}">${escapeHtml(rotulo)}</option>`).join("");
+    abrirModal(`
+      <h3>Nova etapa de fluxo</h3>
+      <form data-form="criar-etapa-fluxo">
+        <div class="campo"><label>Onde aparece</label><select name="entidade_tipo" required>${opcoesEntidade}</select></div>
+        <div class="campo"><label>Código (identificador interno, sem espaços)</label><input name="codigo" required placeholder="ex.: conferencia_fiscal"></div>
+        <div class="campo"><label>Nome (mostrado na tela)</label><input name="nome" required placeholder="ex.: Conferência Fiscal"></div>
+        <div class="campo"><label>Ordem</label><input name="ordem_padrao" type="number" step="1" value="0"></div>
+        <div class="campo"><label>Setor responsável</label><select name="perfil_id">${_opcoesPerfilFluxo(null)}</select>
+          <div class="dica">Só usuários deste perfil verão e poderão apontar esta etapa. Deixe em "Todos" se qualquer um com permissão de apontar deve ver.</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarEtapaFluxo(t) {
+    abrirModal(`
+      <h3>Editar ${escapeHtml(t.nome)}</h3>
+      <p class="texto-suave">${escapeHtml(ROTULOS_ENTIDADE_FLUXO[t.entidade_tipo] || t.entidade_tipo)} — código <span class="mono">${escapeHtml(t.codigo)}</span></p>
+      <form data-form="editar-etapa-fluxo" data-id="${t.id}">
+        <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(t.nome)}" required></div>
+        <div class="campo"><label>Ordem</label><input name="ordem_padrao" type="number" step="1" value="${t.ordem_padrao}"></div>
+        <div class="campo"><label>Setor responsável</label><select name="perfil_id">${_opcoesPerfilFluxo(t.perfil_id)}</select></div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${t.status === "ativo" ? "selected" : ""}>Ativo</option>
+            <option value="inativo" ${t.status === "inativo" ? "selected" : ""}>Inativo</option>
           </select>
         </div>
         <div class="rodape-modal">
@@ -11141,6 +11244,16 @@
         modalEditarTipoEtapa(tipo);
         return;
       }
+      // ---- Fase 100: Catálogo de Fluxo ----
+      case "nova-etapa-fluxo":
+        modalNovaEtapaFluxo();
+        return;
+      case "editar-tipo-etapa-fluxo": {
+        const tiposFluxo = await chamarApi("/fluxo/tipos-etapa?incluir_inativos=1");
+        const tipoFluxo = tiposFluxo.find((t) => t.id === Number(alvo.dataset.id));
+        modalEditarEtapaFluxo(tipoFluxo);
+        return;
+      }
       // ---- Fase 75: Painel de Chão de Fábrica em Tempo Real — apontamento
       // direto pelo tablet do setor, sem precisar abrir a ordem inteira ----
       case "painel-iniciar-etapa": {
@@ -12487,6 +12600,33 @@
         fecharModais();
         definirFlash("ok", "Tipo de etapa atualizado.");
         return renderTiposEtapaProducao();
+      }
+      // ---- Fase 100: Catálogo de Fluxo ----
+      case "criar-etapa-fluxo": {
+        await chamarApi("/fluxo/tipos-etapa", {
+          method: "POST",
+          body: {
+            entidade_tipo: dados.get("entidade_tipo"), codigo: dados.get("codigo"), nome: dados.get("nome"),
+            ordem_padrao: Number(dados.get("ordem_padrao")) || 0,
+            perfil_id: dados.get("perfil_id") ? Number(dados.get("perfil_id")) : null,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Etapa de fluxo criada.");
+        return renderCatalogoFluxo();
+      }
+      case "editar-etapa-fluxo": {
+        await chamarApi(`/fluxo/tipos-etapa/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            nome: dados.get("nome"), ordem_padrao: Number(dados.get("ordem_padrao")) || 0,
+            perfil_id: dados.get("perfil_id") ? Number(dados.get("perfil_id")) : null,
+            status: dados.get("status"),
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Etapa de fluxo atualizada.");
+        return renderCatalogoFluxo();
       }
       // ---- Fase 75: apontamento direto pelo Painel de Chão de Fábrica ----
       case "painel-concluir-etapa": {

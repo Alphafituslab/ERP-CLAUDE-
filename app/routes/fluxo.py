@@ -25,6 +25,28 @@ def listar_tipos_etapa():
     return jsonify(fluxo_service.listar_tipos_etapa(conn, entidade_tipo, incluir_inativos))
 
 
+def _validar_perfil_id(conn, perfil_id):
+    if perfil_id is None:
+        return None
+    if not conn.execute("SELECT 1 FROM perfis WHERE id = ?", (perfil_id,)).fetchone():
+        raise ApiError("Perfil (setor) não encontrado.", status=404)
+    return perfil_id
+
+
+@bp.get("/perfis-disponiveis")
+@requires_permission("fluxo", "configurar")
+def listar_perfis_disponiveis():
+    """Fase 100 — lista mínima (id/nome) para popular o seletor de "setor
+    responsável" ao cadastrar/editar um tipo de etapa. Deliberadamente uma
+    rota própria, em vez de exigir `perfis.visualizar` (que devolveria
+    também as permissões de cada perfil, informação mais ampla do que
+    quem cadastra uma etapa de fluxo precisa ver) — mesmo perfil que já
+    tem `fluxo.configurar` (hoje só PCP/Administrador) já basta."""
+    conn = get_db()
+    rows = conn.execute("SELECT id, nome FROM perfis ORDER BY nome").fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
 @bp.post("/tipos-etapa")
 @requires_permission("fluxo", "configurar")
 def criar_tipo_etapa():
@@ -39,6 +61,7 @@ def criar_tipo_etapa():
     nome = (dados.get("nome") or "").strip()
     if not codigo or not nome:
         raise ApiError("Informe codigo e nome.", status=400)
+    perfil_id = _validar_perfil_id(conn, dados.get("perfil_id"))
 
     if conn.execute(
         "SELECT id FROM tipos_etapa_fluxo WHERE entidade_tipo = ? AND codigo = ?", (entidade_tipo, codigo)
@@ -46,13 +69,14 @@ def criar_tipo_etapa():
         raise ApiError("Já existe um tipo de etapa com este código para esta entidade.", status=409)
 
     cur = conn.execute(
-        "INSERT INTO tipos_etapa_fluxo (entidade_tipo, codigo, nome, ordem_padrao, origem, criado_por) "
-        "VALUES (?, ?, ?, ?, 'manual', ?)",
-        (entidade_tipo, codigo, nome, dados.get("ordem_padrao") or 0, usuario_atual["id"]),
+        "INSERT INTO tipos_etapa_fluxo (entidade_tipo, codigo, nome, ordem_padrao, origem, perfil_id, criado_por) "
+        "VALUES (?, ?, ?, ?, 'manual', ?, ?)",
+        (entidade_tipo, codigo, nome, dados.get("ordem_padrao") or 0, perfil_id, usuario_atual["id"]),
     )
     tipo_id = cur.lastrowid
     audit.registrar(conn, tabela="tipos_etapa_fluxo", registro_id=tipo_id, usuario_id=usuario_atual["id"],
-                     acao="tipo_etapa_fluxo_criado", valor_novo={"entidade_tipo": entidade_tipo, "codigo": codigo, "nome": nome},
+                     acao="tipo_etapa_fluxo_criado",
+                     valor_novo={"entidade_tipo": entidade_tipo, "codigo": codigo, "nome": nome, "perfil_id": perfil_id},
                      ip=client_ip(), dispositivo=client_device())
     row = conn.execute("SELECT * FROM tipos_etapa_fluxo WHERE id = ?", (tipo_id,)).fetchone()
     return jsonify(dict(row)), 201
@@ -75,10 +99,11 @@ def editar_tipo_etapa(tipo_id):
     status = dados.get("status", anterior["status"])
     if status not in ("ativo", "inativo"):
         raise ApiError("status deve ser 'ativo' ou 'inativo'.", status=400)
+    perfil_id = _validar_perfil_id(conn, dados.get("perfil_id", anterior["perfil_id"]))
 
     conn.execute(
-        "UPDATE tipos_etapa_fluxo SET nome = ?, ordem_padrao = ?, status = ? WHERE id = ?",
-        (nome, ordem_padrao, status, tipo_id),
+        "UPDATE tipos_etapa_fluxo SET nome = ?, ordem_padrao = ?, status = ?, perfil_id = ? WHERE id = ?",
+        (nome, ordem_padrao, status, perfil_id, tipo_id),
     )
     novo = conn.execute("SELECT * FROM tipos_etapa_fluxo WHERE id = ?", (tipo_id,)).fetchone()
     audit.registrar(conn, tabela="tipos_etapa_fluxo", registro_id=tipo_id, usuario_id=usuario_atual["id"],
@@ -93,8 +118,9 @@ def editar_tipo_etapa(tipo_id):
 @bp.get("/<entidade_tipo>/<int:entidade_id>/etapas")
 @requires_permission("fluxo", "apontar")
 def listar_etapas_entidade(entidade_tipo, entidade_id):
+    usuario_atual = g.usuario_atual
     conn = get_db()
-    return jsonify(fluxo_service.etapas_da_entidade(conn, entidade_tipo, entidade_id))
+    return jsonify(fluxo_service.etapas_da_entidade(conn, entidade_tipo, entidade_id, usuario_atual["id"]))
 
 
 @bp.post("/<entidade_tipo>/<int:entidade_id>/etapas/<int:tipo_etapa_fluxo_id>/iniciar")

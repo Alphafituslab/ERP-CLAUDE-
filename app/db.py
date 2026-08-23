@@ -131,6 +131,7 @@ SCHEMA_FILES = [
     "schema_fase92.sql",  # Fase 92 — 2FA obrigatório por perfil (Administrador e Financeiro por padrão)
     "schema_fase95.sql",  # Fase 95 — 2FA: confiar neste dispositivo por 24h (não repetir o código em todo login)
     "schema_fase99.sql",  # Fase 99 — Tabelas de Preço (pré-preenchimento de preço no Pedido de Venda, por cliente)
+    "schema_fase100.sql",  # Fase 100 — Catálogo de Fluxo: setor (perfil) responsável por cada etapa, opcional
 ]
 
 

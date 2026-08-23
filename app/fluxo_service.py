@@ -22,22 +22,31 @@ def _now_iso():
 def listar_tipos_etapa(conn, entidade_tipo=None, incluir_inativos=False):
     clausulas, params = [], []
     if entidade_tipo:
-        clausulas.append("entidade_tipo = ?")
+        clausulas.append("t.entidade_tipo = ?")
         params.append(entidade_tipo)
     if not incluir_inativos:
-        clausulas.append("status = 'ativo'")
+        clausulas.append("t.status = 'ativo'")
     where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
     rows = conn.execute(
-        f"SELECT * FROM tipos_etapa_fluxo {where} ORDER BY entidade_tipo, ordem_padrao, id", params
+        f"""
+        SELECT t.*, p.nome AS perfil_nome FROM tipos_etapa_fluxo t
+        LEFT JOIN perfis p ON p.id = t.perfil_id
+        {where} ORDER BY t.entidade_tipo, t.ordem_padrao, t.id
+        """,
+        params,
     ).fetchall()
     return [dict(r) for r in rows]
 
 
-def etapas_da_entidade(conn, entidade_tipo, entidade_id):
+def etapas_da_entidade(conn, entidade_tipo, entidade_id, usuario_id):
     """Materializa (lazy) uma linha 'pendente' em fluxo_instancias para cada tipo ATIVO deste
-    entidade_tipo que a entidade ainda não tenha, e devolve todas as etapas já materializadas —
-    é assim que uma etapa cadastrada depois passa a aparecer em entidades já existentes, sem
-    precisar de nenhum backfill."""
+    entidade_tipo que a entidade ainda não tenha, e devolve as etapas já materializadas que o
+    USUÁRIO ATUAL pode ver — Fase 100: uma etapa com `perfil_id` definido só aparece para quem
+    pertence àquele perfil (setor); uma etapa sem perfil (a maioria, incluindo tudo cadastrado
+    antes desta fase) continua visível para qualquer um com `fluxo.apontar`, sem mudança de
+    comportamento. A MATERIALIZAÇÃO acontece para TODAS as etapas ativas, independente do
+    filtro — é assim que a etapa já existe pronta para quando alguém do setor certo abrir a
+    tela, sem precisar de nenhum backfill."""
     if entidade_tipo not in ENTIDADES_VALIDAS:
         raise ApiError(f"entidade_tipo deve ser um de: {', '.join(ENTIDADES_VALIDAS)}.", status=400)
 
@@ -55,12 +64,15 @@ def etapas_da_entidade(conn, entidade_tipo, entidade_id):
 
     rows = conn.execute(
         """
-        SELECT fi.*, t.codigo, t.nome, t.ordem_padrao, t.origem
-        FROM fluxo_instancias fi JOIN tipos_etapa_fluxo t ON t.id = fi.tipo_etapa_fluxo_id
+        SELECT fi.*, t.codigo, t.nome, t.ordem_padrao, t.origem, t.perfil_id, p.nome AS perfil_nome
+        FROM fluxo_instancias fi
+        JOIN tipos_etapa_fluxo t ON t.id = fi.tipo_etapa_fluxo_id
+        LEFT JOIN perfis p ON p.id = t.perfil_id
         WHERE t.entidade_tipo = ? AND fi.entidade_id = ?
+          AND (t.perfil_id IS NULL OR t.perfil_id IN (SELECT perfil_id FROM usuario_perfil WHERE usuario_id = ?))
         ORDER BY t.ordem_padrao, t.id
         """,
-        (entidade_tipo, entidade_id),
+        (entidade_tipo, entidade_id, usuario_id),
     ).fetchall()
     return [dict(r) for r in rows]
 
