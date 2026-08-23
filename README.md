@@ -4982,3 +4982,33 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   reutilizável criada em `.claude/skills/auditoria-seguranca/SKILL.md`
   para repetir este tipo de auditoria no futuro sem reconstruir o
   contexto do zero.
+- (Entregue na Fase 99) Tabelas de Preço + busca de cliente/item + margem
+  de lucro no Pedido de Venda. Até aqui não existia NENHUM preço de venda
+  padrão em lugar nenhum do sistema — só o valor digitado à mão em cada
+  linha de pedido; a tabela de preço aqui é uma SUGESTÃO pré-preenchida,
+  nunca uma trava (um item sem preço cadastrado na tabela do cliente
+  simplesmente fica em branco para digitar manualmente, como sempre foi).
+  Novas tabelas `tabelas_preco`/`tabelas_preco_itens` (`schema_fase99.sql`)
+  e `clientes.tabela_preco_id` (opcional, nullable) — um cliente sem
+  tabela associada continua funcionando exatamente como antes. Nova tela
+  "Tabelas de Preço" (permissões `tabelas_preco.visualizar`/`.gerenciar`)
+  para cadastrar tabelas e definir o preço de cada item nelas; a edição
+  de cliente ganhou um seletor de tabela (só aparece pra quem tem
+  `tabelas_preco.visualizar`, e o frontend NUNCA manda a chave
+  `tabela_preco_id` quando o campo nem apareceu — sem essa guarda, um
+  `null` implícito apagaria a tabela já associada ao cliente por engano).
+  `modalNovoPedido`/`modalAdicionarItemPedido` trocaram os `&lt;select&gt;`
+  de cliente/item pelo mesmo padrão de busca-e-clique já usado em
+  Solicitações de Materiais/EPI (Fase 91) — ao escolher cliente e item, o
+  preço já vem preenchido da tabela do cliente, se houver. Margem de
+  lucro (`GET /custeio/margem-item/&lt;id&gt;`, permissão `custeio.
+  visualizar` — dado de custo continua tão sensível quanto em qualquer
+  outra tela de Custeio) reaproveita o MESMO custo já usado nas outras
+  abas de Custeio (`custo_projetado_formula` para produto com fórmula
+  ativa, `custo_medio_item` para o resto) e o MESMO conjunto de alíquotas
+  já configurado para o DRE (`configuracoes_financeiro`) — nenhum imposto
+  novo foi inventado. O regime tributário da empresa emissora aparece só
+  como INFORMAÇÃO ao lado do número: modelar o imposto exato de cada
+  regime (faixa do Simples Nacional, presunção do Lucro Presumido etc.) é
+  uma conta tributária que este sistema deliberadamente não tenta
+  adivinhar sozinho — decisão confirmada com o usuário.

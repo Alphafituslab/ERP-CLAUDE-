@@ -362,7 +362,13 @@ def _validar_item_vendavel(conn, item_id):
 @requires_permission("comercial", "visualizar")
 def listar_clientes():
     conn = get_db()
-    rows = conn.execute("SELECT * FROM clientes ORDER BY razao_social").fetchall()
+    rows = conn.execute(
+        """
+        SELECT c.*, tp.nome AS tabela_preco_nome FROM clientes c
+        LEFT JOIN tabelas_preco tp ON tp.id = c.tabela_preco_id
+        ORDER BY c.razao_social
+        """
+    ).fetchall()
     return jsonify([dict(r) for r in rows])
 
 
@@ -371,6 +377,29 @@ def listar_clientes():
 def obter_cliente(cliente_id):
     conn = get_db()
     return jsonify(_cliente_ou_404(conn, cliente_id))
+
+
+@bp.get("/clientes/<int:cliente_id>/tabela-preco")
+@requires_permission("comercial", "visualizar")
+def tabela_preco_do_cliente(cliente_id):
+    """Fase 99 — usado pela tela de novo pedido para pré-preencher o preço
+    assim que o cliente e o item são escolhidos: devolve todo o conteúdo
+    da tabela de preço do cliente de uma vez (em vez de uma chamada por
+    item), já que a busca de item é feita em memória no frontend."""
+    conn = get_db()
+    cliente = _cliente_ou_404(conn, cliente_id)
+    if not cliente["tabela_preco_id"]:
+        return jsonify({"tabela_preco_id": None, "tabela_preco_nome": None, "itens": []})
+    tabela = conn.execute("SELECT nome FROM tabelas_preco WHERE id = ?", (cliente["tabela_preco_id"],)).fetchone()
+    itens = conn.execute(
+        "SELECT item_id, preco FROM tabelas_preco_itens WHERE tabela_preco_id = ?",
+        (cliente["tabela_preco_id"],),
+    ).fetchall()
+    return jsonify({
+        "tabela_preco_id": cliente["tabela_preco_id"],
+        "tabela_preco_nome": tabela["nome"] if tabela else None,
+        "itens": [dict(i) for i in itens],
+    })
 
 
 @bp.get("/clientes/<int:cliente_id>/desempenho")
@@ -425,6 +454,13 @@ def editar_cliente(cliente_id):
     if status not in ("ativo", "inativo"):
         raise ApiError("status deve ser 'ativo' ou 'inativo'.", status=400)
 
+    # Fase 99 — tabela de preço é OPCIONAL (null = sem tabela, preço 100%
+    # manual como sempre foi); só valida que a tabela informada existe.
+    tabela_preco_id = dados.get("tabela_preco_id", anterior["tabela_preco_id"])
+    if tabela_preco_id is not None:
+        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_id,)).fetchone():
+            raise ApiError("Tabela de preço não encontrada.", status=404)
+
     # Fase 63 — limite_credito é sempre OPCIONAL: `None`/omitido significa
     # "sem limite configurado" (nenhuma confirmação de pedido deste
     # cliente nunca fica pendente por conta de crédito), mesmo raciocínio
@@ -450,11 +486,12 @@ def editar_cliente(cliente_id):
 
     conn.execute(
         f"""
-        UPDATE clientes SET nome_fantasia = ?, endereco = ?, status = ?, limite_credito = ?,
+        UPDATE clientes SET nome_fantasia = ?, endereco = ?, status = ?, limite_credito = ?, tabela_preco_id = ?,
                {', '.join(f'{c} = ?' for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)}
         WHERE id = ?
         """,
-        (nome_fantasia, endereco, status, limite_credito, *[valores_fiscais[c] for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS], cliente_id),
+        (nome_fantasia, endereco, status, limite_credito, tabela_preco_id,
+         *[valores_fiscais[c] for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS], cliente_id),
     )
     novo = _cliente_ou_404(conn, cliente_id)
     audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],

@@ -339,6 +339,7 @@
           case "materiais-catalogo": return renderCatalogoMateriaisEpi();
           case "comercial": return renderComercial();
           case "lancar-faturar": return renderLancarFaturarPedidos();
+          case "tabelas-preco": return param ? renderTabelaPrecoDetalhe(Number(param)) : renderTabelasPreco();
           case "pedido": return param ? renderPedidoDetalhe(Number(param)) : renderComercial();
           case "app-vendas": return param === "portfolio" ? renderPortfolioVendas() : renderAppVendas();
           case "minhas-comissoes": return renderMinhasComissoes();
@@ -470,6 +471,7 @@
         // Fase 97 — tela única para lançar e faturar pedidos sem alternar
         // entre Comercial e Fiscal a cada etapa.
         { rota: "#/lancar-faturar", chave: "lancar-faturar", label: "Lançar & Faturar Pedidos", permissao: ["comercial", "criar_pedido"] },
+        { rota: "#/tabelas-preco", chave: "tabelas-preco", label: "Tabelas de Preço", permissao: ["tabelas_preco", "visualizar"] },
         { rota: "#/app-vendas", chave: "app-vendas", label: "App de Vendas", permissao: ["vendas_app", "usar"] },
         { rota: "#/app-vendas/portfolio", chave: "app-vendas-portfolio", label: "Portfólio", permissao: ["vendas_app", "usar"] },
         { rota: "#/minhas-comissoes", chave: "minhas-comissoes", label: "Minhas Comissões", permissao: ["vendas_app", "usar"] },
@@ -7248,6 +7250,159 @@
       </form>`);
   }
 
+  // =======================================================================
+  // Fase 99 — Tabelas de Preço (uma ou mais listas de preço por item; cada
+  // cliente associado a UMA delas). Usado para pré-preencher o preço na
+  // hora de montar um Pedido de Venda — nunca trava o pedido: um item sem
+  // preço cadastrado na tabela do cliente simplesmente fica em branco
+  // para digitar manualmente, como sempre foi.
+  // =======================================================================
+  async function renderTabelasPreco() {
+    app.innerHTML = '<div class="carregando">Carregando tabelas de preço…</div>';
+    const tabelas = await chamarApi("/tabelas-preco?incluir_inativas=1");
+    const podeGerenciar = temPermissao("tabelas_preco", "gerenciar");
+
+    const linhas = tabelas
+      .map((t) => `<tr>
+        <td><a href="#/tabelas-preco/${t.id}">${escapeHtml(t.nome)}</a></td>
+        <td><span class="selo ${t.status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(t.status)}</span></td>
+        <td><a class="botao secundario pequeno" href="#/tabelas-preco/${t.id}">Gerenciar preços</a></td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Tabelas de Preço</h2>
+       <p class="texto-suave">Cada tabela tem seu próprio preço por item. Associe cada cliente a uma tabela
+       (na edição do cliente, em Comercial) para o preço já vir sugerido ao montar um pedido — sempre editável
+       na hora, nunca uma trava.</p>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${tabelas.length} tabela(s)</span>
+           ${podeGerenciar ? `<button class="botao" data-acao="nova-tabela-preco">+ Nova tabela</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="3" class="texto-suave">Nenhuma tabela de preço cadastrada ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "tabelas-preco"
+    );
+  }
+
+  function modalNovaTabelaPreco() {
+    abrirModal(`
+      <h3>Nova tabela de preço</h3>
+      <form data-form="criar-tabela-preco">
+        <div class="campo"><label>Nome</label><input name="nome" required placeholder="ex.: Tabela Padrão, Atacado, Distribuidor Sul"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalEditarTabelaPreco(tabela) {
+    abrirModal(`
+      <h3>Editar tabela de preço</h3>
+      <form data-form="editar-tabela-preco" data-id="${tabela.id}">
+        <div class="campo"><label>Nome</label><input name="nome" required value="${escapeHtml(tabela.nome)}"></div>
+        <div class="campo"><label>Status</label>
+          <select name="status">
+            <option value="ativo" ${tabela.status === "ativo" ? "selected" : ""}>Ativo</option>
+            <option value="inativo" ${tabela.status === "inativo" ? "selected" : ""}>Inativo</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderTabelaPrecoDetalhe(tabelaId) {
+    app.innerHTML = '<div class="carregando">Carregando tabela de preço…</div>';
+    const [tabelas, itensDaTabela, itensCatalogo] = await Promise.all([
+      chamarApi("/tabelas-preco?incluir_inativas=1"),
+      chamarApi(`/tabelas-preco/${tabelaId}/itens`),
+      chamarApi("/itens"),
+    ]);
+    const tabela = tabelas.find((t) => t.id === tabelaId);
+    if (!tabela) { definirFlash("erro", "Tabela de preço não encontrada."); return navegarPara("#/tabelas-preco"); }
+    state.cache.itensCatalogoTabelaPreco = itensCatalogo;
+    const podeGerenciar = temPermissao("tabelas_preco", "gerenciar");
+
+    const linhas = itensDaTabela
+      .map((it) => `<tr>
+        <td class="mono">${escapeHtml(it.item_codigo)}</td>
+        <td>${escapeHtml(it.item_descricao)}</td>
+        <td>R$ ${Number(it.preco).toFixed(2)}</td>
+        <td class="texto-suave">${fmtData(it.atualizado_em)}</td>
+        <td>${podeGerenciar ? `
+          <button class="botao secundario pequeno" data-acao="abrir-editar-preco-item-tabela" data-tabela-id="${tabelaId}" data-item-id="${it.item_id}" data-codigo="${escapeHtml(it.item_codigo)}" data-descricao="${escapeHtml(it.item_descricao)}" data-preco="${it.preco}">Editar</button>
+          <button class="botao perigo pequeno" data-acao="remover-preco-item-tabela" data-tabela-id="${tabelaId}" data-item-id="${it.item_id}">Remover</button>
+        ` : ""}</td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<a class="link-voltar" href="#/tabelas-preco">&larr; Voltar para Tabelas de Preço</a>
+       <h2>${escapeHtml(tabela.nome)} <span class="selo ${tabela.status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(tabela.status)}</span></h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${itensDaTabela.length} item(ns) com preço nesta tabela</span>
+           ${podeGerenciar ? `<button class="botao secundario pequeno" data-acao="abrir-editar-tabela-preco" data-id="${tabela.id}">Editar tabela</button>` : ""}
+         </div>
+         ${podeGerenciar ? `
+         <div class="campo">
+           <label>Buscar item para definir/alterar o preço</label>
+           <input type="text" id="busca-item-tabela-preco" placeholder="Digite o código ou a descrição..." autocomplete="off">
+           <div id="resultados-busca-item-tabela-preco" class="lista-busca-resultados"></div>
+         </div>` : ""}
+         <table>
+           <thead><tr><th>Código</th><th>Descrição</th><th>Preço</th><th>Atualizado em</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhum item com preço cadastrado nesta tabela ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "tabelas-preco"
+    );
+
+    if (podeGerenciar) {
+      const campoBusca = document.querySelector("#busca-item-tabela-preco");
+      const listaResultados = document.querySelector("#resultados-busca-item-tabela-preco");
+      campoBusca.addEventListener("input", () => {
+        const termo = campoBusca.value.trim().toLowerCase();
+        if (!termo) { listaResultados.innerHTML = ""; return; }
+        const encontrados = itensCatalogo
+          .filter((i) => i.codigo.toLowerCase().includes(termo) || i.descricao.toLowerCase().includes(termo))
+          .slice(0, 8);
+        listaResultados.innerHTML = encontrados.length
+          ? encontrados.map((i) => `
+              <button type="button" class="item-busca-resultado" data-item-id="${i.id}" data-codigo="${escapeHtml(i.codigo)}" data-descricao="${escapeHtml(i.descricao)}">
+                <span class="mono">${escapeHtml(i.codigo)}</span> — ${escapeHtml(i.descricao)}
+              </button>`).join("")
+          : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nenhum item encontrado com esse termo.</p>';
+      });
+      listaResultados.addEventListener("click", (e) => {
+        const botao = e.target.closest(".item-busca-resultado");
+        if (!botao) return;
+        modalDefinirPrecoItemTabela(tabelaId, Number(botao.dataset.itemId), botao.dataset.codigo, botao.dataset.descricao, null);
+      });
+    }
+  }
+
+  function modalDefinirPrecoItemTabela(tabelaId, itemId, codigo, descricao, precoAtual) {
+    abrirModal(`
+      <h3>${precoAtual != null ? "Editar" : "Definir"} preço — ${escapeHtml(codigo)}</h3>
+      <p class="texto-suave">${escapeHtml(descricao)}</p>
+      <form data-form="definir-preco-item-tabela" data-tabela-id="${tabelaId}" data-item-id="${itemId}">
+        <div class="campo"><label>Preço (R$)</label><input name="preco" type="number" step="0.01" min="0" required autofocus value="${precoAtual != null ? precoAtual : ""}"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
   function modalNovoCliente() {
     abrirModal(`
       <h3>Novo cliente</h3>
@@ -7264,11 +7419,23 @@
   }
 
   function modalEditarCliente(cliente) {
+    const tabelasPreco = state.cache.tabelasPrecoParaCliente || [];
+    const opcoesTabelaPreco = tabelasPreco
+      .map((t) => `<option value="${t.id}" ${cliente.tabela_preco_id === t.id ? "selected" : ""}>${escapeHtml(t.nome)}</option>`)
+      .join("");
     abrirModal(`
       <h3>Editar ${escapeHtml(cliente.razao_social)}</h3>
       <form data-form="editar-cliente" data-id="${cliente.id}">
         <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia" value="${escapeHtml(cliente.nome_fantasia || "")}"></div>
         <div class="campo"><label>Endereço</label><input name="endereco" value="${escapeHtml(cliente.endereco || "")}"></div>
+        ${tabelasPreco.length ? `
+        <div class="campo"><label>Tabela de preço</label>
+          <select name="tabela_preco_id">
+            <option value="">Nenhuma (preço 100% manual)</option>
+            ${opcoesTabelaPreco}
+          </select>
+          <div class="dica">Fase 99 — o preço do item já vem sugerido ao montar um pedido para este cliente, de acordo com esta tabela. Continua editável na hora.</div>
+        </div>` : ""}
         <div class="campo"><label>Limite de crédito (R$, opcional)</label>
           <input name="limite_credito" type="number" step="0.01" min="0" placeholder="deixe em branco = sem limite"
                  value="${cliente.limite_credito != null ? cliente.limite_credito : ""}">
@@ -7340,20 +7507,130 @@
       </div>`, { largo: true });
   }
 
-  function modalNovoPedido(origem) {
-    const clientes = (state.cache.clientes || []).filter((c) => c.status === "ativo");
+  // Fase 99 — busca de cliente/item + preço pré-preenchido pela tabela de
+  // preço do cliente + margem de lucro (só para quem tem
+  // `custeio.visualizar` — dado de custo é sensível, mesma régua de
+  // qualquer outra tela de Custeio). Compartilhado por `modalNovoPedido`
+  // (cliente + item) e `modalAdicionarItemPedido` (só item, cliente já
+  // está fixo no pedido).
+  function _buscaClienteHtml() {
+    return `
+      <div class="campo">
+        <label>Cliente</label>
+        <input type="text" id="busca-cliente-pedido" placeholder="Digite a razão social ou o CNPJ..." autocomplete="off" required>
+        <input type="hidden" name="cliente_id" id="cliente-id-pedido" required>
+        <div id="resultados-busca-cliente-pedido" class="lista-busca-resultados"></div>
+      </div>`;
+  }
+
+  function _buscaItemHtml() {
+    return `
+      <div class="campo">
+        <label>Item</label>
+        <input type="text" id="busca-item-pedido" placeholder="Digite o código ou a descrição..." autocomplete="off" required>
+        <input type="hidden" name="item_id" id="item-id-pedido" required>
+        <div id="resultados-busca-item-pedido" class="lista-busca-resultados"></div>
+      </div>`;
+  }
+
+  // `wrap` é o retorno de `abrirModal` (elemento raiz do modal). `onCliente`
+  // é chamado com o cliente escolhido (só existe se `_buscaClienteHtml`
+  // estiver presente no formulário); `onItem` é chamado com o item
+  // escolhido. Mantém tudo em memória local — nenhuma escrita no `state`
+  // global, para dois modais abertos em sequência nunca disputarem cache.
+  function _ligarBuscaClienteEItemPedido(wrap, { comCliente, onCliente, onItem }) {
     const itens = state.cache.itensVendaveis || [];
-    const opcoesCliente = clientes.map((c) => `<option value="${c.id}">${escapeHtml(c.razao_social)} — ${escapeHtml(c.cnpj)}</option>`).join("");
-    const opcoesItem = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
-    abrirModal(`
+    const clientes = (state.cache.clientes || []).filter((c) => c.status === "ativo");
+
+    function ligarBusca(inputSel, resultadosSel, lista, campos, montarLinha, aoEscolher) {
+      const campoBusca = wrap.querySelector(inputSel);
+      const listaResultados = wrap.querySelector(resultadosSel);
+      campoBusca.addEventListener("input", () => {
+        const termo = campoBusca.value.trim().toLowerCase();
+        if (!termo) { listaResultados.innerHTML = ""; return; }
+        const encontrados = lista.filter((x) => campos.some((c) => (x[c] || "").toLowerCase().includes(termo))).slice(0, 8);
+        listaResultados.innerHTML = encontrados.length
+          ? encontrados.map(montarLinha).join("")
+          : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado com esse termo.</p>';
+      });
+      listaResultados.addEventListener("click", (e) => {
+        const botao = e.target.closest(".item-busca-resultado");
+        if (!botao) return;
+        const escolhido = lista.find((x) => String(x.id) === botao.dataset.id);
+        campoBusca.value = botao.dataset.rotulo;
+        listaResultados.innerHTML = "";
+        aoEscolher(escolhido);
+      });
+    }
+
+    if (comCliente) {
+      ligarBusca(
+        "#busca-cliente-pedido", "#resultados-busca-cliente-pedido", clientes, ["razao_social", "cnpj"],
+        (c) => `<button type="button" class="item-busca-resultado" data-id="${c.id}" data-rotulo="${escapeHtml(c.razao_social)}">${escapeHtml(c.razao_social)} — <span class="mono">${escapeHtml(c.cnpj)}</span></button>`,
+        (c) => { wrap.querySelector("#cliente-id-pedido").value = c.id; onCliente(c); }
+      );
+    }
+    ligarBusca(
+      "#busca-item-pedido", "#resultados-busca-item-pedido", itens, ["codigo", "descricao"],
+      (i) => `<button type="button" class="item-busca-resultado" data-id="${i.id}" data-rotulo="${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}"><span class="mono">${escapeHtml(i.codigo)}</span> — ${escapeHtml(i.descricao)}</button>`,
+      (i) => { wrap.querySelector("#item-id-pedido").value = i.id; onItem(i); }
+    );
+  }
+
+  // Preenche o preço a partir da tabela de preço do cliente (se houver e
+  // se o item tiver preço cadastrado nela) e, para quem tem
+  // `custeio.visualizar`, busca custo/margem e mantém o cálculo vivo
+  // enquanto o preço é editado à mão (sem refazer a chamada à API a cada
+  // tecla — o custo não muda, só o preço muda).
+  async function _preencherPrecoEMargem(wrap, item, tabelaPrecoDoCliente, empresaIdAtual) {
+    const campoPreco = wrap.querySelector('input[name="preco_unitario"]');
+    const preco = tabelaPrecoDoCliente && tabelaPrecoDoCliente.itens.find((i) => i.item_id === item.id);
+    if (preco) campoPreco.value = preco.preco;
+
+    const areaMargem = wrap.querySelector("#area-margem-pedido");
+    if (!areaMargem || !temPermissao("custeio", "visualizar")) return;
+    areaMargem.innerHTML = '<p class="texto-suave">Calculando margem…</p>';
+    try {
+      const qs = new URLSearchParams({ preco: campoPreco.value || "0" });
+      if (empresaIdAtual) qs.set("empresa_id", empresaIdAtual);
+      const margem = await chamarApi(`/custeio/margem-item/${item.id}?${qs.toString()}`);
+      const renderizarMargem = () => {
+        if (margem.custo_unitario == null) {
+          areaMargem.innerHTML = '<p class="texto-suave">Sem custo médio registrado para este item ainda — não é possível calcular a margem.</p>';
+          return;
+        }
+        const precoAtual = Number(campoPreco.value) || 0;
+        const impostoValor = precoAtual * (margem.percentual_imposto_usado / 100);
+        const margemValor = precoAtual - margem.custo_unitario - impostoValor;
+        const margemPct = precoAtual > 0 ? (margemValor / precoAtual) * 100 : null;
+        areaMargem.innerHTML = `
+          <p class="dica">
+            Custo unitário: R$ ${margem.custo_unitario.toFixed(2)} (${margem.origem_custo === "formula_ativa" ? "projetado pela fórmula" : "custo médio de compra"})
+            — Impostos considerados: ${margem.percentual_imposto_usado.toFixed(2)}% (configurado em Financeiro/DRE)
+            ${margem.regime_empresa ? ` — Regime da empresa: ${escapeHtml(margem.regime_empresa.replace("_", " "))}` : ""}<br>
+            <strong>Margem estimada: ${margemPct != null ? margemPct.toFixed(2) + "%" : "—"} (R$ ${margemValor.toFixed(2)} por unidade)</strong>
+          </p>`;
+      };
+      renderizarMargem();
+      campoPreco.removeEventListener("input", campoPreco._recalcularMargem || (() => {}));
+      campoPreco._recalcularMargem = renderizarMargem;
+      campoPreco.addEventListener("input", renderizarMargem);
+    } catch (e) {
+      areaMargem.innerHTML = "";
+    }
+  }
+
+  function modalNovoPedido(origem) {
+    const wrap = abrirModal(`
       <h3>Novo pedido de venda</h3>
-      ${itens.length === 0 ? '<p class="mensagem-erro">Nenhum item do tipo "produto_acabado" cadastrado ainda — cadastre um em Itens antes de vender.</p>' : ""}
+      ${(state.cache.itensVendaveis || []).length === 0 ? '<p class="mensagem-erro">Nenhum item do tipo "produto_acabado" cadastrado ainda — cadastre um em Itens antes de vender.</p>' : ""}
       <form data-form="criar-pedido">
-        <div class="campo"><label>Cliente</label><select name="cliente_id" required>${opcoesCliente}</select></div>
-        <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItem}</select></div>
+        ${_buscaClienteHtml()}
+        ${_buscaItemHtml()}
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
         <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
         <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div id="area-margem-pedido"></div>
         <div class="dica">O pedido é criado como rascunho com este primeiro item — depois de criado, você pode adicionar mais itens na tela de detalhe antes de confirmar. O preço aqui informado é o que será usado para gerar a conta a receber quando o pedido for expedido.</div>
         ${campoSeletorEmpresa(state.cache.empresasSeletor || [])}
         ${origem ? `<input type="hidden" name="origem" value="${escapeHtml(origem)}">` : ""}
@@ -7361,24 +7638,48 @@
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Criar (rascunho)</button>
         </div>
-      </form>`);
+      </form>`,
+      { largo: true }
+    );
+
+    let tabelaPrecoDoCliente = null;
+    let itemEscolhido = null;
+    const campoEmpresa = wrap.querySelector('select[name="empresa_id"]');
+
+    _ligarBuscaClienteEItemPedido(wrap, {
+      comCliente: true,
+      onCliente: async (cliente) => {
+        tabelaPrecoDoCliente = temPermissao("comercial", "visualizar")
+          ? await chamarApi(`/comercial/clientes/${cliente.id}/tabela-preco`).catch(() => null)
+          : null;
+        if (itemEscolhido) _preencherPrecoEMargem(wrap, itemEscolhido, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
+      },
+      onItem: (item) => {
+        itemEscolhido = item;
+        _preencherPrecoEMargem(wrap, item, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
+      },
+    });
   }
 
-  function modalAdicionarItemPedido(pedidoId) {
-    const itens = state.cache.itensVendaveis || [];
-    const opcoesItem = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
-    abrirModal(`
+  function modalAdicionarItemPedido(pedidoId, tabelaPrecoDoCliente, empresaIdDoPedido) {
+    const wrap = abrirModal(`
       <h3>Adicionar item ao pedido</h3>
       <form data-form="adicionar-item-pedido" data-id="${pedidoId}">
-        <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItem}</select></div>
+        ${_buscaItemHtml()}
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
         <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
         <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div id="area-margem-pedido"></div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Adicionar</button>
         </div>
       </form>`);
+
+    _ligarBuscaClienteEItemPedido(wrap, {
+      comCliente: false,
+      onItem: (item) => _preencherPrecoEMargem(wrap, item, tabelaPrecoDoCliente, empresaIdDoPedido),
+    });
   }
 
   function modalCancelarPedido(pedido, origem) {
@@ -10964,6 +11265,9 @@
         return;
       case "editar-cliente": {
         const cliente = await chamarApi(`/comercial/clientes/${alvo.dataset.id}`);
+        if (temPermissao("tabelas_preco", "visualizar")) {
+          state.cache.tabelasPrecoParaCliente = await chamarApi("/tabelas-preco");
+        }
         modalEditarCliente(cliente);
         return;
       }
@@ -10978,9 +11282,14 @@
         return;
       case "ver-pedido":
         return navegarPara(`#/pedido/${alvo.dataset.id}`);
-      case "adicionar-item-pedido":
-        modalAdicionarItemPedido(alvo.dataset.id);
+      case "adicionar-item-pedido": {
+        const pedidoParaAdicionarItem = await chamarApi(`/comercial/pedidos/${alvo.dataset.id}`);
+        const tabelaPrecoParaAdicionar = temPermissao("comercial", "visualizar")
+          ? await chamarApi(`/comercial/clientes/${pedidoParaAdicionarItem.cliente_id}/tabela-preco`).catch(() => null)
+          : null;
+        modalAdicionarItemPedido(alvo.dataset.id, tabelaPrecoParaAdicionar, pedidoParaAdicionarItem.empresa_id);
         return;
+      }
       case "remover-item-pedido":
         if (!confirm("Remover este item do pedido?")) return;
         await chamarApi(`/comercial/pedidos/${alvo.dataset.pedidoId}/itens/${alvo.dataset.linhaId}`, { method: "DELETE" });
@@ -11047,6 +11356,28 @@
         );
         return renderLancarFaturarPedidos();
       }
+
+      // ---- Fase 99: Tabelas de Preço ----
+      case "nova-tabela-preco":
+        modalNovaTabelaPreco();
+        return;
+      case "abrir-editar-tabela-preco": {
+        const tabelas = await chamarApi("/tabelas-preco?incluir_inativas=1");
+        const tabelaParaEditar = tabelas.find((t) => t.id === Number(alvo.dataset.id));
+        modalEditarTabelaPreco(tabelaParaEditar);
+        return;
+      }
+      case "abrir-editar-preco-item-tabela":
+        modalDefinirPrecoItemTabela(
+          Number(alvo.dataset.tabelaId), Number(alvo.dataset.itemId),
+          alvo.dataset.codigo, alvo.dataset.descricao, Number(alvo.dataset.preco)
+        );
+        return;
+      case "remover-preco-item-tabela":
+        if (!confirm("Remover o preço deste item nesta tabela? Ele volta a exigir preenchimento manual ao montar um pedido.")) return;
+        await chamarApi(`/tabelas-preco/${alvo.dataset.tabelaId}/itens/${alvo.dataset.itemId}`, { method: "DELETE" });
+        definirFlash("ok", "Preço removido.");
+        return renderTabelaPrecoDetalhe(Number(alvo.dataset.tabelaId));
 
       case "aprovar-confirmacao-pedido": {
         await chamarApi(`/comercial/pedidos/confirmacoes-pendentes/${alvo.dataset.pendenteId}/aprovar`, { method: "POST" });
@@ -12574,29 +12905,41 @@
         return renderComercial();
       }
       case "editar-cliente": {
-        await chamarApi(`/comercial/clientes/${form.dataset.id}`, {
-          method: "PUT",
-          body: {
-            nome_fantasia: dados.get("nome_fantasia") || null, endereco: dados.get("endereco") || null, status: dados.get("status"),
-            // Fase 63 — campo em branco limpa o limite (envia null); com valor, converte para número.
-            limite_credito: dados.get("limite_credito") ? Number(dados.get("limite_credito")) : null,
-            // Fase 70 — dados fiscais (destinatário da NF-e).
-            inscricao_estadual: dados.get("inscricao_estadual") || null,
-            logradouro: dados.get("logradouro") || null,
-            numero_endereco: dados.get("numero_endereco") || null,
-            complemento_endereco: dados.get("complemento_endereco") || null,
-            bairro: dados.get("bairro") || null,
-            municipio: dados.get("municipio") || null,
-            codigo_ibge_municipio: dados.get("codigo_ibge_municipio") || null,
-            uf: (dados.get("uf") || "").toUpperCase() || null,
-            cep: dados.get("cep") || null,
-          },
-        });
+        const corpoEdicaoCliente = {
+          nome_fantasia: dados.get("nome_fantasia") || null, endereco: dados.get("endereco") || null, status: dados.get("status"),
+          // Fase 63 — campo em branco limpa o limite (envia null); com valor, converte para número.
+          limite_credito: dados.get("limite_credito") ? Number(dados.get("limite_credito")) : null,
+          // Fase 70 — dados fiscais (destinatário da NF-e).
+          inscricao_estadual: dados.get("inscricao_estadual") || null,
+          logradouro: dados.get("logradouro") || null,
+          numero_endereco: dados.get("numero_endereco") || null,
+          complemento_endereco: dados.get("complemento_endereco") || null,
+          bairro: dados.get("bairro") || null,
+          municipio: dados.get("municipio") || null,
+          codigo_ibge_municipio: dados.get("codigo_ibge_municipio") || null,
+          uf: (dados.get("uf") || "").toUpperCase() || null,
+          cep: dados.get("cep") || null,
+        };
+        // Fase 99 — o campo só existe no formulário se quem está editando
+        // tem `tabelas_preco.visualizar` (ver o dispatcher de clique
+        // "editar-cliente"); nunca manda a chave quando o campo nem
+        // apareceu, senão um `null` implícito apagaria a tabela de preço
+        // já associada ao cliente sem ninguém ter pedido isso.
+        if (dados.has("tabela_preco_id")) {
+          corpoEdicaoCliente.tabela_preco_id = dados.get("tabela_preco_id") ? Number(dados.get("tabela_preco_id")) : null;
+        }
+        await chamarApi(`/comercial/clientes/${form.dataset.id}`, { method: "PUT", body: corpoEdicaoCliente });
         fecharModais();
         definirFlash("ok", "Cliente atualizado.");
         return renderComercial();
       }
       case "criar-pedido": {
+        // Fase 99 — cliente_id/item_id agora vêm de campos ocultos
+        // preenchidos pela busca (ver _ligarBuscaClienteEItemPedido);
+        // `required` num input hidden não é validado pelo navegador, por
+        // isso a checagem explícita aqui.
+        if (!dados.get("cliente_id")) throw new Error("Busque e selecione um cliente.");
+        if (!dados.get("item_id")) throw new Error("Busque e selecione um item.");
         const pedido = await chamarApi("/comercial/pedidos", {
           method: "POST",
           body: {
@@ -12615,6 +12958,7 @@
         return dados.get("origem") === "lf" ? renderLancarFaturarPedidos() : navegarPara(`#/pedido/${pedido.id}`);
       }
       case "adicionar-item-pedido": {
+        if (!dados.get("item_id")) throw new Error("Busque e selecione um item.");
         await chamarApi(`/comercial/pedidos/${form.dataset.id}/itens`, {
           method: "POST",
           body: {
@@ -12641,6 +12985,31 @@
         fecharModais();
         definirFlash("ok", "Pedido excluído definitivamente.");
         return renderLancarFaturarPedidos();
+      }
+
+      // ---- Fase 99: Tabelas de Preço ----
+      case "criar-tabela-preco": {
+        const novaTabela = await chamarApi("/tabelas-preco", { method: "POST", body: { nome: dados.get("nome") } });
+        fecharModais();
+        definirFlash("ok", "Tabela de preço criada.");
+        return navegarPara(`#/tabelas-preco/${novaTabela.id}`);
+      }
+      case "editar-tabela-preco": {
+        await chamarApi(`/tabelas-preco/${form.dataset.id}`, {
+          method: "PUT", body: { nome: dados.get("nome"), status: dados.get("status") },
+        });
+        fecharModais();
+        definirFlash("ok", "Tabela de preço atualizada.");
+        return renderTabelaPrecoDetalhe(Number(form.dataset.id));
+      }
+      case "definir-preco-item-tabela": {
+        const tabelaIdPreco = Number(form.dataset.tabelaId);
+        await chamarApi(`/tabelas-preco/${tabelaIdPreco}/itens/${form.dataset.itemId}`, {
+          method: "PUT", body: { preco: Number(dados.get("preco")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Preço salvo.");
+        return renderTabelaPrecoDetalhe(tabelaIdPreco);
       }
 
       // ---- Fase 63: Limite de Crédito do Cliente (Alçada na Confirmação do Pedido de Venda) ----

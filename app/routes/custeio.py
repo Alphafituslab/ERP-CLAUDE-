@@ -351,6 +351,70 @@ def custo_projetado_formula(conn, formula):
     }
 
 
+@bp.get("/margem-item/<int:item_id>")
+@requires_permission("custeio", "visualizar")
+def obter_margem_item(item_id):
+    """Fase 99 — margem de lucro de um item, usada na tela de Novo Pedido
+    (mostrada só a quem já tem `custeio.visualizar` — dado de custo
+    continua tão sensível quanto em qualquer outra tela deste módulo, ver
+    a nota no topo do arquivo). Reaproveita o MESMO custo já usado nas
+    outras abas de Custeio (`custo_projetado_formula` para produto
+    fabricado com fórmula ativa, `custo_medio_item` para o resto) e o
+    MESMO conjunto de alíquotas já configurado para o DRE
+    (`configuracoes_financeiro`) — nenhum imposto novo é inventado aqui.
+    O regime tributário da empresa emissora (se informada) é devolvido só
+    como INFORMAÇÃO ao lado do número, não entra na conta: modelar o
+    imposto de verdade por regime (faixa do Simples, presunção do Lucro
+    Presumido etc.) é uma conta tributária que este sistema não tenta
+    adivinhar sozinho — decisão confirmada com o usuário."""
+    conn = get_db()
+    item = conn.execute("SELECT id, codigo, descricao FROM itens WHERE id = ?", (item_id,)).fetchone()
+    if item is None:
+        raise ApiError("Item não encontrado.", status=404)
+
+    preco = request.args.get("preco", type=float)
+    empresa_id = request.args.get("empresa_id", type=int)
+
+    formula = conn.execute(
+        "SELECT * FROM formulas WHERE item_produzido_id = ? AND status = 'ativa'", (item_id,)
+    ).fetchone()
+    if formula:
+        custo = custo_projetado_formula(conn, dict(formula))["custo_total_por_unidade"]
+        origem_custo = "formula_ativa"
+    else:
+        custo = custo_medio_item(conn, item_id)
+        origem_custo = "custo_medio_compra"
+
+    config_row = conn.execute(
+        "SELECT percentual_imposto_venda, percentual_pis, percentual_cofins, percentual_icms, percentual_iss "
+        "FROM configuracoes_financeiro WHERE id = 1"
+    ).fetchone()
+    percentual_imposto_total = sum(config_row[c] for c in (
+        "percentual_imposto_venda", "percentual_pis", "percentual_cofins", "percentual_icms", "percentual_iss"
+    )) if config_row else 0.0
+
+    regime_empresa = None
+    if empresa_id:
+        empresa = conn.execute("SELECT regime_tributario FROM empresas WHERE id = ?", (empresa_id,)).fetchone()
+        regime_empresa = empresa["regime_tributario"] if empresa else None
+
+    resultado = {
+        "item_id": item_id,
+        "custo_unitario": round(custo, 6) if custo is not None else None,
+        "origem_custo": origem_custo if custo is not None else None,
+        "percentual_imposto_usado": round(percentual_imposto_total, 4),
+        "regime_empresa": regime_empresa,
+        "margem_valor": None,
+        "margem_pct": None,
+    }
+    if preco is not None and preco > 0 and custo is not None:
+        imposto = preco * (percentual_imposto_total / 100)
+        margem_valor = preco - custo - imposto
+        resultado["margem_valor"] = round(margem_valor, 2)
+        resultado["margem_pct"] = round((margem_valor / preco) * 100, 2)
+    return jsonify(resultado)
+
+
 @bp.get("/ordens/<int:ordem_id>")
 @requires_permission("custeio", "visualizar")
 def obter_custo_ordem(ordem_id):

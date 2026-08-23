@@ -11,7 +11,7 @@
 ; diferenca entre instalacao "de verdade" (Arquivos de Programas, pode
 ; virar Servico do Windows) e a instalacao simples.
 #define MyAppName "Alphafitus OS"
-#define MyAppVersion "98.0"
+#define MyAppVersion "99.0"
 #define MyAppPublisher "Alphafitus"
 #define MyAppExeName "AlphafitusOS.exe"
 

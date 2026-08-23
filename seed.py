@@ -462,6 +462,10 @@ PERMISSOES_PADRAO = [
 
     # Fase 86 — Transportadora / Coleta (MVP).
     ("comercial", "gerenciar_coleta", "Cadastrar transportadoras e agendar/confirmar/cancelar a coleta de um pedido expedido", 0),
+
+    # Fase 99 — Tabelas de Preço (pré-preenchimento de preço no Pedido de Venda, por cliente).
+    ("tabelas_preco", "visualizar", "Ver tabelas de preço e os preços cadastrados nelas", 0),
+    ("tabelas_preco", "gerenciar", "Criar/editar tabelas de preço e definir o preço de cada item nelas", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
@@ -628,9 +632,16 @@ PERFIS_PADRAO = [
         # Fase 86 — mesmo perfil que já expede o pedido cuida de agendar e
         # confirmar a coleta pela transportadora.
         "comercial.gerenciar_coleta",
+        # Fase 99 — mesmo perfil que monta o pedido decide os preços
+        # praticados por tabela.
+        "tabelas_preco.visualizar", "tabelas_preco.gerenciar",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",
+        # Fase 99 — só visualizar: usa o preço pré-preenchido da tabela do
+        # cliente, mas não decide os preços praticados (isso é do
+        # Comercial/Administrador).
+        "tabelas_preco.visualizar",
         # Fase 36 — o próprio aplicativo de vendas (catálogo, rascunho com
         # reserva temporária, verba, envio e "minhas comissões").
         # Deliberadamente SEM "comercial.configurar_comercial": mudar a
