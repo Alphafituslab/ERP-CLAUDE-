@@ -76,7 +76,9 @@ from flask import Blueprint, g, jsonify, request
 from .. import audit
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..permissions import requires_permission
+from .clientes_documentos import _inserir_documento_cliente, _validar_e_decodificar_documento
 from .comercial import (
+    CAMPOS_FISCAIS_CLIENTE_EDITAVEIS,
     _alocar_fefo,
     _cliente_ou_404,
     _gerar_numero_pedido,
@@ -184,6 +186,80 @@ def editar_configuracao():
                                  "minutos_expiracao_rascunho": minutos_expiracao_rascunho},
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(_configuracao_comercial(conn))
+
+
+# ============================================================
+# CADASTRO DE CLIENTE EM CAMPO (Fase 103) — documento obrigatório
+# ============================================================
+# Pedido do usuário: quando o vendedor visita um cliente e cadastra ele pelo
+# app, é obrigatório anexar ao menos um documento do cliente (ou bater foto
+# na hora, via `capture="environment"` no input de arquivo do navegador —
+# o frontend cuida disso, aqui só chega o base64 já capturado).
+#
+# Cliente + documento(s) são criados numa ÚNICA chamada, tudo-ou-nada:
+# `app/context.py::close_db` faz commit automático ao fim de QUALQUER
+# request que não estoure uma exceção não tratada — inclusive um ApiError
+# (4xx) tratado por `_handle_api_error`. Ou seja, se o cliente já tivesse
+# sido inserido e só DEPOIS a validação do documento falhasse, o INSERT do
+# cliente teria sido mantido mesmo com o pedido inteiro "falhando" para
+# quem chamou. Por isso TODOS os documentos são validados/decodificados
+# ANTES de qualquer INSERT (nem o do cliente, nem o de nenhum documento) —
+# mesmo cuidado já usado noutras rotas multi-escrita do sistema (ex.:
+# confirmar_pedido_ou_solicitar_aprovacao, em comercial.py).
+@bp.post("/clientes")
+@requires_permission("comercial", "cadastrar_cliente")
+def criar_cliente_em_campo():
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+
+    razao_social = (dados.get("razao_social") or "").strip()
+    cnpj = (dados.get("cnpj") or "").strip()
+    if not razao_social or not cnpj:
+        raise ApiError("Informe razao_social e cnpj.", status=400)
+    if conn.execute("SELECT id FROM clientes WHERE cnpj = ?", (cnpj,)).fetchone():
+        raise ApiError("Já existe um cliente com este CNPJ.", status=409)
+
+    documentos_entrada = dados.get("documentos")
+    if not documentos_entrada or not isinstance(documentos_entrada, list):
+        raise ApiError(
+            "É obrigatório anexar ao menos um documento do cliente (foto ou arquivo) para cadastrar pelo "
+            "aplicativo de vendas.",
+            status=400, codigo="documento_obrigatorio",
+        )
+    # Valida e decodifica TODOS os documentos primeiro (sem escrever nada
+    # ainda) — ver nota acima sobre por que a ordem importa aqui.
+    documentos_validados = [_validar_e_decodificar_documento(doc) for doc in documentos_entrada]
+
+    valores_fiscais = [dados.get(campo) for campo in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS]
+    cur = conn.execute(
+        f"""
+        INSERT INTO clientes (razao_social, nome_fantasia, cnpj, endereco, email, criado_por,
+               {', '.join(CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)})
+        VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)})
+        """,
+        (razao_social, dados.get("nome_fantasia"), cnpj, dados.get("endereco"), dados.get("email"),
+         usuario_atual["id"], *valores_fiscais),
+    )
+    cliente_id = cur.lastrowid
+    audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],
+                     acao="cliente_criado_via_app_vendas", valor_novo={"razao_social": razao_social, "cnpj": cnpj},
+                     ip=client_ip(), dispositivo=client_device())
+
+    documentos_ids = []
+    for doc_validado in documentos_validados:
+        documento_id = _inserir_documento_cliente(conn, cliente_id, doc_validado, usuario_atual["id"])
+        documentos_ids.append(documento_id)
+        audit.registrar(
+            conn, tabela="clientes_documentos", registro_id=documento_id, usuario_id=usuario_atual["id"],
+            acao="documento_cliente_enviado",
+            valor_novo={"cliente_id": cliente_id, "nome_arquivo": doc_validado[1], "tamanho": doc_validado[4]},
+            ip=client_ip(), dispositivo=client_device(),
+        )
+
+    cliente = _cliente_ou_404(conn, cliente_id)
+    cliente["documentos_ids"] = documentos_ids
+    return jsonify({"cliente": cliente}), 201
 
 
 # ============================================================

@@ -638,6 +638,12 @@ PERFIS_PADRAO = [
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",
+        # Fase 103 — cadastrar cliente novo direto em campo (com documento
+        # obrigatório, ver POST /vendas-app/clientes) usa a MESMA permissão
+        # já usada pela tela desktop de Comercial para cadastrar/editar
+        # cliente — nenhuma permissão nova, para não duplicar a régua de
+        # quem pode cadastrar cliente.
+        "comercial.cadastrar_cliente",
         # Fase 99 — só visualizar: usa o preço pré-preenchido da tabela do
         # cliente, mas não decide os preços praticados (isso é do
         # Comercial/Administrador).

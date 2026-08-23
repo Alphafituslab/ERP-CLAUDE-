@@ -5087,3 +5087,32 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   bloqueante com o status financeiro do cadastro, contas em atraso no
   momento e a média histórica de atraso — o aviso nunca impede montar o
   pedido, só a confirmação de verdade é bloqueada no servidor.
+- (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
+  pelo App de Vendas em campo. Pedido do usuário: "quando um
+  representante/vendedor vai visitar um cliente... seja obrigatório
+  anexar os documentos do cliente, ou então bater foto dos mesmos com o
+  próprio app". Nova tabela `clientes_documentos` (`schema_fase103.sql`,
+  mesmo padrão base64-no-banco de `memorial_anexos.py`/Fase 27, mas com
+  lista de tipos MIME permitida — `image/jpeg`, `image/png`,
+  `image/webp`, `application/pdf` — e nome de arquivo sanitizado no
+  `Content-Disposition` do download, corrigindo no código novo o achado
+  LOW da auditoria da Fase 98 que a Fase 27 nunca teve). Nova rota
+  atômica `POST /vendas-app/clientes` (`app/routes/vendas_app.py`) cria
+  cliente + documento(s) numa ÚNICA chamada, recusando com 400
+  (`codigo=documento_obrigatorio`) se a lista de documentos vier vazia —
+  a obrigatoriedade não é imposta por constraint de banco (impossível
+  garantir "≥ 1 documento" só com SQL), então TODOS os documentos são
+  validados/decodificados antes de qualquer INSERT (nem o do cliente),
+  já que `app/context.py::close_db` faz commit automático mesmo quando a
+  rota termina em erro tratado (ApiError). O cadastro de cliente pela
+  tela DESKTOP (`POST /comercial/clientes`) continua sem exigir
+  documento nenhum — só o fluxo do vendedor em campo tem essa exigência.
+  `app/routes/clientes_documentos.py` cobre a gestão desses documentos
+  (listar/enviar/baixar/excluir) pela tela de Comercial, reaproveitando
+  a mesma validação. No app, o campo de arquivo usa
+  `capture="environment"` — abre a câmera traseira do celular direto no
+  navegador, sem precisar de nenhum app nativo à parte; em desktop, o
+  mesmo campo é só um seletor de arquivo normal. Permissão nova: nenhuma
+  — reaproveita `comercial.cadastrar_cliente` (agora também concedida ao
+  perfil Vendedor), para não duplicar a régua de quem pode cadastrar
+  cliente.

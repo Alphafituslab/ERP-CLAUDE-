@@ -8889,9 +8889,12 @@
            carrinho, cada item colocado fica reservado temporariamente só para você — outro vendedor só vê o
            que sobrar do saldo disponível. Se você fechar o app, ou ficar sem tocar no rascunho por tempo
            demais, a reserva é liberada automaticamente para os outros.</p>
-           ${clientesAtivos.length === 0
-             ? '<p class="mensagem-erro">Nenhum cliente ativo cadastrado ainda — cadastre um em Comercial (CRM).</p>'
-             : `<button class="botao" data-acao="abrir-novo-rascunho-vendas">+ Novo rascunho</button>`}
+           <div style="display:flex; gap:8px; flex-wrap:wrap;">
+             ${clientesAtivos.length === 0
+               ? '<p class="mensagem-erro">Nenhum cliente ativo cadastrado ainda.</p>'
+               : `<button class="botao" data-acao="abrir-novo-rascunho-vendas">+ Novo rascunho</button>`}
+             <button class="botao secundario" data-acao="abrir-novo-cliente-vendas">+ Cadastrar cliente visitado</button>
+           </div>
          </div>`,
         "app-vendas"
       );
@@ -9082,6 +9085,70 @@
           <button type="submit" class="botao">Iniciar</button>
         </div>
       </form>`);
+  }
+
+  // Fase 103 — cadastro de cliente pelo próprio App de Vendas, direto na
+  // visita. Documento é OBRIGATÓRIO (pelo menos um): tanto pode ser
+  // escolhido de um arquivo já existente quanto batido na hora pela câmera
+  // do celular — `capture="environment"` abre a câmera traseira
+  // diretamente em qualquer navegador de celular moderno, sem precisar de
+  // nenhum app nativo à parte; em desktop, o mesmo input só abre o seletor
+  // de arquivo normal. `multiple` permite anexar mais de um documento
+  // (ex.: frente e verso do documento, ou documento + foto da fachada).
+  function modalNovoClienteAppVendas() {
+    const wrap = abrirModal(`
+      <h3>Cadastrar cliente visitado</h3>
+      <form data-form="criar-cliente-vendas">
+        <div class="campo">
+          <label>CNPJ</label>
+          <div style="display:flex;gap:8px;">
+            <input name="cnpj" required placeholder="00.000.000/0000-00" style="flex:1;">
+            <button type="button" class="botao secundario" data-acao="consultar-cnpj-cliente-vendas" style="flex-shrink:0;">Consultar CNPJ</button>
+          </div>
+          <div id="resultado-consulta-cnpj-vendas" class="dica"></div>
+        </div>
+        <div class="campo"><label>Razão social</label><input name="razao_social" required></div>
+        <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia"></div>
+        <div class="campo"><label>E-mail</label><input name="email" type="email"></div>
+        <div class="campo"><label>Endereço (resumido)</label><input name="endereco"></div>
+        <div class="campo">
+          <label>Documentos do cliente (obrigatório — foto ou arquivo)</label>
+          <input type="file" name="documentos" accept="image/jpeg,image/png,image/webp,application/pdf" capture="environment" multiple required>
+          <div class="dica">Bata uma foto do documento na hora (RG, CNPJ, contrato social) ou anexe um arquivo já
+          existente. Aceita JPG, PNG, WEBP ou PDF, até 10 MB cada. Pelo menos um é obrigatório para concluir o
+          cadastro em campo.</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Cadastrar</button>
+        </div>
+      </form>`,
+      { largo: true }
+    );
+
+    wrap.querySelector('[data-acao="consultar-cnpj-cliente-vendas"]').addEventListener("click", async () => {
+      const campoCnpj = wrap.querySelector('input[name="cnpj"]');
+      const areaResultado = wrap.querySelector("#resultado-consulta-cnpj-vendas");
+      if (!campoCnpj.value.trim()) { areaResultado.innerHTML = '<span class="mensagem-erro">Digite o CNPJ primeiro.</span>'; return; }
+      areaResultado.textContent = "Consultando...";
+      try {
+        const dados = await chamarApi(`/comercial/clientes/consultar-cnpj/${encodeURIComponent(campoCnpj.value.trim())}`);
+        if (dados.cliente_ja_cadastrado) {
+          areaResultado.innerHTML = `<span class="mensagem-erro">Este CNPJ já está cadastrado como "${escapeHtml(dados.cliente_ja_cadastrado.razao_social)}".</span>`;
+        }
+        ["razao_social", "nome_fantasia", "email", "endereco"].forEach((campo) => {
+          const input = wrap.querySelector(`[name="${campo}"]`);
+          if (input && dados[campo]) input.value = dados[campo];
+        });
+        if (dados.situacao_cadastral && dados.situacao_cadastral !== "ATIVA") {
+          areaResultado.innerHTML += `<br><span class="mensagem-erro">Situação cadastral na Receita: ${escapeHtml(dados.situacao_cadastral)}.</span>`;
+        } else if (!dados.cliente_ja_cadastrado) {
+          areaResultado.innerHTML = '<span class="mensagem-ok">Dados encontrados e preenchidos — confira antes de salvar.</span>';
+        }
+      } catch (e) {
+        areaResultado.innerHTML = `<span class="mensagem-erro">${escapeHtml(e.message)}</span>`;
+      }
+    });
   }
 
   function modalAdicionarItemRascunhoVendas(rascunhoId) {
@@ -11850,6 +11917,9 @@
       case "abrir-novo-rascunho-vendas":
         modalNovoRascunhoVendas();
         return;
+      case "abrir-novo-cliente-vendas":
+        modalNovoClienteAppVendas();
+        return;
       case "abrir-adicionar-item-rascunho-vendas":
         modalAdicionarItemRascunhoVendas(alvo.dataset.id);
         return;
@@ -13818,6 +13888,26 @@
         await chamarApi("/vendas-app/rascunhos", { method: "POST", body: { cliente_id: Number(dados.get("cliente_id")) } });
         fecharModais();
         definirFlash("ok", "Rascunho iniciado — os itens que você adicionar ficam reservados só para você.");
+        return renderAppVendas();
+      }
+      case "criar-cliente-vendas": {
+        const arquivos = Array.from(form.querySelector('input[name="documentos"]').files || []);
+        if (arquivos.length === 0) throw new Error("Anexe pelo menos um documento (foto ou arquivo) do cliente.");
+        const documentos = await Promise.all(arquivos.map(async (arquivo) => ({
+          nome_arquivo: arquivo.name || "documento.jpg",
+          tipo_mime: arquivo.type || "application/octet-stream",
+          dados: await lerArquivoComoBase64(arquivo),
+        })));
+        await chamarApi("/vendas-app/clientes", {
+          method: "POST",
+          body: {
+            razao_social: dados.get("razao_social"), cnpj: dados.get("cnpj"),
+            nome_fantasia: dados.get("nome_fantasia") || null, email: dados.get("email") || null,
+            endereco: dados.get("endereco") || null, documentos,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Cliente cadastrado — o Financeiro ainda precisa liberar o cadastro antes da primeira venda.");
         return renderAppVendas();
       }
       case "adicionar-item-rascunho-vendas": {
