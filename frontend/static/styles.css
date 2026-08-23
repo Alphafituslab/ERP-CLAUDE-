@@ -55,7 +55,32 @@ button, input, select {
   font-size: 14px;
 }
 
-#app { min-height: 100vh; }
+#app { min-height: 100vh; position: relative; z-index: 1; }
+
+/* Fase 104 — pedido do usuário: "colocar o fundo verde em todas as
+   páginas como se fosse uma marca d'água bem sutil". Recorte do próprio
+   símbolo da marca (só o "α"+folhas, sem o texto "alphafitus" — recortado
+   de logo_alphafitus.png para não ficar com o texto ilegível numa opacidade
+   tão baixa) fixo no centro da tela, atrás de todo o conteúdo
+   (`pointer-events: none` para nunca atrapalhar clique em nada). Como o
+   símbolo já é verde/teal da própria marca, isso cobre ao mesmo tempo o
+   pedido de "fundo verde" — não precisa de nenhuma cor extra somada por
+   cima. Fica atrás dos cartões/tabelas (que têm fundo opaco), então
+   aparece mesmo nas bordas/vãos entre eles e na tela de login — em
+   qualquer página, sem precisar repetir isso tela por tela. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image: url("/static/img/marca_dagua_simbolo.png");
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: min(55vmin, 480px);
+  opacity: 0.05;
+  pointer-events: none;
+  z-index: 0;
+}
+[data-tema="escuro"] body::before { opacity: 0.07; }
 
 /* ---------- Tela de login ---------- */
 .tela-login {

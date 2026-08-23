@@ -5087,6 +5087,19 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   bloqueante com o status financeiro do cadastro, contas em atraso no
   momento e a média histórica de atraso — o aviso nunca impede montar o
   pedido, só a confirmação de verdade é bloqueada no servidor.
+- (Entregue na Fase 104) Marca d'água sutil do símbolo da marca em todas
+  as páginas. Pedido do usuário: "colocar o fundo verde em todas as
+  páginas como se fosse uma marca d'água bem sutil". `frontend/static/
+  img/marca_dagua_simbolo.png` é um recorte do próprio símbolo (só o
+  "α"+folhas, sem o texto "alphafitus" — ilegível numa opacidade tão
+  baixa) extraído de `logo_alphafitus.png`. Aplicado via `body::before`
+  em `styles.css`: fixo, centralizado, atrás de todo o conteúdo
+  (`pointer-events: none`, nunca atrapalha clique em nada), opacidade
+  5% no tema claro e 7% no escuro (o fundo escuro apaga mais a cor).
+  Como o símbolo já é verde/teal da própria marca, cobre o pedido de
+  "fundo verde" sem precisar de nenhuma cor extra por cima — aparece nas
+  bordas/vãos entre cartões e tabelas (que têm fundo opaco) em qualquer
+  tela, sem precisar repetir isso página por página.
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório
