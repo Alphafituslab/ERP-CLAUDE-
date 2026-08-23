@@ -7170,6 +7170,19 @@
     return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
   }
 
+  // Fase 102 — aprovação financeira do CADASTRO do cliente (diferente da
+  // aprovação de cada pedido, Fase 83): decide se o cliente já está apto
+  // a comprar.
+  function seloAprovacaoFinanceiraCliente(status) {
+    const mapa = {
+      pendente: ["amarelo", "Aguardando aprovação financeira"],
+      aprovado: ["ativo", "Aprovado para comprar"],
+      reprovado: ["bloqueado", "Reprovado"],
+    };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
   function seloConta(status) {
     const mapa = {
       aberto: ["azul", "Aberto"], pago_parcial: ["amarelo", "Pago parcial"],
@@ -7191,6 +7204,7 @@
     const podeCadastrarCliente = temPermissao("comercial", "cadastrar_cliente");
     const podeCriarPedido = temPermissao("comercial", "criar_pedido");
     const podeConfigurarAppVendas = temPermissao("comercial", "configurar_comercial");
+    const podeAprovarCliente = temPermissao("comercial", "aprovar_pedido_acima_limite_credito");
 
     const linhasClientes = clientes
       .map((c) => `<tr>
@@ -7198,10 +7212,13 @@
         <td class="mono">${escapeHtml(c.cnpj)}</td>
         <td class="texto-suave">${escapeHtml(c.endereco || "—")}</td>
         <td>${c.limite_credito != null ? `R$ ${Number(c.limite_credito).toFixed(2)}` : '<span class="texto-suave">sem limite</span>'}</td>
+        <td>${seloAprovacaoFinanceiraCliente(c.aprovacao_financeira_status)}</td>
         <td><span class="selo ${c.status === "ativo" ? "ativo" : "inativo"}">${escapeHtml(c.status)}</span></td>
-        <td style="display:flex;gap:6px;">
+        <td style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="botao secundario pequeno" data-acao="ver-desempenho-cliente" data-id="${c.id}" data-nome="${escapeHtml(c.razao_social)}">Desempenho</button>
           ${podeCadastrarCliente ? `<button class="botao secundario pequeno" data-acao="editar-cliente" data-id="${c.id}">Editar</button>` : ""}
+          ${podeAprovarCliente && c.aprovacao_financeira_status !== "aprovado" ? `<button class="botao pequeno" data-acao="aprovar-cliente-financeiramente" data-id="${c.id}">Aprovar</button>` : ""}
+          ${podeAprovarCliente && c.aprovacao_financeira_status !== "reprovado" ? `<button class="botao perigo pequeno" data-acao="abrir-reprovar-cliente-financeiramente" data-id="${c.id}" data-nome="${escapeHtml(c.razao_social)}">Reprovar</button>` : ""}
         </td>
       </tr>`)
       .join("");
@@ -7235,8 +7252,8 @@
            ${podeCadastrarCliente ? `<button class="botao secundario pequeno" data-acao="novo-cliente">+ Novo cliente</button>` : ""}
          </div>
          <table>
-           <thead><tr><th>Razão social</th><th>CNPJ</th><th>Endereço</th><th>Limite de crédito</th><th>Status</th><th>Ações</th></tr></thead>
-           <tbody>${linhasClientes || '<tr><td colspan="6" class="texto-suave">Nenhum cliente cadastrado.</td></tr>'}</tbody>
+           <thead><tr><th>Razão social</th><th>CNPJ</th><th>Endereço</th><th>Limite de crédito</th><th>Financeiro</th><th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhasClientes || '<tr><td colspan="7" class="texto-suave">Nenhum cliente cadastrado.</td></tr>'}</tbody>
          </table>
        </div>
 
@@ -7620,6 +7637,21 @@
       </form>`, { largo: true });
   }
 
+  // ---- Fase 102: Aprovação Financeira do Cadastro de Cliente ----
+  function modalReprovarClienteFinanceiramente(clienteId, nomeCliente) {
+    abrirModal(`
+      <h3>Reprovar cliente ${escapeHtml(nomeCliente)}</h3>
+      <p class="texto-suave">O cliente fica impedido de ter pedidos confirmados até ser aprovado depois (a
+      qualquer momento, revertendo esta decisão).</p>
+      <form data-form="reprovar-cliente-financeiramente" data-id="${clienteId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Confirmar reprovação</button>
+        </div>
+      </form>`);
+  }
+
   // ---- Fase 64: Desempenho de Cliente (Scorecard) ----
   function modalDesempenhoCliente(nomeCliente, desempenho) {
     const pg = desempenho.pagamentos;
@@ -7644,10 +7676,12 @@
         <tbody>${linhasStatus}</tbody>
       </table>` : '<p class="texto-suave">Nenhum pedido de venda registrado ainda.</p>'}
 
-      <h4>Pontualidade de pagamento</h4>
+      <h4>Pontualidade de pagamento (score interno)</h4>
       ${pg.total_avaliados > 0
         ? `<p>${pg.no_prazo} de ${pg.total_avaliados} conta(s) já totalmente paga(s) foram pagas dentro do prazo — <strong>${pg.taxa_pontualidade_pct}%</strong> de pontualidade (${pg.atrasados} atrasada(s)).</p>`
         : '<p class="texto-suave">Ainda não há contas a receber totalmente pagas deste cliente para avaliar pontualidade.</p>'}
+      ${pg.media_dias_atraso != null
+        ? `<p>Média de atraso nas contas pagas com atraso: <strong>${pg.media_dias_atraso} dia(s)</strong>.</p>` : ""}
       ${pg.contas_em_atraso_no_momento > 0
         ? `<p class="mensagem-erro">${pg.contas_em_atraso_no_momento} conta(s) em aberto com o vencimento já vencido neste momento.</p>` : ""}
 
@@ -7726,6 +7760,40 @@
     );
   }
 
+  // Fase 102 — pedido do usuário: avisar se há inadimplência do cliente
+  // (ou o cadastro dele ainda não foi liberado pelo Financeiro) na hora
+  // de montar um pedido novo, não só numa tela separada de Desempenho.
+  // Nunca bloqueia aqui — o bloqueio de verdade (cliente não aprovado
+  // financeiramente) já acontece no servidor no momento de CONFIRMAR o
+  // pedido; isto é só o aviso adiantado, para quem está vendendo já
+  // saber antes de terminar de montar o pedido inteiro.
+  async function _mostrarRiscoCliente(wrap, cliente) {
+    const area = wrap.querySelector("#area-risco-cliente-pedido");
+    if (!area) return;
+    area.innerHTML = "";
+    const avisos = [];
+    if (cliente.aprovacao_financeira_status !== "aprovado") {
+      avisos.push(
+        cliente.aprovacao_financeira_status === "reprovado"
+          ? "Este cliente foi REPROVADO pelo Financeiro — pedidos dele não podem ser confirmados."
+          : "Este cliente ainda aguarda aprovação financeira do cadastro — pedidos dele não podem ser confirmados até lá."
+      );
+    }
+    try {
+      const desempenho = await chamarApi(`/comercial/clientes/${cliente.id}/desempenho`);
+      const pg = desempenho.pagamentos;
+      if (pg.contas_em_atraso_no_momento > 0) {
+        avisos.push(`${pg.contas_em_atraso_no_momento} conta(s) a receber deste cliente estão em atraso neste momento.`);
+      }
+      if (pg.media_dias_atraso != null) {
+        avisos.push(`Histórico: média de ${pg.media_dias_atraso} dia(s) de atraso nas contas já pagas com atraso (score interno).`);
+      }
+    } catch (e) { /* aviso de desempenho é só um extra — nunca impede montar o pedido */ }
+    if (avisos.length) {
+      area.innerHTML = `<p class="mensagem-erro">${avisos.map(escapeHtml).join("<br>")}</p>`;
+    }
+  }
+
   // Preenche a unidade a partir do PRÓPRIO cadastro do item (kg, mg, un
   // etc. — `itens.unidade_medida`) — pedido do usuário: a unidade não
   // deve ser digitada de novo a cada pedido, o cadastro do item já sabe
@@ -7784,6 +7852,7 @@
       ${(state.cache.itensVendaveis || []).length === 0 ? '<p class="mensagem-erro">Nenhum item do tipo "produto_acabado" cadastrado ainda — cadastre um em Itens antes de vender.</p>' : ""}
       <form data-form="criar-pedido">
         ${_buscaClienteHtml()}
+        <div id="area-risco-cliente-pedido"></div>
         ${_buscaItemHtml()}
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
         <div class="campo"><label>Unidade</label><input name="unidade" placeholder="preenchida pelo cadastro do item" required></div>
@@ -7810,6 +7879,7 @@
         tabelaPrecoDoCliente = temPermissao("comercial", "visualizar")
           ? await chamarApi(`/comercial/clientes/${cliente.id}/tabela-preco`).catch(() => null)
           : null;
+        _mostrarRiscoCliente(wrap, cliente);
         if (itemEscolhido) _preencherPrecoEMargem(wrap, itemEscolhido, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
       },
       onItem: (item) => {
@@ -11439,6 +11509,15 @@
         modalEditarCliente(cliente);
         return;
       }
+      // ---- Fase 102: Aprovação Financeira do Cadastro de Cliente ----
+      case "aprovar-cliente-financeiramente":
+        if (!confirm("Aprovar este cliente para comprar? A partir de agora os pedidos dele podem ser confirmados normalmente.")) return;
+        await chamarApi(`/comercial/clientes/${alvo.dataset.id}/aprovar-financeiramente`, { method: "POST" });
+        definirFlash("ok", "Cliente aprovado para comprar.");
+        return renderComercial();
+      case "abrir-reprovar-cliente-financeiramente":
+        modalReprovarClienteFinanceiramente(Number(alvo.dataset.id), alvo.dataset.nome);
+        return;
       // ---- Fase 64: Desempenho de Cliente (Scorecard) ----
       case "ver-desempenho-cliente": {
         const desempenhoCliente = await chamarApi(`/comercial/clientes/${alvo.dataset.id}/desempenho`);
@@ -13139,6 +13218,14 @@
         await chamarApi(`/comercial/clientes/${form.dataset.id}`, { method: "PUT", body: corpoEdicaoCliente });
         fecharModais();
         definirFlash("ok", "Cliente atualizado.");
+        return renderComercial();
+      }
+      case "reprovar-cliente-financeiramente": {
+        await chamarApi(`/comercial/clientes/${form.dataset.id}/reprovar-financeiramente`, {
+          method: "POST", body: { motivo: dados.get("motivo") },
+        });
+        fecharModais();
+        definirFlash("ok", "Cliente reprovado — pedidos dele não podem mais ser confirmados até ser aprovado.");
         return renderComercial();
       }
       case "criar-pedido": {

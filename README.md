@@ -5059,3 +5059,31 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   que o item é escolhido na busca — pedido do usuário: a unidade não deve
   ser digitada de novo a cada pedido, o cadastro já sabe qual é (continua
   editável, para o raro caso de vender numa unidade diferente).
+- (Entregue na Fase 102) Aprovação Financeira de Cadastro de Cliente +
+  score de inadimplência ao vender. Pedido do usuário: "ao cadastrar um
+  cliente novo ele só fica apto a comprar se o financeiro liberar o
+  cadastro com a avaliação financeira" + "avise se há inadimplência...
+  e a média de atraso dele, como se fosse um score interno". Diferente
+  da aprovação por PEDIDO (Fase 83, obrigatória em toda confirmação):
+  esta é uma aprovação do CLIENTE em si, feita uma vez —
+  `clientes.aprovacao_financeira_status` (`schema_fase102.sql`,
+  'pendente'/'aprovado'/'reprovado') bloqueia `confirmar_pedido_ou_
+  solicitar_aprovacao` ANTES mesmo de chegar na fila de aprovação por
+  pedido, com uma mensagem própria (`codigo=cliente_nao_aprovado_
+  financeiramente`). **Todo cliente que já existia antes desta fase foi
+  automaticamente marcado 'aprovado'** (UPDATE na própria migração,
+  testado) — ninguém que já comprava normalmente fica travado por uma
+  regra que não existia quando foi cadastrado; só cliente cadastrado a
+  partir de agora nasce 'pendente' de verdade. Novas rotas `POST
+  /comercial/clientes/<id>/aprovar-financeiramente` e `/reprovar-
+  financeiramente`, mesma permissão de quem já aprova pedido acima do
+  limite de crédito (Financeiro) — é a mesma responsabilidade de avaliar
+  risco, só que feita uma vez no cadastro em vez de pedido a pedido.
+  `_desempenho_cliente` ganhou `media_dias_atraso` (calculado a partir
+  das contas pagas com atraso, ao vivo, nunca guardado à parte — mesma
+  filosofia do resto do painel) — o "score interno" pedido pelo usuário.
+  Tanto a tela de Comercial (lista de clientes) quanto o momento de
+  escolher o cliente num Pedido de Venda novo mostram um aviso não-
+  bloqueante com o status financeiro do cadastro, contas em atraso no
+  momento e a média histórica de atraso — o aviso nunca impede montar o
+  pedido, só a confirmação de verdade é bloqueada no servidor.

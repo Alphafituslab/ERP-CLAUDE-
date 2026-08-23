@@ -143,6 +143,7 @@ def _desempenho_cliente(conn, cliente_id):
     pagamentos_no_prazo = 0
     pagamentos_atrasados = 0
     contas_em_atraso_no_momento = 0
+    soma_dias_atraso = 0
     hoje = _hoje_iso_data()
     for conta in contas:
         if conta["status"] == "pago":
@@ -155,10 +156,20 @@ def _desempenho_cliente(conn, cliente_id):
                     pagamentos_no_prazo += 1
                 else:
                     pagamentos_atrasados += 1
+                    # Fase 102 — "score" interno pedido pelo usuário: média
+                    # de dias de atraso, não só a taxa de pontualidade
+                    # (percentual) que já existia. Comparação por data pura
+                    # (sem hora), já que vencimento/data_pagamento são
+                    # sempre "AAAA-MM-DD" neste sistema.
+                    soma_dias_atraso += (
+                        datetime.datetime.strptime(ultima_baixa[:10], "%Y-%m-%d")
+                        - datetime.datetime.strptime(conta["vencimento"], "%Y-%m-%d")
+                    ).days
         elif conta["status"] in ("aberto", "pago_parcial") and conta["vencimento"] < hoje:
             contas_em_atraso_no_momento += 1
     total_avaliadas = pagamentos_no_prazo + pagamentos_atrasados
     taxa_pontualidade_pct = round((pagamentos_no_prazo / total_avaliadas) * 100, 1) if total_avaliadas > 0 else None
+    media_dias_atraso = round(soma_dias_atraso / pagamentos_atrasados, 1) if pagamentos_atrasados > 0 else None
 
     return {
         "cliente_id": cliente_id,
@@ -174,6 +185,11 @@ def _desempenho_cliente(conn, cliente_id):
             "atrasados": pagamentos_atrasados,
             "taxa_pontualidade_pct": taxa_pontualidade_pct,
             "contas_em_atraso_no_momento": contas_em_atraso_no_momento,
+            # Fase 102 — média de dias de atraso SÓ das contas pagas com
+            # atraso (None quando nunca houve nenhuma) — "score interno"
+            # pedido pelo usuário, calculado ao vivo, nunca guardado à
+            # parte (mesma filosofia de todo o resto deste painel).
+            "media_dias_atraso": media_dias_atraso,
         },
     }
 
@@ -533,6 +549,53 @@ def editar_cliente(cliente_id):
     novo = _cliente_ou_404(conn, cliente_id)
     audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],
                      acao="cliente_editado", valor_anterior=anterior, valor_novo=novo,
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(novo)
+
+
+@bp.post("/clientes/<int:cliente_id>/aprovar-financeiramente")
+@requires_permission("comercial", "aprovar_pedido_acima_limite_credito")
+def aprovar_cliente_financeiramente(cliente_id):
+    """Fase 102 — mesma permissão de quem já aprova pedido acima do limite
+    de crédito (Financeiro): é a mesma responsabilidade de avaliar o
+    risco de vender para aquele cliente, só que feita uma vez, no
+    cadastro, em vez de pedido a pedido."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+    anterior = _cliente_ou_404(conn, cliente_id)
+
+    conn.execute(
+        "UPDATE clientes SET aprovacao_financeira_status = 'aprovado', aprovacao_financeira_decidido_por = ?, "
+        "aprovacao_financeira_decidido_em = ?, aprovacao_financeira_motivo = ? WHERE id = ?",
+        (usuario_atual["id"], _now_iso(), dados.get("observacao"), cliente_id),
+    )
+    novo = _cliente_ou_404(conn, cliente_id)
+    audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],
+                     acao="cliente_aprovado_financeiramente", valor_anterior=anterior, valor_novo=novo,
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(novo)
+
+
+@bp.post("/clientes/<int:cliente_id>/reprovar-financeiramente")
+@requires_permission("comercial", "aprovar_pedido_acima_limite_credito")
+def reprovar_cliente_financeiramente(cliente_id):
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    motivo = (dados.get("motivo") or "").strip()
+    if not motivo:
+        raise ApiError("Informe o motivo da reprovação.", status=400)
+    conn = get_db()
+    anterior = _cliente_ou_404(conn, cliente_id)
+
+    conn.execute(
+        "UPDATE clientes SET aprovacao_financeira_status = 'reprovado', aprovacao_financeira_decidido_por = ?, "
+        "aprovacao_financeira_decidido_em = ?, aprovacao_financeira_motivo = ? WHERE id = ?",
+        (usuario_atual["id"], _now_iso(), motivo, cliente_id),
+    )
+    novo = _cliente_ou_404(conn, cliente_id)
+    audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],
+                     acao="cliente_reprovado_financeiramente", valor_anterior=anterior, valor_novo=novo,
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(novo)
 
@@ -904,6 +967,24 @@ def confirmar_pedido_ou_solicitar_aprovacao(conn, pedido_id, usuario_id):
         raise ApiError(f"Só é possível confirmar um pedido 'rascunho' (status atual: '{pedido['status']}').", status=400)
 
     cliente = _cliente_ou_404(conn, pedido["cliente_id"])
+
+    # Fase 102 — pedido do usuário: um cliente NOVO só fica apto a comprar
+    # depois que o Financeiro liberar o cadastro dele com uma avaliação
+    # financeira própria. Isto é DIFERENTE da aprovação por PEDIDO acima
+    # (Fase 83) — é uma trava anterior, sobre o CLIENTE em si, feita uma
+    # vez só; depois de aprovado o cliente, todo pedido dele continua
+    # seguindo o fluxo normal de aprovação por pedido. Cliente que já
+    # existia antes desta fase começou 'aprovado' automaticamente (ver
+    # schema_fase102.sql) — só cliente cadastrado a partir de agora nasce
+    # 'pendente' de verdade.
+    if cliente["aprovacao_financeira_status"] != "aprovado":
+        raise ApiError(
+            f"Este cliente ainda não foi liberado pelo Financeiro para comprar "
+            f"(status do cadastro: '{cliente['aprovacao_financeira_status']}'). "
+            "Peça para o Financeiro avaliar e aprovar o cadastro do cliente antes de confirmar este pedido.",
+            status=400, codigo="cliente_nao_aprovado_financeiramente",
+        )
+
     valor_pedido = _valor_total_pedido_venda(conn, pedido_id)
     saldo_aberto = _saldo_aberto_cliente(conn, pedido["cliente_id"])
     limite = cliente["limite_credito"]
