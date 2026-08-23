@@ -4953,3 +4953,32 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   (subquery correlacionada sobre `pedido_venda_itens`, mesmo cálculo que
   `_valor_total_pedido_venda` já fazia para o detalhe) — não existia
   antes porque a tela de lista nunca tinha precisado mostrar valor.
+- (Entregue na Fase 98) **Correção de segurança crítica** — escalada de
+  privilégio via criação/atribuição de perfil. Auditoria adversarial
+  pedida pelo usuário ("verificar com força se temos falhas de
+  segurança") encontrou dois caminhos reais de um usuário com uma
+  permissão baixa (ex.: só `usuarios.cadastrar`) conseguir se dar (ou dar
+  a uma conta nova que ele mesmo controla) o perfil Administrador
+  completo: (1) `POST /usuarios` nunca chamava NENHUMA checagem de
+  segregação de função antes de anexar `perfil_ids` ao usuário recém-
+  criado — a proteção existente (`bloquear_autoelevacao`) só rodava em
+  `PUT /usuarios/<id>/perfis`, e mesmo lá só bloqueava quando o alvo era
+  o PRÓPRIO solicitante; (2) essa proteção comparava só o NOME do perfil
+  contra a string literal "Administrador", então um perfil personalizado
+  carregado com todas as permissões (via `PUT /perfis/<id>/permissoes`
+  sobre um perfil ao qual o atacante ainda não pertencia — isso sozinho é
+  inofensivo) passava batido por não se chamar "Administrador".
+  `bloquear_autoelevacao` foi substituída por
+  `bloquear_atribuicao_alem_das_proprias_permissoes` (`app/
+  permissions.py`): em vez de comparar nome de perfil, compara o
+  CONJUNTO DE PERMISSÕES do(s) perfil(is) sendo atribuído(s) contra o
+  conjunto que o solicitante já possui agora — ninguém pode conceder,
+  para si mesmo ou para qualquer outro usuário (inclusive um recém-
+  criado), mais poder do que já tem. Chamada agora em `POST /usuarios`
+  (novo) e em `PUT /usuarios/<id>/perfis` (já existia, só trocou de
+  função). Confirmado com um exploit real reproduzido e bloqueado antes
+  do fix ir para produção — ver a auditoria completa disponível na
+  sessão que criou esta fase para o cenário exato passo a passo. Skill
+  reutilizável criada em `.claude/skills/auditoria-seguranca/SKILL.md`
+  para repetir este tipo de auditoria no futuro sem reconstruir o
+  contexto do zero.

@@ -4,7 +4,7 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import audit, security
 from ..context import ApiError, client_device, client_ip, get_db
-from ..permissions import bloquear_autoelevacao, requires_permission
+from ..permissions import bloquear_atribuicao_alem_das_proprias_permissoes, requires_permission
 
 bp = Blueprint("usuarios", __name__, url_prefix="/api/v1/usuarios")
 
@@ -83,6 +83,15 @@ def criar():
     if existente:
         raise ApiError("Já existe um usuário com este email.", status=409)
 
+    # Achado de auditoria de segurança: sem esta checagem, qualquer um com
+    # só `usuarios.cadastrar` (uma permissão de "cadastrar gente nova", não
+    # de "administrar o sistema") conseguia criar uma conta nova e já
+    # anexar o perfil Administrador (ou qualquer outro) a ela na mesma
+    # chamada — mesma regra de segregação de função que `PUT /usuarios/
+    # <id>/perfis` já aplicava para um usuário EXISTENTE, agora também
+    # aqui, na criação.
+    bloquear_atribuicao_alem_das_proprias_permissoes(conn, usuario_atual["id"], perfil_ids)
+
     senha_hash = security.hash_password(senha)
     cur = conn.execute(
         """
@@ -153,7 +162,7 @@ def definir_perfis(usuario_id):
     if alvo is None:
         raise ApiError("Usuário não encontrado.", status=404)
 
-    bloquear_autoelevacao(conn, usuario_atual["id"], usuario_id, perfil_ids)
+    bloquear_atribuicao_alem_das_proprias_permissoes(conn, usuario_atual["id"], perfil_ids)
 
     anteriores = _perfis_do_usuario(conn, usuario_id)
     conn.execute("DELETE FROM usuario_perfil WHERE usuario_id = ?", (usuario_id,))

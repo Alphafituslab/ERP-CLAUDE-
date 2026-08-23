@@ -78,34 +78,59 @@ def requires_auth(view_func):
     return wrapper
 
 
-PERFIL_ADMINISTRADOR = "Administrador"
-
-
-def bloquear_autoelevacao(conn, usuario_solicitante_id: int, usuario_alvo_id: int, perfil_ids_alvo):
+def bloquear_atribuicao_alem_das_proprias_permissoes(conn, usuario_solicitante_id: int, perfil_ids_alvo):
     """Regra de segregação de função (documento de arquitetura, seção 4):
-    ninguém pode conceder a SI MESMO um perfil administrativo. Esta é a
-    implementação de referência do padrão de dupla aprovação que as Fases
-    2-3 vão reaplicar em aprovação de lote, fórmula, CoA etc. — nenhum
-    usuário pode ser ao mesmo tempo solicitante e aprovador de uma mudança
-    que amplia seu próprio poder no sistema. Um administrador ainda pode
-    conceder o perfil Administrador a OUTRO usuário normalmente."""
-    if not perfil_ids_alvo or usuario_solicitante_id != usuario_alvo_id:
+    ninguém pode conceder — para SI MESMO, para um usuário já existente ou
+    para um usuário RECÉM-CRIADO — um perfil cujo conjunto de permissões
+    ultrapasse o que o próprio solicitante já possui NESTE EXATO MOMENTO.
+
+    Achado de auditoria de segurança (corrigido aqui): a versão anterior
+    desta função (`bloquear_autoelevacao`) só comparava o NOME do perfil
+    contra a string literal "Administrador" e só entrava em ação quando
+    `usuario_solicitante_id == usuario_alvo_id`. Isso deixava dois
+    caminhos abertos: (1) `POST /usuarios` (criar um usuário novo) nunca
+    chamava nenhuma checagem — qualquer um com `usuarios.cadastrar`
+    conseguia criar uma conta nova e já anexar o perfil Administrador a
+    ela na mesma chamada, já que o "alvo" nunca é o próprio solicitante
+    numa criação; (2) um perfil PERSONALIZADO carregado com todas as
+    permissões (via `PUT /perfis/<id>/permissoes` sobre um perfil ao qual
+    o atacante ainda não pertence — permitido, e por si só inofensivo até
+    alguém ser atribuído a ele) passava batido pela comparação de nome.
+    Comparar o CONJUNTO DE PERMISSÕES em vez do nome do perfil, e aplicar
+    a checagem em toda atribuição (não só quando o alvo é o próprio
+    solicitante), fecha os dois caminhos de uma vez — inclusive qualquer
+    perfil futuro que agregue poder equivalente sem se chamar
+    "Administrador"."""
+    if not perfil_ids_alvo:
         return
     placeholders = ",".join("?" for _ in perfil_ids_alvo)
-    rows = conn.execute(
-        f"SELECT id, nome FROM perfis WHERE id IN ({placeholders}) AND nome = ?",
-        (*perfil_ids_alvo, PERFIL_ADMINISTRADOR),
+    permissoes_dos_perfis_alvo = conn.execute(
+        f"SELECT DISTINCT permissao_id FROM perfil_permissao WHERE perfil_id IN ({placeholders})",
+        perfil_ids_alvo,
     ).fetchall()
-    if rows:
+    ids_permissoes_alvo = {r["permissao_id"] for r in permissoes_dos_perfis_alvo}
+    if not ids_permissoes_alvo:
+        return
+    permissoes_do_solicitante = conn.execute(
+        """
+        SELECT DISTINCT pp.permissao_id FROM usuario_perfil up
+        JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
+        WHERE up.usuario_id = ?
+        """,
+        (usuario_solicitante_id,),
+    ).fetchall()
+    ids_permissoes_solicitante = {r["permissao_id"] for r in permissoes_do_solicitante}
+    if ids_permissoes_alvo - ids_permissoes_solicitante:
         raise ForbiddenError(
-            "Um usuário não pode conceder a si mesmo o perfil Administrador "
-            "(regra de segregação de função). Peça a outro administrador para fazer essa alteração."
+            "Você não pode atribuir um perfil com permissões que você mesmo não possui "
+            "(regra de segregação de função). Peça a um administrador para fazer essa atribuição."
         )
 
 
 def bloquear_autoedicao_de_permissoes_do_proprio_perfil(conn, usuario_solicitante_id: int, perfil_id: int):
-    """Mesma regra de segregação de função de `bloquear_autoelevacao`, mas
-    para o OUTRO caminho de auto-elevação de privilégio possível no
+    """Mesma regra de segregação de função de
+    `bloquear_atribuicao_alem_das_proprias_permissoes`, mas para o OUTRO
+    caminho de auto-elevação de privilégio possível no
     sistema: em vez de se conceder o perfil Administrador diretamente
     (bloqueado acima), um usuário com `perfis.editar` poderia editar as
     PERMISSÕES de um perfil PERSONALIZADO ao qual ele mesmo já pertence —
