@@ -7507,18 +7507,63 @@
   }
 
   function modalNovoCliente() {
-    abrirModal(`
+    const wrap = abrirModal(`
       <h3>Novo cliente</h3>
       <form data-form="criar-cliente">
+        <div class="campo">
+          <label>CNPJ</label>
+          <div style="display:flex;gap:8px;">
+            <input name="cnpj" required placeholder="00.000.000/0000-00" style="flex:1;">
+            <button type="button" class="botao secundario" data-acao="consultar-cnpj-cliente" style="flex-shrink:0;">Consultar CNPJ</button>
+          </div>
+          <div id="resultado-consulta-cnpj" class="dica"></div>
+        </div>
         <div class="campo"><label>Razão social</label><input name="razao_social" required></div>
         <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia"></div>
-        <div class="campo"><label>CNPJ</label><input name="cnpj" required placeholder="00.000.000/0000-00"></div>
-        <div class="campo"><label>Endereço</label><input name="endereco"></div>
+        <div class="campo"><label>E-mail</label><input name="email" type="email"></div>
+        <div class="campo"><label>Endereço (resumido)</label><input name="endereco"></div>
+        <h4>Endereço detalhado (opcional, usado ao emitir NF-e)</h4>
+        <div class="campo"><label>Logradouro</label><input name="logradouro"></div>
+        <div class="campo"><label>Número</label><input name="numero_endereco"></div>
+        <div class="campo"><label>Complemento</label><input name="complemento_endereco"></div>
+        <div class="campo"><label>Bairro</label><input name="bairro"></div>
+        <div class="campo"><label>Município</label><input name="municipio"></div>
+        <div class="campo"><label>Código IBGE do município</label><input name="codigo_ibge_municipio"></div>
+        <div class="campo"><label>UF</label><input name="uf" maxlength="2" style="text-transform:uppercase;"></div>
+        <div class="campo"><label>CEP</label><input name="cep"></div>
+        <div class="campo"><label>Inscrição Estadual</label><input name="inscricao_estadual" placeholder="ou 'ISENTO' se não for contribuinte de ICMS"></div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Criar</button>
         </div>
-      </form>`);
+      </form>`,
+      { largo: true }
+    );
+
+    wrap.querySelector('[data-acao="consultar-cnpj-cliente"]').addEventListener("click", async () => {
+      const campoCnpj = wrap.querySelector('input[name="cnpj"]');
+      const areaResultado = wrap.querySelector("#resultado-consulta-cnpj");
+      if (!campoCnpj.value.trim()) { areaResultado.innerHTML = '<span class="mensagem-erro">Digite o CNPJ primeiro.</span>'; return; }
+      areaResultado.textContent = "Consultando...";
+      try {
+        const dados = await chamarApi(`/comercial/clientes/consultar-cnpj/${encodeURIComponent(campoCnpj.value.trim())}`);
+        if (dados.cliente_ja_cadastrado) {
+          areaResultado.innerHTML = `<span class="mensagem-erro">Este CNPJ já está cadastrado como "${escapeHtml(dados.cliente_ja_cadastrado.razao_social)}".</span>`;
+        }
+        ["razao_social", "nome_fantasia", "email", "endereco", "logradouro", "numero_endereco",
+         "complemento_endereco", "bairro", "municipio", "codigo_ibge_municipio", "uf", "cep"].forEach((campo) => {
+          const input = wrap.querySelector(`[name="${campo}"]`);
+          if (input && dados[campo]) input.value = dados[campo];
+        });
+        if (dados.situacao_cadastral && dados.situacao_cadastral !== "ATIVA") {
+          areaResultado.innerHTML += `<br><span class="mensagem-erro">Situação cadastral na Receita: ${escapeHtml(dados.situacao_cadastral)}.</span>`;
+        } else if (!dados.cliente_ja_cadastrado) {
+          areaResultado.innerHTML = '<span class="mensagem-ok">Dados encontrados e preenchidos — confira antes de salvar.</span>';
+        }
+      } catch (e) {
+        areaResultado.innerHTML = `<span class="mensagem-erro">${escapeHtml(e.message)}</span>`;
+      }
+    });
   }
 
   function modalEditarCliente(cliente) {
@@ -7530,6 +7575,7 @@
       <h3>Editar ${escapeHtml(cliente.razao_social)}</h3>
       <form data-form="editar-cliente" data-id="${cliente.id}">
         <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia" value="${escapeHtml(cliente.nome_fantasia || "")}"></div>
+        <div class="campo"><label>E-mail</label><input name="email" type="email" value="${escapeHtml(cliente.email || "")}"></div>
         <div class="campo"><label>Endereço</label><input name="endereco" value="${escapeHtml(cliente.endereco || "")}"></div>
         ${tabelasPreco.length ? `
         <div class="campo"><label>Tabela de preço</label>
@@ -7680,12 +7726,21 @@
     );
   }
 
+  // Preenche a unidade a partir do PRÓPRIO cadastro do item (kg, mg, un
+  // etc. — `itens.unidade_medida`) — pedido do usuário: a unidade não
+  // deve ser digitada de novo a cada pedido, o cadastro do item já sabe
+  // qual é. Continua editável depois de preenchida, para o raro caso de
+  // vender numa unidade diferente da cadastrada.
+  //
   // Preenche o preço a partir da tabela de preço do cliente (se houver e
   // se o item tiver preço cadastrado nela) e, para quem tem
   // `custeio.visualizar`, busca custo/margem e mantém o cálculo vivo
   // enquanto o preço é editado à mão (sem refazer a chamada à API a cada
   // tecla — o custo não muda, só o preço muda).
   async function _preencherPrecoEMargem(wrap, item, tabelaPrecoDoCliente, empresaIdAtual) {
+    const campoUnidade = wrap.querySelector('input[name="unidade"]');
+    if (campoUnidade && item.unidade_medida) campoUnidade.value = item.unidade_medida;
+
     const campoPreco = wrap.querySelector('input[name="preco_unitario"]');
     const preco = tabelaPrecoDoCliente && tabelaPrecoDoCliente.itens.find((i) => i.item_id === item.id);
     if (preco) campoPreco.value = preco.preco;
@@ -7731,7 +7786,7 @@
         ${_buscaClienteHtml()}
         ${_buscaItemHtml()}
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
-        <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" placeholder="preenchida pelo cadastro do item" required></div>
         <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
         <div id="area-margem-pedido"></div>
         <div class="dica">O pedido é criado como rascunho com este primeiro item — depois de criado, você pode adicionar mais itens na tela de detalhe antes de confirmar. O preço aqui informado é o que será usado para gerar a conta a receber quando o pedido for expedido.</div>
@@ -7770,7 +7825,7 @@
       <form data-form="adicionar-item-pedido" data-id="${pedidoId}">
         ${_buscaItemHtml()}
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
-        <div class="campo"><label>Unidade</label><input name="unidade" value="kg" required></div>
+        <div class="campo"><label>Unidade</label><input name="unidade" placeholder="preenchida pelo cadastro do item" required></div>
         <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
         <div id="area-margem-pedido"></div>
         <div class="rodape-modal">
@@ -13037,7 +13092,19 @@
           method: "POST",
           body: {
             razao_social: dados.get("razao_social"), nome_fantasia: dados.get("nome_fantasia") || null,
-            cnpj: dados.get("cnpj"), endereco: dados.get("endereco") || null,
+            cnpj: dados.get("cnpj"), email: dados.get("email") || null, endereco: dados.get("endereco") || null,
+            // Fase 101 — mesmos campos fiscais/endereço detalhado da Fase 70
+            // (antes só editáveis depois de criado), agora também aceitos já
+            // na criação — tipicamente preenchidos pela consulta de CNPJ.
+            inscricao_estadual: dados.get("inscricao_estadual") || null,
+            logradouro: dados.get("logradouro") || null,
+            numero_endereco: dados.get("numero_endereco") || null,
+            complemento_endereco: dados.get("complemento_endereco") || null,
+            bairro: dados.get("bairro") || null,
+            municipio: dados.get("municipio") || null,
+            codigo_ibge_municipio: dados.get("codigo_ibge_municipio") || null,
+            uf: (dados.get("uf") || "").toUpperCase() || null,
+            cep: dados.get("cep") || null,
           },
         });
         fecharModais();
@@ -13046,7 +13113,8 @@
       }
       case "editar-cliente": {
         const corpoEdicaoCliente = {
-          nome_fantasia: dados.get("nome_fantasia") || null, endereco: dados.get("endereco") || null, status: dados.get("status"),
+          nome_fantasia: dados.get("nome_fantasia") || null, endereco: dados.get("endereco") || null,
+          email: dados.get("email") || null, status: dados.get("status"),
           // Fase 63 — campo em branco limpa o limite (envia null); com valor, converte para número.
           limite_credito: dados.get("limite_credito") ? Number(dados.get("limite_credito")) : null,
           // Fase 70 — dados fiscais (destinatário da NF-e).

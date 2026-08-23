@@ -5,6 +5,7 @@ import sqlite3
 from flask import Blueprint, g, jsonify, request
 
 from .. import audit
+from .. import cnpj_service
 from .. import notificacoes_service
 from .. import security
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
@@ -358,6 +359,28 @@ def _validar_item_vendavel(conn, item_id):
 # ============================================================
 # CLIENTES
 # ============================================================
+@bp.get("/clientes/consultar-cnpj/<cnpj>")
+@requires_permission("comercial", "cadastrar_cliente")
+def consultar_cnpj_cliente(cnpj):
+    """Fase 101 — busca razão social/endereço/e-mail públicos na Receita
+    Federal (via BrasilAPI, ver app/cnpj_service.py) para pré-preencher o
+    formulário de novo cliente. Mesma permissão de cadastrar cliente (não
+    faz sentido consultar CNPJ sem poder usar o resultado para nada)."""
+    conn = get_db()
+    resultado = cnpj_service.consultar_cnpj(cnpj)
+    # Mesmo estilo de comparação usado em `criar_cliente` (WHERE cnpj = ?
+    # contra o texto exato como foi digitado) — este sistema não impõe
+    # máscara/normalização de CNPJ em lugar nenhum ainda, então compara
+    # tanto o valor recebido quanto a versão só-dígitos, cobrindo cliente
+    # já cadastrado com ou sem pontuação.
+    ja_cadastrado = conn.execute(
+        "SELECT id, razao_social FROM clientes WHERE cnpj = ? OR cnpj = ?",
+        (cnpj, cnpj_service._somente_digitos(cnpj)),
+    ).fetchone()
+    resultado["cliente_ja_cadastrado"] = dict(ja_cadastrado) if ja_cadastrado else None
+    return jsonify(resultado)
+
+
 @bp.get("/clientes")
 @requires_permission("comercial", "visualizar")
 def listar_clientes():
@@ -429,9 +452,22 @@ def criar_cliente():
     if conn.execute("SELECT id FROM clientes WHERE cnpj = ?", (cnpj,)).fetchone():
         raise ApiError("Já existe um cliente com este CNPJ.", status=409)
 
+    # Fase 101 — os campos fiscais/endereço (mesmos de CAMPOS_FISCAIS_
+    # CLIENTE_EDITAVEIS, já usados na edição desde a Fase 70) e o e-mail
+    # agora também podem vir preenchidos já na CRIAÇÃO — normalmente a
+    # partir da consulta de CNPJ (`GET /clientes/consultar-cnpj/<cnpj>`),
+    # mas continuam 100% opcionais: um cadastro manual sem consultar nada
+    # funciona exatamente como antes desta fase.
+    valores_fiscais = [dados.get(campo) for campo in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS]
+
     cur = conn.execute(
-        "INSERT INTO clientes (razao_social, nome_fantasia, cnpj, endereco, criado_por) VALUES (?, ?, ?, ?, ?)",
-        (razao_social, dados.get("nome_fantasia"), cnpj, dados.get("endereco"), usuario_atual["id"]),
+        f"""
+        INSERT INTO clientes (razao_social, nome_fantasia, cnpj, endereco, email, criado_por,
+               {', '.join(CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)})
+        VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)})
+        """,
+        (razao_social, dados.get("nome_fantasia"), cnpj, dados.get("endereco"), dados.get("email"),
+         usuario_atual["id"], *valores_fiscais),
     )
     cliente_id = cur.lastrowid
     audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],
@@ -450,6 +486,7 @@ def editar_cliente(cliente_id):
     anterior = _cliente_ou_404(conn, cliente_id)
     nome_fantasia = dados.get("nome_fantasia", anterior["nome_fantasia"])
     endereco = dados.get("endereco", anterior["endereco"])
+    email = dados.get("email", anterior["email"])
     status = dados.get("status", anterior["status"])
     if status not in ("ativo", "inativo"):
         raise ApiError("status deve ser 'ativo' ou 'inativo'.", status=400)
@@ -486,11 +523,11 @@ def editar_cliente(cliente_id):
 
     conn.execute(
         f"""
-        UPDATE clientes SET nome_fantasia = ?, endereco = ?, status = ?, limite_credito = ?, tabela_preco_id = ?,
+        UPDATE clientes SET nome_fantasia = ?, endereco = ?, email = ?, status = ?, limite_credito = ?, tabela_preco_id = ?,
                {', '.join(f'{c} = ?' for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)}
         WHERE id = ?
         """,
-        (nome_fantasia, endereco, status, limite_credito, tabela_preco_id,
+        (nome_fantasia, endereco, email, status, limite_credito, tabela_preco_id,
          *[valores_fiscais[c] for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS], cliente_id),
     )
     novo = _cliente_ou_404(conn, cliente_id)

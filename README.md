@@ -5037,3 +5037,25 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   popular o seletor de setor sem exigir `perfis.visualizar` (que
   devolveria informação mais ampla do que quem cadastra uma etapa
   precisa ver).
+- (Entregue na Fase 101) Consulta de CNPJ ao cadastrar cliente + unidade
+  do item vinda do cadastro. `GET /comercial/clientes/consultar-cnpj/
+  <cnpj>` (`app/cnpj_service.py`) busca razão social/nome fantasia/
+  endereço/e-mail públicos na BrasilAPI (agregador público e gratuito de
+  dados abertos do governo, sem chave de API) e pré-preenche o formulário
+  de novo cliente — nunca uma trava, cadastro 100% manual continua
+  funcionando se a consulta falhar ou não for usada. `clientes.email`
+  (`schema_fase101.sql`) é campo novo — não existia nenhum e-mail
+  cadastrado em cliente nenhum antes desta fase. **Achado real durante o
+  desenvolvimento** (confirmado contra uma resposta de verdade da
+  BrasilAPI, não suposição): o payload tem `codigo_municipio` (código
+  INTERNO da BrasilAPI) e `codigo_municipio_ibge` (código OFICIAL do
+  IBGE, o mesmo exigido pela NF-e) — são números completamente
+  diferentes; usar o campo errado geraria uma NF-e com código de
+  município incorreto. `_mapear_resposta` usa `codigo_municipio_ibge`
+  como prioridade, nunca o outro. Também nesta fase: o campo "Unidade" ao
+  adicionar um item a um pedido de venda (`modalNovoPedido`/
+  `modalAdicionarItemPedido`) parou de vir com "kg" fixo e passou a ser
+  preenchido pelo PRÓPRIO cadastro do item (`itens.unidade_medida`) assim
+  que o item é escolhido na busca — pedido do usuário: a unidade não deve
+  ser digitada de novo a cada pedido, o cadastro já sabe qual é (continua
+  editável, para o raro caso de vender numa unidade diferente).
