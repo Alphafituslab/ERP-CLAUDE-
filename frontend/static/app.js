@@ -55,6 +55,10 @@
     // buscado uma única vez (rota sem autenticação) e reaproveitado em
     // toda renderShell daqui pra frente.
     versaoSistema: null,
+    // Fase 111 — status da pulsação com o servidor (ver iniciarHeartbeatTerminal),
+    // usado pela pílula "Servidor conectado/desconectado" na barra superior e pelo
+    // popover de detalhes (endereço, latência, última sincronização).
+    statusServidor: { conectado: null, bloqueado: false, latenciaMs: null, ultimaSincronizacaoEm: null },
   };
 
   document.documentElement.setAttribute("data-tema", state.tema);
@@ -243,6 +247,79 @@
   }
 
   // ---------------------------------------------------------------------
+  // Fase 111 — Arquitetura Servidor + Terminais: pulsação periódica que
+  // registra esta máquina em `terminais` (ver app/routes/terminais.py) e
+  // alimenta a pílula "🟢 SERVIDOR CONECTADO"/"🔴 DESCONECTADO" da barra
+  // superior. Mesmo espírito do polling de notificações acima: só
+  // atualiza o DOM diretamente, nunca re-renderiza a tela inteira.
+  //
+  // `terminal_uid` é gerado UMA VEZ por este navegador/instalação (nunca
+  // por sessão de usuário — dois usuários no MESMO computador devem
+  // aparecer como o MESMO terminal) e persistido em localStorage.
+  // ---------------------------------------------------------------------
+  let timerHeartbeatTerminal = null;
+
+  function obterTerminalUid() {
+    let uid = localStorage.getItem("alphafitus_terminal_uid");
+    if (!uid) {
+      uid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `terminal-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      localStorage.setItem("alphafitus_terminal_uid", uid);
+    }
+    return uid;
+  }
+
+  function pararHeartbeatTerminal() {
+    if (timerHeartbeatTerminal) {
+      clearInterval(timerHeartbeatTerminal);
+      timerHeartbeatTerminal = null;
+    }
+  }
+
+  function atualizarPilulaStatusServidorNoDom() {
+    const pilula = document.querySelector("[data-pilula-status-servidor]");
+    if (!pilula) return;
+    const s = state.statusServidor;
+    if (s.bloqueado) {
+      pilula.className = "pilula-status-servidor bloqueado";
+      pilula.textContent = "🔴 Terminal bloqueado";
+    } else if (s.conectado) {
+      pilula.className = "pilula-status-servidor conectado";
+      pilula.textContent = "🟢 Servidor conectado";
+    } else {
+      pilula.className = "pilula-status-servidor desconectado";
+      pilula.textContent = "🔴 Servidor desconectado";
+    }
+  }
+
+  async function enviarHeartbeatTerminal() {
+    const inicio = performance.now();
+    try {
+      await chamarApi("/terminais/heartbeat", {
+        method: "POST",
+        body: { terminal_uid: obterTerminalUid(), versao_app: state.versaoSistema || null },
+      });
+      state.statusServidor = {
+        conectado: true, bloqueado: false,
+        latenciaMs: Math.round(performance.now() - inicio),
+        ultimaSincronizacaoEm: new Date().toISOString(),
+      };
+    } catch (erro) {
+      state.statusServidor = {
+        ...state.statusServidor,
+        conectado: false,
+        bloqueado: erro.codigo === "terminal_bloqueado",
+      };
+    }
+    atualizarPilulaStatusServidorNoDom();
+  }
+
+  function iniciarHeartbeatTerminal() {
+    if (timerHeartbeatTerminal) return; // já rodando, não duplica
+    enviarHeartbeatTerminal();
+    timerHeartbeatTerminal = setInterval(enviarHeartbeatTerminal, 60000);
+  }
+
+  // ---------------------------------------------------------------------
   // Roteador (hash simples, sem dependências)
   // ---------------------------------------------------------------------
   function navegarPara(hash) {
@@ -298,6 +375,10 @@
     // ficar atualizado mesmo sem o usuário abrir a tela de Notificações.
     // `iniciarPollingNotificacoes` já se protege contra criar dois timers.
     iniciarPollingNotificacoes();
+    // Fase 111 — mesma ideia, agora para a pulsação de terminal (ver
+    // iniciarHeartbeatTerminal): também se protege sozinha contra criar
+    // dois timers numa mesma sessão.
+    iniciarHeartbeatTerminal();
 
     const [, pagina, param] = rota.split("/");
     try {
@@ -316,6 +397,7 @@
           case "permissoes": return renderPermissoes();
           case "empresas": return renderEmpresas();
           case "auditoria": return renderAuditoria();
+          case "terminais": return renderTerminais();
           case "notificacoes": return renderNotificacoes();
           case "conta": return renderMinhaConta();
           case "itens": return renderItens();
@@ -528,6 +610,7 @@
         { rota: "#/permissoes", chave: "permissoes", label: "Permissões", permissao: ["permissoes", "visualizar"] },
         { rota: "#/empresas", chave: "empresas", label: "Empresas", permissao: ["empresas", "visualizar"] },
         { rota: "#/auditoria", chave: "auditoria", label: "Auditoria", permissao: ["auditoria", "visualizar"] },
+        { rota: "#/terminais", chave: "terminais", label: "Terminais", permissao: ["terminais", "visualizar"] },
       ],
     },
     { rota: "#/conta", chave: "conta", label: "Minha Conta" },
@@ -616,6 +699,7 @@
           <div class="barra-superior">
             <button class="botao-icone botao-menu-mobile" data-acao="alternar-menu-mobile" title="Abrir menu">☰</button>
             <button class="botao-icone botao-menu-desktop" data-acao="alternar-menu-desktop" title="Mostrar/ocultar menu lateral">${state.menuLateralOculto ? "▶" : "◀"}</button>
+            <button class="pilula-status-servidor" data-pilula-status-servidor data-acao="mostrar-status-servidor" title="Detalhes da conexão">🟢 Servidor conectado</button>
             <span class="espacador-barra-superior"></span>
             <button class="botao-icone botao-icone-com-badge" data-acao="ir-notificacoes" title="Notificações">🔔<span class="badge-notificacoes" data-badge-notificacoes ${state.notificacoesNaoLidas > 0 ? "" : "hidden"}>${state.notificacoesNaoLidas > 99 ? "99+" : state.notificacoesNaoLidas}</span></button>
             <button class="botao-icone" data-acao="alternar-tema" title="Alternar tema claro/escuro">🌓</button>
@@ -1296,6 +1380,66 @@
        </div>`,
       "auditoria"
     );
+  }
+
+  // =======================================================================
+  // TERMINAIS (Fase 111 — Arquitetura Servidor + Terminais)
+  // =======================================================================
+  // Lista as máquinas que já se conectaram ao servidor pela rede (cada uma
+  // se registra sozinha via heartbeat, ver iniciarHeartbeatTerminal acima)
+  // — nunca precisa ser cadastrada manualmente aqui.
+  async function renderTerminais() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const terminais = await chamarApi("/terminais");
+    const podeBloquear = temPermissao("terminais", "bloquear");
+
+    const linhas = terminais
+      .map((t) => `<tr>
+        <td>
+          <strong>Nº ${String(t.id).padStart(3, "0")}</strong>
+          ${t.nome ? `<div class="texto-suave">${escapeHtml(t.nome)}</div>` : ""}
+        </td>
+        <td>${escapeHtml(t.usuario_ultimo_acesso_nome || "—")}</td>
+        <td>${escapeHtml(t.ip_ultimo_acesso || "—")}</td>
+        <td>${escapeHtml(t.versao_app_ultima || "—")}</td>
+        <td>${t.ultimo_acesso_em ? fmtData(t.ultimo_acesso_em) : "—"}</td>
+        <td>${t.bloqueado ? '<span class="selo bloqueado">Bloqueado</span>' : '<span class="selo ativo">Ativo</span>'}</td>
+        <td>
+          ${podeBloquear ? `<button class="botao secundario pequeno" data-acao="renomear-terminal" data-id="${t.id}" data-nome="${escapeHtml(t.nome || "")}">Renomear</button>` : ""}
+          ${podeBloquear
+            ? (t.bloqueado
+                ? `<button class="botao secundario pequeno" data-acao="liberar-terminal" data-id="${t.id}">Liberar</button>`
+                : `<button class="botao perigo pequeno" data-acao="bloquear-terminal" data-id="${t.id}">Bloquear</button>`)
+            : ""}
+        </td>
+      </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Terminais</h2>
+       <div class="cartao">
+         <p class="texto-suave">Máquinas que já acessaram o sistema pela rede. Cada uma se registra sozinha ao
+         entrar — não precisa cadastrar nada aqui. Bloquear um terminal impede que ele continue usando o sistema
+         (útil, por exemplo, se um notebook saiu da empresa) sem precisar mexer no usuário/senha de ninguém.</p>
+         <table>
+           <thead><tr><th>Terminal</th><th>Último usuário</th><th>IP</th><th>Versão</th><th>Última conexão</th><th>Status</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum terminal registrado ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "terminais"
+    );
+  }
+
+  function modalRenomearTerminal(terminalId, nomeAtual) {
+    abrirModal(`
+      <h3>Renomear terminal</h3>
+      <form data-form="renomear-terminal" data-id="${terminalId}">
+        <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(nomeAtual)}" placeholder="ex.: COMERCIAL-01" autofocus></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
   }
 
   // =======================================================================
@@ -10894,8 +11038,30 @@
           await chamarApi("/auth/logout", { method: "POST", body: { refresh_token: state.refreshToken } });
         } catch (e) { /* mesmo se falhar no servidor, limpa localmente */ }
         pararPollingNotificacoes();
+        pararHeartbeatTerminal();
         limparSessao();
         navegarPara("#/login");
+        return;
+      }
+      case "mostrar-status-servidor": {
+        const s = state.statusServidor;
+        const situacao = s.bloqueado
+          ? '<span class="mensagem-erro">Este terminal foi bloqueado por um administrador. Fale com quem administra o sistema.</span>'
+          : s.conectado
+            ? '<span class="mensagem-ok">Conectado normalmente.</span>'
+            : '<span class="mensagem-erro">Sem conexão com o servidor no momento — tentando de novo automaticamente.</span>';
+        abrirModal(`
+          <h3>Status da conexão</h3>
+          <p>${situacao}</p>
+          <table>
+            <tr><td class="texto-suave">Endereço</td><td>${escapeHtml(location.origin)}</td></tr>
+            <tr><td class="texto-suave">Versão do sistema</td><td>${escapeHtml(state.versaoSistema || "—")}</td></tr>
+            <tr><td class="texto-suave">Latência</td><td>${s.latenciaMs != null ? s.latenciaMs + " ms" : "—"}</td></tr>
+            <tr><td class="texto-suave">Última sincronização</td><td>${s.ultimaSincronizacaoEm ? fmtData(s.ultimaSincronizacaoEm) : "—"}</td></tr>
+          </table>
+          <div class="rodape-modal">
+            <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+          </div>`);
         return;
       }
       case "ir-notificacoes":
@@ -10951,6 +11117,18 @@
         await chamarApi(`/usuarios/${alvo.dataset.id}/reativar`, { method: "POST" });
         definirFlash("ok", "Usuário reativado.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      case "renomear-terminal":
+        modalRenomearTerminal(Number(alvo.dataset.id), alvo.dataset.nome || "");
+        return;
+      case "bloquear-terminal":
+        if (!confirm("Bloquear este terminal? Ele deixa de conseguir usar o sistema até ser liberado de novo.")) return;
+        await chamarApi(`/terminais/${alvo.dataset.id}/bloquear`, { method: "POST" });
+        definirFlash("ok", "Terminal bloqueado.");
+        return renderTerminais();
+      case "liberar-terminal":
+        await chamarApi(`/terminais/${alvo.dataset.id}/liberar`, { method: "POST" });
+        definirFlash("ok", "Terminal liberado.");
+        return renderTerminais();
       case "novo-perfil":
         modalNovoPerfil();
         return;
@@ -12280,6 +12458,12 @@
         state.cache.empresasSeletor = null;
         definirFlash("ok", "Dados fiscais da empresa salvos.");
         return renderEmpresas();
+      }
+      case "renomear-terminal": {
+        await chamarApi(`/terminais/${form.dataset.id}/nome`, { method: "PUT", body: { nome: dados.get("nome") } });
+        fecharModais();
+        definirFlash("ok", "Terminal renomeado.");
+        return renderTerminais();
       }
       case "filtrar-auditoria": {
         return renderAuditoria({

@@ -101,7 +101,8 @@ def main():
         logging.info("Servidor iniciando em http://0.0.0.0:5000 (rede: %s)", ip_local)
 
         thread_servidor = threading.Thread(
-            target=lambda: waitress.serve(app, host="0.0.0.0", port=5000),
+            # Fase 111 — ver comentário equivalente em app_launcher.py.
+            target=lambda: waitress.serve(app, host="0.0.0.0", port=5000, threads=8),
             daemon=True,
         )
         thread_servidor.start()

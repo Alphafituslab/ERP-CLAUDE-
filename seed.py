@@ -487,6 +487,13 @@ PERMISSOES_PADRAO = [
     # Fase 99 — Tabelas de Preço (pré-preenchimento de preço no Pedido de Venda, por cliente).
     ("tabelas_preco", "visualizar", "Ver tabelas de preço e os preços cadastrados nelas", 0),
     ("tabelas_preco", "gerenciar", "Criar/editar tabelas de preço e definir o preço de cada item nelas", 0),
+
+    # Fase 111 — Arquitetura Servidor + Terminais: registro de máquinas que já acessam
+    # o servidor pela rede (o registro em si, POST /terminais/heartbeat, não exige
+    # nenhuma permissão — qualquer sessão autenticada pode registrar presença; só ver a
+    # lista e bloquear/liberar um terminal são ações administrativas).
+    ("terminais", "visualizar", "Ver a lista de terminais que já se conectaram ao servidor", 0),
+    ("terminais", "bloquear", "Bloquear ou liberar o acesso de um terminal específico ao servidor", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)

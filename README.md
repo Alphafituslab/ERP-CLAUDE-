@@ -5230,6 +5230,62 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   deliberadamente restrito ao ícone do instalador/exe, como pedido — o
   selo dentro do app (menu lateral) e os ícones do PWA não foram
   tocados.
+- (Entregue na Fase 111) Arquitetura Servidor + Terminais. Pedido do
+  usuário: especificação extensa de 28 seções pedindo uma escolha
+  explícita "Servidor/Terminal" na instalação, com o servidor sempre
+  como fonte única de dados, rastreabilidade por terminal e nenhum banco
+  divergente entre máquinas — pedindo primeiro para **verificar o que já
+  existia** antes de qualquer código. A investigação (documentada em
+  detalhe na conversa) confirmou que o AlphafitusOS já era uma
+  arquitetura cliente-servidor de verdade desde a Fase 1 — o frontend
+  nunca acessa o SQLite direto, só via API — então boa parte do pedido
+  (fonte única de dados, confirmação só depois do servidor gravar,
+  transação tudo-ou-nada por requisição — via `app/context.py::close_db`
+  fazendo um único `commit()` por requisição HTTP —, backup só no
+  servidor, rastreabilidade com IP/dispositivo em toda mutação) **já
+  existia estruturalmente**, sem precisar de nenhuma mudança. O que
+  faltava, e foi construído:
+  - **Escolha explícita SERVIDOR/TERMINAL no instalador**
+    (`installer/AlphafitusOS.iss`) — primeira página do assistente. Modo
+    SERVIDOR é idêntico ao instalador de sempre (Flask + SQLite +
+    frontend). Modo TERMINAL instala um pacote deliberadamente mínimo —
+    sem Flask, sem SQLite, sem pasta `data\` (`[Files]`/`[Icons]`
+    condicionados via `Check: EhServidor`/`EhTerminal`) — e ao final
+    roda automaticamente `instalar_terminal.ps1` (evolução do
+    `Terminal_Instalar.bat` que já existia desde a Fase 68, agora
+    testando a conexão de verdade contra `/api/v1/saude` antes de criar
+    o atalho, e abrindo em modo `--app=` — janela limpa, sem barra de
+    endereço — em vez de um atalho de internet comum) com o
+    endereço/porta que a pessoa informou numa página nova do assistente.
+    Testado isoladamente (fora do instalador): conexão válida cria o
+    atalho corretamente (`chrome.exe --app=http://...`); endereço
+    inválido recusa criar o atalho, com mensagem clara.
+  - **Registro de terminais** (`migrations/schema_fase111.sql`,
+    `app/routes/terminais.py`) — cada terminal se registra sozinho via
+    `POST /terminais/heartbeat` (chamado a cada 1 min pelo frontend, com
+    um `terminal_uid` gerado uma vez por navegador via
+    `crypto.randomUUID()` e persistido em `localStorage`). Tela nova
+    "Terminais" (grupo Administração) lista IP, usuário, versão, última
+    conexão e permite bloquear/liberar um terminal específico — um
+    terminal bloqueado recebe 403 (`terminal_bloqueado`) no próximo
+    heartbeat. Testado ao vivo: heartbeat cria e atualiza o registro,
+    bloquear derruba o próximo heartbeat, liberar restaura.
+  - **Indicador de status** — pílula "🟢 Servidor conectado"/"🔴
+    Desconectado" na barra superior (mesmo timer do heartbeat), com
+    popover mostrando endereço, latência medida no cliente e última
+    sincronização.
+  - **Mais folga de capacidade** — Waitress (`app_launcher.py`/
+    `app_launcher_tray.py`) subiu do padrão implícito de 4 threads para
+    8, agora que múltiplas estações usam o mesmo servidor o dia todo.
+  - **Fora de escopo desta entrega, por decisão consciente**: fila de
+    sincronização para operação offline (o usuário pediu explicitamente
+    o oposto — bloquear a operação sem conexão em vez de arriscar um
+    dado pendente se perder) e controle de concorrência otimista
+    universal (~150 tabelas é grande demais para "vir de brinde" — os
+    `PUT` já fazem merge parcial de campo, o que já mitiga boa parte do
+    risco de sobrescrita silenciosa; escopo de uma checagem de
+    versão/timestamp de verdade fica para uma fase futura, com as
+    tabelas de maior risco definidas junto com o usuário).
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório

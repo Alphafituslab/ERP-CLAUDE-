@@ -133,7 +133,11 @@ def main():
 
     import waitress
 
-    waitress.serve(app, host="0.0.0.0", port=5000)
+    # Fase 111 — Arquitetura Servidor + Terminais: o padrão implícito do
+    # Waitress é 4 threads, pensado pra um servidor de uso só local; agora
+    # que várias estações usam este mesmo servidor pela rede o dia todo,
+    # 8 dá mais folga para requisições simultâneas sem fila.
+    waitress.serve(app, host="0.0.0.0", port=5000, threads=8)
 
 
 if __name__ == "__main__":

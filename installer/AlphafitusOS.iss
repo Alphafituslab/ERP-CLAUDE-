@@ -11,7 +11,7 @@
 ; diferenca entre instalacao "de verdade" (Arquivos de Programas, pode
 ; virar Servico do Windows) e a instalacao simples.
 #define MyAppName "Alphafitus OS"
-#define MyAppVersion "110.0"
+#define MyAppVersion "111.0"
 #define MyAppPublisher "Alphafitus"
 #define MyAppExeName "AlphafitusOS.exe"
 
@@ -28,7 +28,11 @@ PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=saida
 OutputBaseFilename=AlphafitusOS_Servidor_Instalar
 SetupIconFile=icone.ico
-UninstallDisplayIcon={app}\{#MyAppExeName}
+; Fase 111 — {#MyAppExeName} só existe em instalações modo SERVIDOR (ver
+; [Files] abaixo); um TERMINAL não tem esse .exe, então o ícone do
+; desinstalador aponta para icone.ico (copiado em [Files] nos dois modos)
+; em vez do executável, que quebraria em modo Terminal.
+UninstallDisplayIcon={app}\icone.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -42,29 +46,36 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Tasks]
 Name: "desktopicon"; Description: "Criar um atalho na Área de Trabalho"; GroupDescription: "Atalhos adicionais:"
 
+; Fase 111 — Arquitetura Servidor + Terminais: `Check: EhServidor`/`Check: EhTerminal`
+; (funções Pascal na seção [Code] abaixo) fazem cada [Files]/[Icons] só existir no modo
+; certo — um TERMINAL nunca recebe o Flask/PyInstaller nem os scripts de serviço
+; Windows (não tem banco de dados próprio, não faz sentido ter nenhum dos dois), só o
+; instalador de atalho (instalar_terminal.ps1/.bat) + o ícone.
 [Files]
-Source: "dist\AlphafitusOS\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion
-Source: "payload\instalar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion
-Source: "payload\iniciar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion
-Source: "payload\parar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion
-Source: "payload\status_servico.bat"; DestDir: "{app}"; Flags: ignoreversion
-Source: "payload\remover_servico.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "dist\AlphafitusOS\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Check: EhServidor
+Source: "payload\instalar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
+Source: "payload\iniciar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
+Source: "payload\parar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
+Source: "payload\status_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
+Source: "payload\remover_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
 Source: "payload\Terminal_Instalar.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "payload\instalar_terminal.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "icone.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\Alphafitus OS"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"
-Name: "{group}\Alphafitus OS (modo diagnóstico, com janela)"; Filename: "{app}\AlphafitusOS_Console.exe"; WorkingDir: "{app}"
-Name: "{group}\Instalar como Serviço do Windows"; Filename: "{app}\instalar_servico.bat"; WorkingDir: "{app}"
-Name: "{group}\Iniciar Serviço"; Filename: "{app}\iniciar_servico.bat"; WorkingDir: "{app}"
-Name: "{group}\Parar Serviço"; Filename: "{app}\parar_servico.bat"; WorkingDir: "{app}"
-Name: "{group}\Status do Serviço"; Filename: "{app}\status_servico.bat"; WorkingDir: "{app}"
-Name: "{group}\Remover Serviço do Windows"; Filename: "{app}\remover_servico.bat"; WorkingDir: "{app}"
-Name: "{group}\Instalar um Terminal em outro computador"; Filename: "{app}\Terminal_Instalar.bat"; WorkingDir: "{app}"
+Name: "{group}\Alphafitus OS"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Check: EhServidor
+Name: "{group}\Alphafitus OS (modo diagnóstico, com janela)"; Filename: "{app}\AlphafitusOS_Console.exe"; WorkingDir: "{app}"; Check: EhServidor
+Name: "{group}\Instalar como Serviço do Windows"; Filename: "{app}\instalar_servico.bat"; WorkingDir: "{app}"; Check: EhServidor
+Name: "{group}\Iniciar Serviço"; Filename: "{app}\iniciar_servico.bat"; WorkingDir: "{app}"; Check: EhServidor
+Name: "{group}\Parar Serviço"; Filename: "{app}\parar_servico.bat"; WorkingDir: "{app}"; Check: EhServidor
+Name: "{group}\Status do Serviço"; Filename: "{app}\status_servico.bat"; WorkingDir: "{app}"; Check: EhServidor
+Name: "{group}\Remover Serviço do Windows"; Filename: "{app}\remover_servico.bat"; WorkingDir: "{app}"; Check: EhServidor
+Name: "{group}\Instalar um Terminal em outro computador"; Filename: "{app}\Terminal_Instalar.bat"; WorkingDir: "{app}"; Check: EhServidor
 Name: "{group}\Desinstalar Alphafitus OS"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\Alphafitus OS"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\Alphafitus OS"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; Check: EhServidor
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "Iniciar o Alphafitus OS agora"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\{#MyAppExeName}"; Description: "Iniciar o Alphafitus OS agora"; Flags: postinstall nowait skipifsilent; Check: EhServidor
 
 ; Best-effort: se o serviço do Windows tiver sido instalado antes, tenta
 ; removê-lo antes de apagar os arquivos (silencioso — se não houver
@@ -85,9 +96,47 @@ Filename: "{app}\AlphafitusOS_Servico.exe"; Parameters: "remove"; Flags: runhidd
 [Code]
 var
   AdminPage: TInputQueryWizardPage;
+  // Fase 111 — Arquitetura Servidor + Terminais. ModoPage é a escolha
+  // explícita pedida pelo usuário ("essa escolha precisa ficar muito
+  // clara para quem estiver instalando") — a PRIMEIRA página do
+  // instalador, antes de qualquer outra coisa. ServidorPage só existe
+  // quando "Terminal" é escolhido: pede o endereço do Servidor já
+  // instalado em outra máquina.
+  ModoPage: TInputOptionWizardPage;
+  ServidorPage: TInputQueryWizardPage;
+
+function EhServidor(): Boolean;
+begin
+  Result := (ModoPage = nil) or (ModoPage.SelectedValueIndex = 0);
+end;
+
+function EhTerminal(): Boolean;
+begin
+  Result := (ModoPage <> nil) and (ModoPage.SelectedValueIndex = 1);
+end;
 
 procedure InitializeWizard;
 begin
+  ModoPage := CreateInputOptionPage(wpWelcome,
+    'Tipo desta instalação', 'Como esta máquina vai usar o Alphafitus OS?',
+    'Escolha SERVIDOR só na máquina principal, que vai guardar o banco de dados ' +
+    'oficial da empresa. Escolha TERMINAL nas demais máquinas — elas não têm banco ' +
+    'próprio, só acessam o sistema que roda no Servidor. Nunca instale mais de um ' +
+    'Servidor: todo o resto da empresa deve apontar para o mesmo.',
+    False, False);
+  ModoPage.Add('Instalar como SERVIDOR (esta máquina terá o banco de dados oficial)');
+  ModoPage.Add('Instalar como TERMINAL (esta máquina só acessa um Servidor já existente)');
+  ModoPage.SelectedValueIndex := 0;
+
+  ServidorPage := CreateInputQueryPage(ModoPage.ID,
+    'Endereço do Servidor', 'Onde está o Alphafitus OS que já roda como Servidor?',
+    'Peça esse endereço para quem instalou o Servidor — normalmente o IP da máquina ' +
+    'principal na rede local (ex.: 192.168.1.10). A conexão é testada de verdade ' +
+    'antes de criar o atalho; se o endereço estiver errado, nada é instalado.');
+  ServidorPage.Add('Endereço/IP do servidor:', False);
+  ServidorPage.Add('Porta:', False);
+  ServidorPage.Values[1] := '5000';
+
   AdminPage := CreateInputQueryPage(wpSelectDir,
     'Conta do Administrador', 'Defina o login inicial do Alphafitus OS',
     'Este será o primeiro usuário do sistema, com acesso total a tudo. ' +
@@ -98,6 +147,17 @@ begin
   AdminPage.Add('Senha:', True);
   AdminPage.Add('Confirmar senha:', True);
   AdminPage.Values[0] := 'admin@alphafitus.com.br';
+end;
+
+// Terminal não usa a conta de administrador (não tem banco próprio) nem a
+// página de pasta de instalação de verdade (usa a mesma {autopf}\AlphafitusOS
+// de sempre, só que quase vazia) — e Servidor não usa a página de endereço do
+// Servidor (é ELE o servidor). Cada modo pula a página que não é dele.
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+  if (PageID = ServidorPage.ID) and EhServidor() then Result := True;
+  if (PageID = AdminPage.ID) and EhTerminal() then Result := True;
 end;
 
 // Política de senha PRÓPRIA desta tela do instalador — de propósito mais
@@ -176,6 +236,25 @@ begin
       Exit;
     end;
   end;
+  // Fase 111 — validação da página de endereço do Servidor (só aparece
+  // no modo Terminal). A conexão em si só é testada de verdade depois,
+  // pelo instalar_terminal.ps1 (ver CurStepChanged) — aqui só garante
+  // que os campos não ficaram vazios/com lixo antes de prosseguir.
+  if CurPageID = ServidorPage.ID then
+  begin
+    if Trim(ServidorPage.Values[0]) = '' then
+    begin
+      MsgBox('Informe o endereço/IP do servidor.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    if Trim(ServidorPage.Values[1]) = '' then
+    begin
+      MsgBox('Informe a porta do servidor (normalmente 5000).', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+  end;
 end;
 
 function GerarChaveAleatoria(Tamanho: Integer): String;
@@ -203,9 +282,30 @@ var
   ConfigFile: String;
   Linhas: TArrayOfString;
   DbPath, Email, Senha: String;
+  EnderecoServidor, ComandoPs1, Parametros: String;
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin
+    // Fase 111 — modo TERMINAL não tem config_ambiente.bat nem banco
+    // próprio nenhum: em vez disso, roda o instalar_terminal.ps1 (já
+    // copiado para {app} pelo [Files] acima) com o endereço que a
+    // pessoa informou na página ServidorPage, testando a conexão de
+    // verdade e criando o atalho — mesma lógica de sempre, só que
+    // automática em vez de precisar rodar o .bat manualmente depois.
+    if EhTerminal() then
+    begin
+      EnderecoServidor := Trim(ServidorPage.Values[0]) + ':' + Trim(ServidorPage.Values[1]);
+      if Trim(ServidorPage.Values[0]) <> '' then
+      begin
+        ComandoPs1 := ExpandConstant('{app}\instalar_terminal.ps1');
+        Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ComandoPs1 +
+          '" -Servidor "' + EnderecoServidor + '"';
+        Exec('powershell.exe', Parametros, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+      end;
+      Exit;
+    end;
+
     ConfigFile := ExpandConstant('{app}\config_ambiente.bat');
     // Reinstalar/atualizar por cima de uma instalação já existente (ex.:
     // uma versão nova do instalador) NUNCA deve mexer num
