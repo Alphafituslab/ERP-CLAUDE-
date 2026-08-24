@@ -5211,6 +5211,25 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   linhas couberem, nunca precisando rolar de lado. Testado ao vivo em
   1560px (4 colunas por linha) e 1024px (2 por linha) confirmando
   rolagem horizontal zero nos dois casos.
+- (Entregue na Fase 110) Novo ícone do instalador/aplicativo. Pedido do
+  usuário: "no instalador já incluir a imagem no ícone após instalado,
+  sem precisar por manual" — mandou uma versão nova do selo 3D da marca
+  (mesmo "α"+folhas, agora com uma faixa de mini-gráficos — barras,
+  rosca, lista — na base, referência mais explícita ao ERP). `installer/
+  icone.ico` é a ÚNICA fonte usada tanto pelo próprio instalador
+  (`SetupIconFile`, Fase 68) quanto pelo `.exe` final (`alphafitus.spec`,
+  Fase 93) — substituir só esse arquivo já propaga sozinho para atalho
+  do Menu Iniciar, Área de Trabalho, barra de tarefas e "Aplicativos e
+  Recursos" a cada instalação nova, sem precisar de nenhum passo manual
+  depois de instalado (exatamente o pedido). Gerado com Pillow a partir
+  da imagem enviada (1278×1230, fundo transparente) — preenchida para
+  1278×1278 (sem esticar) e exportada com as 6 resoluções que o Windows
+  espera num .ico (16/32/48/64/128/256px); conferido visualmente que o
+  símbolo continua legível nos tamanhos pequenos (32px/48px, os mais
+  usados na barra de tarefas) antes de ir para o build. Escopo
+  deliberadamente restrito ao ícone do instalador/exe, como pedido — o
+  selo dentro do app (menu lateral) e os ícones do PWA não foram
+  tocados.
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório
