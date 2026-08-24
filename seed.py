@@ -178,12 +178,30 @@ PERMISSOES_PADRAO = [
     ("centros_trabalho", "visualizar", "Ver centros de trabalho cadastrados e a agenda de produção", 0),
     ("centros_trabalho", "cadastrar", "Cadastrar novos centros de trabalho", 0),
     ("centros_trabalho", "editar", "Editar um centro de trabalho existente (inclusive ativar/inativar)", 0),
-    # Deliberadamente uma ação nova dentro do recurso "producao" já
-    # existente desde a Fase 3 (não um recurso "aps" à parte): agendar é
-    # uma ação sobre uma ORDEM DE PRODUÇÃO, no mesmo espírito de
-    # "producao.planejar"/"producao.liberar"/"producao.apontar" — ver a
-    # ordem (producao.visualizar) já é suficiente para ver sua agenda.
-    ("producao", "agendar", "Agendar ou reagendar uma ordem de produção num centro de trabalho e janela de tempo", 0),
+    # Fase 105 — módulo PRÓPRIO "aps" (era uma ação dentro de "producao"
+    # até aqui, ver comentário histórico abaixo): o pedido do usuário foi
+    # "usuários com acesso ao APS podem ter acesso limitado somente a ele,
+    # e vice-versa" — ou seja, alguém precisa poder ganhar acesso ao
+    # Sequenciamento/Capacidade Finita SEM automaticamente ganhar
+    # visibilidade do resto de Produção (Ordens de Produção, apontamento
+    # de consumo etc.), e vice-versa. Reaproveitar "producao.*" tornava
+    # essa separação impossível — por isso um módulo "aps" próprio, no
+    # mesmo padrão de "centros_trabalho" (Fase 25), que já era separado.
+    # A migração `schema_fase105.sql` RENOMEIA (não recria) estas 3
+    # permissões — todo perfil que já tinha "producao.agendar"/
+    # "producao.gerar_sugestao_compra"/"producao.decidir_sugestao_compra"
+    # mantém o acesso equivalente sob o novo nome, sem precisar reconceder
+    # nada manualmente.
+    #
+    # Comentário histórico (Fase 25, quando isto ainda vivia em
+    # "producao"): "agendar é uma ação sobre uma ORDEM DE PRODUÇÃO, no
+    # mesmo espírito de producao.planejar/producao.liberar/
+    # producao.apontar — ver a ordem (producao.visualizar) já é suficiente
+    # para ver sua agenda." Essa premissa (ver Produção implica poder ver
+    # a agenda do APS) é exatamente o que deixou de valer — daí "aps.
+    # visualizar" abaixo, próprio, concedido explicitamente a quem precisa.
+    ("aps", "visualizar", "Ver a Agenda (APS), o MRP e as Sugestões de Compra derivadas dele", 0),
+    ("aps", "agendar", "Agendar ou reagendar uma ordem de produção num centro de trabalho e janela de tempo", 0),
     # ---- Fase 26 (Catálogos do Memorial Técnico ANVISA) ----
     # Um recurso só cobrindo os 10 catálogos (Metodologias, Nutrientes,
     # Legislações, Alegações, Tipos de Produto, Advertências,
@@ -309,9 +327,12 @@ PERMISSOES_PADRAO = [
     # (marcar atendida/descartada) são permissões separadas pelo mesmo
     # motivo de sempre neste sistema: gerar é de baixo risco (só cria um
     # item de trabalho derivado, não uma obrigação financeira de verdade),
-    # decidir é quem efetivamente fecha o ciclo de Compras.
-    ("producao", "gerar_sugestao_compra", "Gerar sugestões de compra a partir da necessidade atual calculada pelo MRP (não cria conta a pagar nem nenhuma obrigação financeira real)", 0),
-    ("producao", "decidir_sugestao_compra", "Marcar uma sugestão de compra do MRP como atendida (compra já providenciada) ou descartada (com motivo)", 0),
+    # decidir é quem efetivamente fecha o ciclo de Compras. Módulo "aps"
+    # desde a Fase 105 (ver comentário completo junto de "aps.agendar",
+    # acima) — eram "producao.gerar_sugestao_compra"/"producao.
+    # decidir_sugestao_compra" até aqui.
+    ("aps", "gerar_sugestao_compra", "Gerar sugestões de compra a partir da necessidade atual calculada pelo MRP (não cria conta a pagar nem nenhuma obrigação financeira real)", 0),
+    ("aps", "decidir_sugestao_compra", "Marcar uma sugestão de compra do MRP como atendida (compra já providenciada) ou descartada (com motivo)", 0),
     # ---- Fase 58 (Pedido de Compra formal) ----
     # Módulo novo "compras" (em vez de continuar encaixando em "producao",
     # como as duas permissões acima da Fase 54 fizeram por reaproveitar a
@@ -485,8 +506,11 @@ PERFIS_PADRAO = [
         "producao.visualizar", "producao.planejar", "producao.liberar", "estoque.visualizar", "empresas.visualizar",
         # Fase 25 — o mesmo perfil que planeja/libera ordens é quem monta a
         # agenda (o "S" de APS — Sequenciamento) e cadastra os centros de
-        # trabalho contra os quais ela é montada.
-        "centros_trabalho.visualizar", "centros_trabalho.cadastrar", "centros_trabalho.editar", "producao.agendar",
+        # trabalho contra os quais ela é montada. Fase 105 — "aps.*" é
+        # módulo próprio, concedido explicitamente aqui (não vem mais de
+        # graça junto com "producao.visualizar").
+        "centros_trabalho.visualizar", "centros_trabalho.cadastrar", "centros_trabalho.editar",
+        "aps.visualizar", "aps.agendar",
         # Fase 75 — o mesmo perfil que já planeja o processo produtivo é
         # quem decide QUAIS etapas existem (Pesagem, Mistura, etc.);
         # cadastrar uma etapa concreta numa ordem e apontar seu
@@ -504,10 +528,10 @@ PERFIS_PADRAO = [
         # Compras já usa desde a Fase 54) — "solicita" a compra de matéria-
         # prima. Decidir o que fazer com a sugestão (atender/descartar) e
         # convertê-la num Pedido de Compra real continua EXCLUSIVO de
-        # Compras ("producao.decidir_sugestao_compra"/"compras.
+        # Compras ("aps.decidir_sugestao_compra"/"compras.
         # criar_pedido", perfil "Compras" abaixo) — "aprova e confirma a
         # compra" continua sendo uma responsabilidade só deles.
-        "producao.gerar_sugestao_compra",
+        "aps.gerar_sugestao_compra",
     ]),
     # Fase 91 — "setor de liberação" das Solicitações de Materiais/EPI: até
     # aqui, "solicitacoes_material.aprovar" não estava em NENHUM perfil
@@ -525,8 +549,11 @@ PERFIS_PADRAO = [
         "producao.visualizar", "producao.apontar", "estoque.visualizar", "empresas.visualizar",
         # Fase 25 — o chão de fábrica só ENXERGA a agenda (o que já foi
         # sequenciado pelo PCP), não pode criar/mudar centro de trabalho
-        # nem reagendar — por isso só a permissão de visualizar.
-        "centros_trabalho.visualizar",
+        # nem reagendar — por isso só a permissão de visualizar. Fase 105 —
+        # "aps.visualizar" é o que efetivamente abre a tela de Agenda (APS)
+        # em si; "centros_trabalho.visualizar" só mostra o cadastro dos
+        # recursos.
+        "centros_trabalho.visualizar", "aps.visualizar",
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
     ]),
     ("Laboratório", "Analistas de laboratório (LIMS)", 1, [
@@ -581,18 +608,20 @@ PERFIS_PADRAO = [
         "itens.visualizar", "fornecedores.visualizar", "fornecedores.cadastrar",
         # Quem recebe a NF do fornecedor lança a conta a pagar correspondente.
         "financeiro.visualizar", "financeiro.criar_conta_pagar", "empresas.visualizar",
-        # Fase 39 (MRP) — "producao.visualizar" reaproveitada aqui de
-        # propósito (mesma permissão que já libera ver a agenda da Fase
-        # 25/28): o relatório de necessidade de materiais É a ponte entre
-        # PCP e Compras — sem ver a ordem/relatório, Compras não teria
-        # como saber o que precisa comprar antes que o PCP tente liberar
-        # a ordem e seja recusado por falta de saldo.
-        "producao.visualizar",
+        # Fase 39 (MRP) — o relatório de necessidade de materiais É a ponte
+        # entre PCP e Compras — sem ver o relatório, Compras não teria como
+        # saber o que precisa comprar antes que o PCP tente liberar a ordem
+        # e seja recusado por falta de saldo. Fase 105 — "aps.visualizar" é
+        # exatamente essa fatia (Agenda/MRP/Sugestões), sem conceder de
+        # brinde a visão geral de Ordens de Produção que Compras nunca
+        # precisou de fato (era um efeito colateral de reaproveitar
+        # "producao.visualizar" até aqui).
+        "aps.visualizar",
         # Fase 54 — o mesmo perfil que vê a necessidade calculada pelo MRP
         # é quem gera as sugestões de compra a partir dela e decide o que
         # fazer com cada uma (atender, linkando a conta a pagar real
         # lançada logo acima, ou descartar).
-        "producao.gerar_sugestao_compra", "producao.decidir_sugestao_compra",
+        "aps.gerar_sugestao_compra", "aps.decidir_sugestao_compra",
         # Fase 58 — mesmo perfil que decide as sugestões é quem formaliza o
         # Pedido de Compra (a partir de uma sugestão ou manualmente), envia
         # ao fornecedor e pode cancelar enquanto não houver recebimento.

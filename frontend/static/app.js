@@ -442,14 +442,29 @@
       itens: [
         { rota: "#/formulas", chave: "formulas", label: "Fórmulas (BOM)", permissao: ["formulas", "visualizar"] },
         { rota: "#/producao", chave: "producao", label: "Ordens de Produção", permissao: ["producao", "visualizar"] },
-        { rota: "#/centros-trabalho", chave: "centros-trabalho", label: "Centros de Trabalho (APS)", permissao: ["centros_trabalho", "visualizar"] },
         { rota: "#/tipos-etapa-producao", chave: "tipos-etapa-producao", label: "Tipos de Etapa (Pesagem, Mistura...)", permissao: ["producao", "visualizar"] },
         { rota: "#/catalogo-fluxo", chave: "catalogo-fluxo", label: "Catálogo de Fluxo", permissao: ["fluxo", "apontar"] },
-        { rota: "#/aps-agenda", chave: "aps-agenda", label: "Agenda (APS)", permissao: ["producao", "visualizar"] },
-        { rota: "#/aps-mrp", chave: "aps-mrp", label: "MRP (Necessidade de Materiais)", permissao: ["producao", "visualizar"] },
-        { rota: "#/aps-sugestoes-compra", chave: "aps-sugestoes-compra", label: "Sugestões de Compra (MRP)", permissao: ["producao", "visualizar"] },
         { rota: "#/compras-pedidos", chave: "compras-pedidos", label: "Pedidos de Compra", permissao: ["compras", "visualizar"] },
         { rota: "#/compras-cotacoes", chave: "compras-cotacoes", label: "Cotações de Fornecedores (RFQ)", permissao: ["compras", "visualizar"] },
+      ],
+    },
+    // Fase 105 — pedido do usuário: "tudo que for relacionado ao APS
+    // dentro do mesmo local", com acesso que pode ficar limitado só a ele
+    // (e vice-versa). Até aqui essas 4 telas viviam misturadas dentro de
+    // "Produção & PCP" e reaproveitavam "producao.visualizar" — quem tinha
+    // Produção via APS de graça, e não dava pra conceder só APS sem
+    // Produção. Agora é um grupo de menu próprio, e cada item usa o módulo
+    // de permissão "aps"/"centros_trabalho" (nenhum deles depende mais de
+    // "producao.*"): um perfil com só essas permissões vê SÓ este grupo;
+    // um perfil com "producao.*" mas sem "aps.*"/"centros_trabalho.*" não
+    // vê nada aqui.
+    {
+      tipo: "grupo", chave: "grupo-aps", nome: "APS (Sequenciamento)",
+      itens: [
+        { rota: "#/centros-trabalho", chave: "centros-trabalho", label: "Centros de Trabalho", permissao: ["centros_trabalho", "visualizar"] },
+        { rota: "#/aps-agenda", chave: "aps-agenda", label: "Agenda", permissao: ["aps", "visualizar"] },
+        { rota: "#/aps-mrp", chave: "aps-mrp", label: "MRP (Necessidade de Materiais)", permissao: ["aps", "visualizar"] },
+        { rota: "#/aps-sugestoes-compra", chave: "aps-sugestoes-compra", label: "Sugestões de Compra (MRP)", permissao: ["aps", "visualizar"] },
       ],
     },
     {
@@ -2981,13 +2996,16 @@
     }
 
     // Fase 25 — APS: agendamento (centro de trabalho + janela de tempo)
-    // desta ordem, se houver. Buscar o agendamento não exige nenhuma
-    // permissão além de já poder ver a ordem (producao.visualizar); só a
-    // AÇÃO de agendar/reagendar/desagendar exige producao.agendar, e só
-    // quem pode ver a lista de centros de trabalho (centros_trabalho.
-    // visualizar) recebe o seletor para escolher um.
+    // desta ordem, se houver. Fase 105 — buscar/ver o agendamento agora
+    // exige "aps.visualizar" (módulo próprio, não vem mais de graça com
+    // producao.visualizar); quem não tiver "aps.visualizar" simplesmente
+    // recebe 403 aqui, tratado como "sem agendamento" pelo .catch — o
+    // resto da tela da ordem continua funcionando normalmente. A AÇÃO de
+    // agendar/reagendar/desagendar exige "aps.agendar", e só quem pode ver
+    // a lista de centros de trabalho (centros_trabalho.visualizar) recebe
+    // o seletor para escolher um.
     const agendamento = await chamarApi(`/aps/ordens/${ordemId}/agendamento`).catch(() => null);
-    const podeAgendar = temPermissao("producao", "agendar");
+    const podeAgendar = temPermissao("aps", "agendar");
     const podeVerCentros = temPermissao("centros_trabalho", "visualizar");
     // Fase 84 — a lista de centros de trabalho agora também alimenta o
     // seletor de "qual encapsuladora/linha de envase" na etapa (quem
@@ -4072,7 +4090,7 @@
       })
       .join("");
 
-    const podeGerarSugestao = temPermissao("producao", "gerar_sugestao_compra");
+    const podeGerarSugestao = temPermissao("aps", "gerar_sugestao_compra");
 
     renderShell(
       `<h2>MRP (Necessidade de Materiais)</h2>
@@ -4121,8 +4139,8 @@
     app.innerHTML = '<div class="carregando">Carregando sugestões de compra…</div>';
     const status = filtroStatus !== undefined ? filtroStatus : (state.cache.sugestoesCompraFiltro || "pendente");
     state.cache.sugestoesCompraFiltro = status;
-    const podeDecidir = temPermissao("producao", "decidir_sugestao_compra");
-    const podeGerar = temPermissao("producao", "gerar_sugestao_compra");
+    const podeDecidir = temPermissao("aps", "decidir_sugestao_compra");
+    const podeGerar = temPermissao("aps", "gerar_sugestao_compra");
     // Fase 58 — permissão PRÓPRIA de Compras, verificada além (não em vez)
     // de `decidir_sugestao_compra`: gerar o pedido formal é uma decisão de
     // Compras sobre a sugestão, mas o documento em si (Pedido de Compra)

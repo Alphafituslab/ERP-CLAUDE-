@@ -5100,6 +5100,31 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   "fundo verde" sem precisar de nenhuma cor extra por cima — aparece nas
   bordas/vãos entre cartões e tabelas (que têm fundo opaco) em qualquer
   tela, sem precisar repetir isso página por página.
+- (Entregue na Fase 105) APS como módulo de permissão e menu próprios.
+  Pedido do usuário: "tudo que for relacionado ao APS... usuários com
+  acesso ao APS podem ter acesso limitado somente a ele e assim vice-
+  versa". Até aqui, Agenda/MRP/Sugestões de Compra do APS reaproveitavam
+  `producao.visualizar`/`producao.agendar`/`producao.gerar_sugestao_
+  compra`/`producao.decidir_sugestao_compra` — quem tinha acesso a
+  Produção ganhava o APS de graça, e era impossível conceder só o APS sem
+  abrir também a visão geral de Ordens de Produção. `schema_fase105.sql`
+  RENOMEIA (não recria) essas 3 permissões para o módulo novo `aps` —
+  mesmo id de permissão, então todo perfil que já tinha essas concessões
+  mantém o acesso equivalente automaticamente, sem precisar reconceder
+  nada (testado simulando o estado real de produção antes da migração).
+  `aps.visualizar` é a única permissão genuinamente NOVA (cobre Agenda/
+  MRP/Sugestões, que reaproveitavam `producao.visualizar` de graça até
+  aqui) — concedida explicitamente aos perfis PCP, Produção e Compras
+  (mesmos que já usavam essas telas na prática); o Compras, de quebra,
+  deixou de ganhar visão geral de Ordens de Produção como efeito
+  colateral (só precisava mesmo era ver o MRP). `centros_trabalho.*` já
+  era módulo próprio desde a Fase 25, sem mudança. Menu lateral ganhou um
+  grupo dedicado "APS (Sequenciamento)" (Centros de Trabalho, Agenda,
+  MRP, Sugestões de Compra), separado de "Produção & PCP" — testado ao
+  vivo com um perfil só-APS (vê só o grupo APS, `GET /producao/ordens`
+  devolve 403) e um perfil só-Produção sem APS (vê só "Produção & PCP",
+  `GET /aps/agenda`/`GET /aps/mrp` devolvem 403), além de confirmar que
+  PCP/Compras continuam vendo os dois grupos normalmente (sem regressão).
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório

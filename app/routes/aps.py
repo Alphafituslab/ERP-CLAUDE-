@@ -286,7 +286,7 @@ def _listar_agenda(conn, centro_trabalho_id=None, inicio=None, fim=None):
 
 
 @bp.get("/agenda")
-@requires_permission("producao", "visualizar")
+@requires_permission("aps", "visualizar")
 def listar_agenda():
     conn = get_db()
     centro_trabalho_id = request.args.get("centro_trabalho_id", type=int)
@@ -296,7 +296,7 @@ def listar_agenda():
 
 
 @bp.get("/ordens/<int:ordem_id>/agendamento")
-@requires_permission("producao", "visualizar")
+@requires_permission("aps", "visualizar")
 def obter_agendamento(ordem_id):
     conn = get_db()
     _ordem_ou_404(conn, ordem_id)
@@ -313,7 +313,7 @@ def obter_agendamento(ordem_id):
 
 
 @bp.post("/ordens/<int:ordem_id>/agendar")
-@requires_permission("producao", "agendar")
+@requires_permission("aps", "agendar")
 def agendar_ordem(ordem_id):
     """Cria ou atualiza (reagenda) o agendamento de uma ordem de produção
     num centro de trabalho — é sempre um upsert num único registro por
@@ -388,7 +388,7 @@ def agendar_ordem(ordem_id):
 
 
 @bp.delete("/ordens/<int:ordem_id>/agendar")
-@requires_permission("producao", "agendar")
+@requires_permission("aps", "agendar")
 def desagendar_ordem(ordem_id):
     usuario_atual = g.usuario_atual
     conn = get_db()
@@ -524,7 +524,7 @@ def _calcular_mrp(conn):
 
 
 @bp.get("/mrp")
-@requires_permission("producao", "visualizar")
+@requires_permission("aps", "visualizar")
 def obter_mrp():
     conn = get_db()
     itens = _calcular_mrp(conn)
@@ -568,7 +568,7 @@ def _sugestao_compra_ou_404(conn, sugestao_id):
 
 
 @bp.post("/mrp/gerar-sugestoes-compra")
-@requires_permission("producao", "gerar_sugestao_compra")
+@requires_permission("aps", "gerar_sugestao_compra")
 def gerar_sugestoes_compra():
     """Recalcula o MRP (mesma função de `GET /mrp`, nunca dessincroniza) e
     cria uma sugestão `pendente` para cada item com falta > 0 — SALVO os
@@ -622,7 +622,7 @@ def gerar_sugestoes_compra():
 
 
 @bp.get("/sugestoes-compra")
-@requires_permission("producao", "visualizar")
+@requires_permission("aps", "visualizar")
 def listar_sugestoes_compra():
     conn = get_db()
     status_filtro = request.args.get("status")
@@ -638,7 +638,7 @@ def listar_sugestoes_compra():
 
 
 @bp.post("/sugestoes-compra/<int:sugestao_id>/atender")
-@requires_permission("producao", "decidir_sugestao_compra")
+@requires_permission("aps", "decidir_sugestao_compra")
 def atender_sugestao_compra(sugestao_id):
     """Marca a sugestão como atendida — Compras já providenciou a compra
     (dentro ou fora do sistema). `conta_pagar_id` é OPCIONAL: se a conta a
@@ -747,7 +747,7 @@ def gerar_pedido_compra_a_partir_da_sugestao(sugestao_id):
 
 
 @bp.post("/sugestoes-compra/<int:sugestao_id>/descartar")
-@requires_permission("producao", "decidir_sugestao_compra")
+@requires_permission("aps", "decidir_sugestao_compra")
 def descartar_sugestao_compra(sugestao_id):
     """Marca a sugestão como descartada — Compras avaliou e decidiu não
     comprar por ora (ex.: ordem planejada será cancelada, insumo será

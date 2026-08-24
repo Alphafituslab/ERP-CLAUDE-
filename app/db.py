@@ -135,6 +135,7 @@ SCHEMA_FILES = [
     "schema_fase101.sql",  # Fase 101 — Consulta de CNPJ ao cadastrar cliente (clientes.email)
     "schema_fase102.sql",  # Fase 102 — Aprovação Financeira de Cadastro de Cliente (clientes já existentes ficam aprovados)
     "schema_fase103.sql",  # Fase 103 — Documentos do Cliente (obrigatório ao cadastrar pelo App de Vendas em campo)
+    "schema_fase105.sql",  # Fase 105 — APS como módulo de permissão próprio (separado de "producao")
 ]
 
 
