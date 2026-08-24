@@ -247,31 +247,67 @@ body {
      original) e quebraria o menu-gaveta do celular. Os dois só são
      redefinidos abaixo dentro de `@media (min-width: 901px)`, faixa em
      que styles.css não mexe em nenhum dos dois. */
-  background: var(--grad-azul);
+  /* Fase 107 — pedido do usuário: menu lateral "inovador, com curvas, com
+     detalhes gráficos" (mockup aprovado antes de implementar). Gradiente
+     radial+diagonal nas cores da marca (mesmo par teal/verde de
+     `--grad-marca`, indo até um verde quase preto) em vez do azul liso
+     de antes; os dois brilhos suaves (`.barra-lateral-blob`, posição em
+     styles.css) dão a sensação de profundidade orgânica. */
+  background:
+    radial-gradient(480px 320px at 15% -10%, color-mix(in srgb, var(--marca-teal) 30%, transparent), transparent 60%),
+    radial-gradient(420px 380px at 108% 55%, color-mix(in srgb, var(--marca-verde) 26%, transparent), transparent 65%),
+    linear-gradient(160deg, var(--marca-teal) -12%, #0b2b20 46%, #071912 100%);
   box-shadow: var(--elev-4);
+  overflow: hidden;
 }
-/* Sombra "flutuando" separando a barra do conteúdo — só em telas largas
-   (>900px), onde a barra lateral fica sempre visível no fluxo normal:
-   em telas estreitas ela vira gaveta com `position: fixed` (Fase 38, ver
-   styles.css) e `position: relative` aqui entraria em conflito com isso
-   (mesma especificidade, teria que vencer por ordem no CSS). */
+.barra-lateral-blob-1 { width: 210px; height: 210px; left: -70px; top: 46%; background: radial-gradient(circle, rgba(94,234,212,0.4), transparent 70%); filter: blur(2px); }
+.barra-lateral-blob-2 { width: 170px; height: 170px; right: -60px; top: 68%; background: radial-gradient(circle, rgba(0,175,107,0.4), transparent 70%); filter: blur(2px); }
+@media (prefers-reduced-motion: no-preference) {
+  .barra-lateral-blob { animation: barra-lateral-blob-drift 9s ease-in-out infinite alternate; }
+  .barra-lateral-blob-2 { animation-duration: 11s; animation-delay: -3s; }
+  @keyframes barra-lateral-blob-drift {
+    from { transform: translateY(0) scale(1); }
+    to { transform: translateY(-14px) scale(1.06); }
+  }
+}
+/* Borda direita ORGÂNICA (nervura de folha) em vez da sombra reta de
+   antes — só em telas largas (>900px), onde a barra lateral fica sempre
+   visível no fluxo normal: em telas estreitas ela vira gaveta com
+   `position: fixed` (Fase 38, ver styles.css) e `position: relative`
+   aqui entraria em conflito com isso (mesma especificidade, teria que
+   vencer por ordem no CSS). */
 @media (min-width: 901px) {
   .barra-lateral { position: relative; z-index: 2; }
   .barra-lateral::after {
-    content: ""; position: absolute; top: 0; right: -18px; bottom: 0; width: 18px;
-    background: linear-gradient(90deg, rgba(0,0,0,0.14), transparent);
+    content: ""; position: absolute; top: 0; right: -1px; bottom: 0; width: 22px;
+    background: var(--superficie);
+    -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 800' preserveAspectRatio='none'><path d='M22 0 C8 60 19 110 10 170 C1 230 17 280 12 340 C7 400 20 450 14 510 C8 570 19 620 10 670 C5 720 16 760 22 800 L22 0 Z'/></svg>");
+    mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 22 800' preserveAspectRatio='none'><path d='M22 0 C8 60 19 110 10 170 C1 230 17 280 12 340 C7 400 20 450 14 510 C8 570 19 620 10 670 C5 720 16 760 22 800 L22 0 Z'/></svg>");
+    -webkit-mask-size: 100% 100%;
+    mask-size: 100% 100%;
     pointer-events: none;
   }
 }
 .barra-lateral .marca {
   position: relative;
+  z-index: 2;
   padding: 20px;
   min-height: 40px;
-  background: rgba(0, 0, 0, 0.12);
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+/* Fase 107 — halo de vidro por trás do selo da marca, em vez de um
+   segundo quadrado atrás do ícone (que já tem seu próprio fundo 3D) —
+   só um brilho suave, para o ícone parecer "flutuando" no gradiente. */
+.marca-selo {
+  padding: 5px;
+  background: radial-gradient(circle, rgba(255,255,255,0.16), rgba(255,255,255,0.02) 70%);
+  box-shadow: var(--brilho-topo-fraco);
 }
 .barra-lateral .marca .marca-icone {
   box-shadow: var(--elev-2), var(--brilho-topo);
+}
+.barra-lateral .marca small {
+  color: rgba(255,255,255,0.68);
 }
 .barra-lateral .marca small {
   display: -webkit-box;
@@ -291,23 +327,38 @@ body {
 
 .barra-lateral nav { padding: 10px 8px; }
 
-/* ---------- Itens de topo (fora de grupo) — "chip" elevado, não mais uma
-   linha plana — é o que dá a sensação de 3D/separação pedida: cada item
-   parece um botão flutuando, não texto colado no fundo azul. ---------- */
+/* ---------- Itens de topo (fora de grupo) — Fase 107: pílula orgânica em
+   vez do "chip" quadrado anterior — o item ativo fica sólido e claro,
+   com um traço luminoso do lado, como se a página "brotasse" dali
+   (mesma linguagem do mockup aprovado: curvas + brilho, não caixas). ---------- */
 .link-nav {
-  border-radius: 10px;
+  border-radius: 999px;
   margin: 3px 0;
   border-left: none !important;
   position: relative;
   background: rgba(255, 255, 255, 0.045);
   box-shadow: var(--brilho-topo-fraco);
-  transition: background 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
 }
-.link-nav:hover { background: rgba(255, 255, 255, 0.1); transform: translateX(2px) translateY(-1px); box-shadow: var(--elev-1), var(--brilho-topo-fraco); }
+.link-nav:hover { background: rgba(255, 255, 255, 0.1); transform: translateX(2px); box-shadow: var(--elev-1), var(--brilho-topo-fraco); }
 .link-nav.ativo {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--dourado) 32%, transparent), transparent);
-  box-shadow: inset 3px 0 0 var(--dourado), var(--elev-1);
+  background: linear-gradient(120deg, #ffffff 0%, #eafff8 100%);
+  color: #06302a;
+  box-shadow: var(--elev-2);
   font-weight: 700;
+}
+.link-nav.ativo:not(.barra-lateral-subitem)::before { color: var(--marca-verde); }
+.link-nav.ativo:not(.barra-lateral-subitem)::after {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--menu-aps, #5eead4);
+  box-shadow: 0 0 12px 2px color-mix(in srgb, var(--menu-aps, #5eead4) 70%, transparent);
 }
 
 /* ---------- Grupos do menu (Qualidade, Produção, Estoque...) — cada um
@@ -321,6 +372,7 @@ body {
 :root {
   --menu-qualidade: #2bb3c0;
   --menu-producao: #e0923c;
+  --menu-aps: #5eead4;
   --menu-estoque: #9a7fe0;
   --menu-materiais: #d1477a;
   --menu-comercial: #3fbf7f;
@@ -330,6 +382,7 @@ body {
 }
 [data-grupo="grupo-qualidade"] { --cor-grupo: var(--menu-qualidade); }
 [data-grupo="grupo-producao"] { --cor-grupo: var(--menu-producao); }
+[data-grupo="grupo-aps"] { --cor-grupo: var(--menu-aps); }
 [data-grupo="grupo-estoque"] { --cor-grupo: var(--menu-estoque); }
 [data-grupo="grupo-materiais"] { --cor-grupo: var(--menu-materiais); }
 [data-grupo="grupo-comercial"] { --cor-grupo: var(--menu-comercial); }
@@ -408,22 +461,64 @@ body {
   background: color-mix(in srgb, var(--cor-grupo, var(--dourado)) 35%, transparent);
   box-shadow: inset 3px 0 0 var(--cor-grupo, var(--dourado));
   opacity: 1;
+  /* Fase 107 — `.link-nav.ativo` (acima) virou uma pílula clara com texto
+     escuro para os itens de topo/grupo; sem este reset, um subitem ativo
+     herdaria esse texto escuro sobre o fundo semitransparente colorido
+     do grupo (ainda escuro por baixo) e ficaria ilegível. Subitem
+     continua claro, como sempre foi. */
+  color: #fff;
+  font-weight: 600;
 }
 
-/* Ícones por rota — puramente decorativo, não depende de nenhum dado. */
-.link-nav[href="#/dashboard"]::before { content: "🏠"; margin-right: 9px; }
-.link-nav[href="#/itens"]::before { content: "🧱"; margin-right: 9px; }
-.link-nav[href="#/memorial/visao-geral"]::before { content: "📋"; margin-right: 9px; }
-.link-nav[href="#/conta"]::before { content: "👤"; margin-right: 9px; }
-.link-nav[href="#/notificacoes"]::before { content: "🔔"; margin-right: 9px; }
-[data-grupo="grupo-qualidade"] > summary::before { content: "🧪"; }
-[data-grupo="grupo-producao"] > summary::before { content: "🏭"; }
-[data-grupo="grupo-estoque"] > summary::before { content: "📦"; }
-[data-grupo="grupo-materiais"] > summary::before { content: "🥽"; }
-[data-grupo="grupo-comercial"] > summary::before { content: "💼"; }
-[data-grupo="grupo-financeiro"] > summary::before { content: "💰"; }
-[data-grupo="grupo-relatorios"] > summary::before { content: "📊"; }
-[data-grupo="grupo-administracao"] > summary::before { content: "⚙️"; }
+/* Fase 107 — ícones por rota trocados de emoji (dependem da fonte de
+   emoji instalada no SO, inconsistentes entre Windows/telas) para
+   ícones de linha em SVG, mascarados com `currentColor` — herdam a cor
+   do texto do próprio item (branco/dourado quando ativo, sem precisar
+   de uma cor fixa por ícone). Mesma técnica de seletor por atributo já
+   usada aqui (zero mudança em app.js): cada rota/grupo casa um
+   `[href="..."]`/`[data-grupo="..."]` com o `mask-image` certo. */
+.link-nav[href]:not(.barra-lateral-subitem)::before,
+.barra-lateral-grupo > summary::before {
+  content: "";
+  display: inline-block;
+  width: 17px;
+  height: 17px;
+  margin-right: 10px;
+  flex-shrink: 0;
+  background: currentColor;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-position: center; mask-position: center;
+  -webkit-mask-size: contain; mask-size: contain;
+}
+.link-nav[href="#/dashboard"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='7' height='9' rx='1.5'/><rect x='14' y='3' width='7' height='5' rx='1.5'/><rect x='14' y='12' width='7' height='9' rx='1.5'/><rect x='3' y='16' width='7' height='5' rx='1.5'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><rect x='3' y='3' width='7' height='9' rx='1.5'/><rect x='14' y='3' width='7' height='5' rx='1.5'/><rect x='14' y='12' width='7' height='9' rx='1.5'/><rect x='3' y='16' width='7' height='5' rx='1.5'/></svg>"); }
+.link-nav[href="#/painel-tempo-real"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12h4l2-7 4 14 2-7h6'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 12h4l2-7 4 14 2-7h6'/></svg>"); }
+.link-nav[href="#/painel-executivo"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 20V11M10 20V5M15 20v-6M20 20V9'/><path d='M3 20h18'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 20V11M10 20V5M15 20v-6M20 20V9'/><path d='M3 20h18'/></svg>"); }
+.link-nav[href="#/itens"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 8l-9-5-9 5 9 5 9-5Z'/><path d='M3 8v8l9 5 9-5V8'/><path d='M12 13v8'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M21 8l-9-5-9 5 9 5 9-5Z'/><path d='M3 8v8l9 5 9-5V8'/><path d='M12 13v8'/></svg>"); }
+.link-nav[href="#/memorial/visao-geral"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5Z'/><path d='M14 3v5h5'/><path d='M9 13h6M9 17h6'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5Z'/><path d='M14 3v5h5'/><path d='M9 13h6M9 17h6'/></svg>"); }
+.link-nav[href="#/conta"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='3.4'/><path d='M5 20c1-4 4-6 7-6s6 2 7 6'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='3.4'/><path d='M5 20c1-4 4-6 7-6s6 2 7 6'/></svg>"); }
+.link-nav[href="#/notificacoes"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 16v-5a6 6 0 10-12 0v5l-2 3h16l-2-3Z'/><path d='M10 21a2 2 0 004 0'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 16v-5a6 6 0 10-12 0v5l-2 3h16l-2-3Z'/><path d='M10 21a2 2 0 004 0'/></svg>"); }
+[data-grupo="grupo-qualidade"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6l7-3Z'/><path d='M9 12l2 2 4-4'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6l7-3Z'/><path d='M9 12l2 2 4-4'/></svg>"); }
+[data-grupo="grupo-producao"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 21V11l4 3v-3l4 3v-3l4 3V7l4 3v11H3Z'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 21V11l4 3v-3l4 3v-3l4 3V7l4 3v11H3Z'/></svg>"); }
+[data-grupo="grupo-aps"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='8.5'/><path d='M12 7v5l3.5 2'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='8.5'/><path d='M12 7v5l3.5 2'/></svg>"); }
+[data-grupo="grupo-estoque"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l9 5-9 5-9-5 9-5Z'/><path d='M3 13l9 5 9-5'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l9 5-9 5-9-5 9-5Z'/><path d='M3 13l9 5 9-5'/></svg>"); }
+[data-grupo="grupo-materiais"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 15a8 8 0 0116 0Z'/><path d='M2 15h20'/><path d='M11 7V4h2v3'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 15a8 8 0 0116 0Z'/><path d='M2 15h20'/><path d='M11 7V4h2v3'/></svg>"); }
+[data-grupo="grupo-comercial"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 8h12l-1 12H7L6 8Z'/><path d='M9 8V6a3 3 0 016 0v2'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M6 8h12l-1 12H7L6 8Z'/><path d='M9 8V6a3 3 0 016 0v2'/></svg>"); }
+[data-grupo="grupo-financeiro"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 7a2 2 0 012-2h13a1 1 0 011 1v3'/><path d='M3 7v11a2 2 0 002 2h14a1 1 0 001-1v-4'/><path d='M16 13h4v3h-4a1.5 1.5 0 010-3Z'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 7a2 2 0 012-2h13a1 1 0 011 1v3'/><path d='M3 7v11a2 2 0 002 2h14a1 1 0 001-1v-4'/><path d='M16 13h4v3h-4a1.5 1.5 0 010-3Z'/></svg>"); }
+[data-grupo="grupo-relatorios"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 16l5-6 4 4 6-8'/><path d='M15 6h4v4'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M4 16l5-6 4 4 6-8'/><path d='M15 6h4v4'/></svg>"); }
+[data-grupo="grupo-administracao"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='2.6'/><path d='M19 12a7 7 0 00-.2-1.6l2-1.5-2-3.4-2.3.9a7 7 0 00-2.7-1.6L13.4 2h-2.8l-.4 2.8a7 7 0 00-2.7 1.6l-2.3-.9-2 3.4 2 1.5A7 7 0 004.8 12c0 .5 0 1 .2 1.6l-2 1.5 2 3.4 2.3-.9c.8.7 1.7 1.3 2.7 1.6l.4 2.8h2.8l.4-2.8a7 7 0 002.7-1.6l2.3.9 2-3.4-2-1.5c.1-.5.2-1 .2-1.6Z'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='2.6'/><path d='M19 12a7 7 0 00-.2-1.6l2-1.5-2-3.4-2.3.9a7 7 0 00-2.7-1.6L13.4 2h-2.8l-.4 2.8a7 7 0 00-2.7 1.6l-2.3-.9-2 3.4 2 1.5A7 7 0 004.8 12c0 .5 0 1 .2 1.6l-2 1.5 2 3.4 2.3-.9c.8.7 1.7 1.3 2.7 1.6l.4 2.8h2.8l.4-2.8a7 7 0 002.7-1.6l2.3.9 2-3.4-2-1.5c.1-.5.2-1 .2-1.6Z'/></svg>"); }
+
+/* ---------- Rodapé: cartão de identidade do usuário (Fase 107) ---------- */
+.rodape-lateral-usuario {
+  position: relative;
+  z-index: 2;
+  border-top-color: rgba(255, 255, 255, 0.1);
+}
+.rodape-lateral-avatar {
+  background: linear-gradient(145deg, var(--marca-teal), var(--marca-verde));
+  color: #06302a;
+  box-shadow: var(--elev-1), var(--brilho-topo-fraco);
+}
+.versao-sistema-rodape { position: relative; z-index: 2; }
 
 /* =========================================================================
    BARRA SUPERIOR — vidro fosco "flutuando" sobre o conteúdo

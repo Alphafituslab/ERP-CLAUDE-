@@ -555,6 +555,19 @@
     return Object.keys(state.gruposMenuAbertos).find((chave) => state.gruposMenuAbertos[chave] === true) || null;
   }
 
+  // Fase 107 — iniciais para o avatar do rodapé do menu lateral (ver
+  // renderShell): pega a primeira letra do primeiro nome e a primeira
+  // letra do último sobrenome (se houver mais de uma palavra) — "Clayton
+  // Borges" vira "CB", só "Clayton" vira "C". Nunca quebra com nome vazio
+  // (usuário sempre tem nome, mas defensivo do mesmo jeito que o resto do
+  // sistema trata dado que "não deveria" faltar).
+  function iniciaisUsuario(nome) {
+    const partes = (nome || "").trim().split(/\s+/).filter(Boolean);
+    if (partes.length === 0) return "?";
+    if (partes.length === 1) return partes[0][0].toUpperCase();
+    return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
+  }
+
   function renderShell(conteudoHtml, paginaAtiva) {
     const grupoAbertoUnico = calcularGrupoAbertoUnico(paginaAtiva);
     const linksHtml = ITENS_MENU.map((it) => {
@@ -582,11 +595,21 @@
       <div class="layout ${state.menuLateralOculto ? "menu-lateral-oculto" : ""}">
         <div class="fundo-menu-mobile" data-acao="alternar-menu-mobile"></div>
         <aside class="barra-lateral">
+          <span class="barra-lateral-blob barra-lateral-blob-1" aria-hidden="true"></span>
+          <span class="barra-lateral-blob barra-lateral-blob-2" aria-hidden="true"></span>
           <div class="marca">
-            <img class="marca-icone" src="/static/img/logo_icone.png" alt="">
+            <span class="marca-selo"><img class="marca-icone" src="/static/img/logo_icone.png" alt=""></span>
             <span>ALPHAFITUS OS<small>Sistema Integrado de Gestão</small></span>
           </div>
           <nav>${linksHtml}</nav>
+          <div class="rodape-lateral-usuario">
+            <span class="rodape-lateral-avatar">${escapeHtml(iniciaisUsuario(state.usuarioAtual ? state.usuarioAtual.nome : ""))}</span>
+            <span class="rodape-lateral-texto">
+              <span class="rodape-lateral-nome">${escapeHtml(state.usuarioAtual ? state.usuarioAtual.nome : "")}</span>
+              <span class="rodape-lateral-cargo">${escapeHtml((state.usuarioAtual && state.usuarioAtual.perfis && state.usuarioAtual.perfis.map((p) => p.nome).join(", ")) || "")}</span>
+            </span>
+            <button class="rodape-lateral-sair" data-acao="logout" title="Sair" aria-label="Sair">⏻</button>
+          </div>
           <div class="versao-sistema-rodape">${state.versaoSistema ? `v${escapeHtml(state.versaoSistema)}` : ""}</div>
         </aside>
         <div class="conteudo-principal">
@@ -596,8 +619,6 @@
             <span class="espacador-barra-superior"></span>
             <button class="botao-icone botao-icone-com-badge" data-acao="ir-notificacoes" title="Notificações">🔔<span class="badge-notificacoes" data-badge-notificacoes ${state.notificacoesNaoLidas > 0 ? "" : "hidden"}>${state.notificacoesNaoLidas > 99 ? "99+" : state.notificacoesNaoLidas}</span></button>
             <button class="botao-icone" data-acao="alternar-tema" title="Alternar tema claro/escuro">🌓</button>
-            <span class="texto-suave nome-usuario-barra">${escapeHtml(state.usuarioAtual ? state.usuarioAtual.nome : "")}</span>
-            <button class="botao secundario pequeno" data-acao="logout">Sair</button>
           </div>
           <div class="pagina">${flashHtml}${conteudoHtml}</div>
         </div>

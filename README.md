@@ -5147,6 +5147,34 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   teste de estresse forçando uma linha de tabela artificialmente enorme
   (1900px): a tabela passou a rolar internamente, e a página continuou
   com rolagem horizontal zero em todos os casos.
+- (Entregue na Fase 107) Menu lateral redesenhado — orgânico, com
+  gradiente da marca. Pedido do usuário: "outro layout mais atrativo dos
+  menus laterais... algo inovador com curvas, com detalhes gráficos".
+  Processo: mockup aprovado antes de implementar (artifact publicado,
+  aprovação explícita do usuário — "ficou melhor assim, pode implantar")
+  — só depois disso qualquer código foi alterado. Sidebar ganhou borda
+  direita ORGÂNICA (nervura de folha via `mask-image` SVG, no lugar da
+  sombra reta de sempre), gradiente radial/diagonal nas cores da marca
+  (`--marca-teal`/`--marca-verde`, os mesmos de `--grad-marca`) com dois
+  brilhos suaves ambiente atrás da navegação, e itens viraram pílulas
+  arredondadas — o item ativo fica sólido/claro com um traço luminoso do
+  lado. Ícones por rota/grupo trocados de EMOJI (dependiam da fonte do
+  SO, inconsistentes entre telas) para ícones de linha em SVG mascarados
+  com `currentColor` — mesma técnica por seletor de atributo
+  (`[href]`/`[data-grupo]`) já usada desde a fase anterior, zero mudança
+  de app.js para os ícones em si. O grupo "APS (Sequenciamento)" (Fase
+  105) ganhou cor e ícone próprios, que ainda não tinha. Novidade que
+  PRECISOU de app.js: o rodapé do menu ganhou um cartão de identidade do
+  usuário (avatar com iniciais em gradiente, nome, perfil, botão "Sair")
+  — movido da barra superior do conteúdo, que antes tinha nome + Sair (a
+  barra superior ficou só com notificações/tema). Achado corrigido antes
+  de ir para produção: sem um ajuste de cor explícito, um SUBITEM ativo
+  dentro de um grupo herdaria o texto escuro do novo estilo "pílula
+  clara" dos itens de topo, ficando ilegível sobre o fundo colorido
+  semitransparente do grupo (ainda escuro por baixo) — subitem continua
+  com texto claro, como sempre foi. Testado ao vivo em várias larguras
+  (1280px desktop, 390px gaveta mobile) e nos dois temas antes do
+  deploy.
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório

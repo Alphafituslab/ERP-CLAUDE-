@@ -312,7 +312,7 @@ body::before {
 .layout { display: flex; min-height: 100vh; }
 
 .barra-lateral {
-  width: 240px;
+  width: 272px;
   background: var(--azul);
   color: #fff;
   display: flex;
@@ -329,20 +329,64 @@ body::before {
   align-items: center;
   gap: 12px;
 }
-.barra-lateral .marca .marca-icone { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; }
+.barra-lateral .marca .marca-icone { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; display: block; }
 .barra-lateral .marca small { display: block; font-weight: 400; font-size: 11px; opacity: 0.75; }
 
 .barra-lateral nav { flex: 1; padding: 12px 0; overflow-y: auto; }
 
-.versao-sistema-rodape {
-  padding: 10px 20px;
-  font-size: 11px;
-  color: rgba(255,255,255,0.55);
+/* Fase 107 — cartão de identidade do usuário no rodapé do menu lateral
+   (antes era só nome + "Sair" na barra superior do CONTEÚDO — ver
+   histórico em renderShell/app.js). Estrutura/tamanho aqui em
+   styles.css (a camada "base"); gradiente do avatar e o resto do
+   acabamento visual ficam em tema-3d.css, mesmo padrão já usado para
+   `.link-nav`/`.barra-lateral-grupo` — a barra continua funcional e
+   legível mesmo se tema-3d.css algum dia for removido. */
+.rodape-lateral-usuario {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 16px;
   border-top: 1px solid rgba(255,255,255,0.15);
+}
+.rodape-lateral-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.18);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+.rodape-lateral-texto { flex: 1; min-width: 0; }
+.rodape-lateral-nome { display: block; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rodape-lateral-cargo { display: block; font-size: 10.5px; color: rgba(255,255,255,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rodape-lateral-sair {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.1);
+  border: none;
+  color: rgba(255,255,255,0.75);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 13px;
+  line-height: 1;
+}
+.rodape-lateral-sair:hover { background: rgba(255,255,255,0.2); color: #fff; }
+
+.versao-sistema-rodape {
+  padding: 8px 20px 12px;
+  font-size: 10.5px;
+  color: rgba(255,255,255,0.4);
+  text-align: center;
 }
 
 .link-nav {
-  display: block;
+  display: flex;
+  align-items: center;
   padding: 10px 20px;
   color: rgba(255,255,255,0.85);
   text-decoration: none;
@@ -352,6 +396,22 @@ body::before {
 }
 .link-nav:hover { background: rgba(255,255,255,0.08); }
 .link-nav.ativo { background: rgba(255,255,255,0.12); border-left-color: var(--dourado); color: #fff; font-weight: 600; }
+
+/* Fase 107 — selo/badge da marca (envolve `.marca-icone`) e os dois
+   brilhos ambientes atrás da navegação — só estrutura/posição aqui; a
+   cor/gradiente de cada um vem de tema-3d.css. */
+.marca-selo {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 14px;
+}
+.barra-lateral-blob {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
 
 /* Fase 51 — grupos recolhíveis por módulo no menu lateral PRINCIPAL (não
    confundir com `.memorial-nav-grupo`, que é o mesmo padrão só que dentro
@@ -430,7 +490,7 @@ body::before {
     top: 0;
     left: 0;
     height: 100%;
-    width: 260px;
+    width: 284px;
     max-width: 82vw;
     z-index: 60;
     transform: translateX(-100%);
@@ -450,8 +510,6 @@ body::before {
   /* Sem a barra lateral ocupando espaço no fluxo (ela virou `position:
      fixed`, fora do `flex` de `.layout`), o conteúdo já fica com a
      largura toda sozinho — não precisa de nenhum ajuste adicional aqui. */
-
-  .nome-usuario-barra { display: none; } /* nome completo não cabe bem ao lado do sino/tema/sair numa tela estreita */
 
   /* `table` normalmente é `width: 100%` (preenche o cartão) — isso por
      si só IMPEDE a tabela de crescer mais do que o container e precisar
