@@ -365,6 +365,28 @@ body::before {
   font-size: 13px;
   flex-shrink: 0;
 }
+.rodape-lateral-avatar-foto {
+  object-fit: cover;
+  background: rgba(255,255,255,0.18);
+}
+.conta-foto-linha { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+.conta-foto-preview {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.conta-foto-preview-vazia {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 22px;
+  background: var(--fundo-suave, rgba(0,0,0,0.06));
+}
+.conta-foto-acoes { display: flex; flex-direction: column; gap: 8px; }
+.conta-foto-botoes { display: flex; gap: 8px; flex-wrap: wrap; }
 .rodape-lateral-texto { flex: 1; min-width: 0; }
 .rodape-lateral-nome { display: block; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rodape-lateral-cargo { display: block; font-size: 10.5px; color: rgba(255,255,255,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

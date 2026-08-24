@@ -1,4 +1,7 @@
+import base64
+import binascii
 import datetime
+import re
 import secrets
 
 from flask import Blueprint, g, jsonify, request
@@ -328,8 +331,21 @@ def refresh():
 
 @bp.post("/logout")
 def logout():
+    """Fase 112 — pedido do usuário: "ao deslogar e logar novamente deverá
+    solicitar a senha ao entrar e... pedir autenticação também de 6
+    dígitos". A senha já era sempre exigida (não existe atalho nenhum
+    para ela); o que faltava era isto aqui: até a Fase 111, deslogar só
+    revogava a SESSÃO (`sessoes`), nunca o "dispositivo confiável" da
+    Fase 95 — então, dentro das 24h de validade dele, logar de novo no
+    MESMO navegador pulava o código de 6 dígitos direto, mesmo depois de
+    um logout deliberado. Agora o logout também revoga o dispositivo
+    confiável deste MESMO navegador (se o front mandar o token que tem
+    guardado) — só o dele, não de outras sessões/terminais do mesmo
+    usuário em outras máquinas, que continuam confiáveis normalmente até
+    a própria pessoa deslogar delas também."""
     dados = request.get_json(silent=True) or {}
     refresh_token = dados.get("refresh_token")
+    dispositivo_confiavel_token = dados.get("dispositivo_confiavel_token")
     conn = get_db()
     if not refresh_token:
         raise ApiError("Informe refresh_token.", status=400)
@@ -341,6 +357,11 @@ def logout():
             "UPDATE sessoes SET revogado = 1, revogado_em = ?, revogado_por = ? WHERE id = ?",
             (_iso(_now()), sessao["usuario_id"], sessao["id"]),
         )
+        if dispositivo_confiavel_token:
+            conn.execute(
+                "UPDATE dispositivos_confiaveis_2fa SET revogado = 1 WHERE usuario_id = ? AND token_hash = ?",
+                (sessao["usuario_id"], security.hash_refresh_token(dispositivo_confiavel_token)),
+            )
         audit.registrar(conn, tabela="sessoes", registro_id=sessao["id"], usuario_id=sessao["usuario_id"],
                          acao="logout", ip=client_ip(), dispositivo=client_device())
     return jsonify({"ok": True})
@@ -412,6 +433,62 @@ def trocar_senha():
     return jsonify({"ok": True})
 
 
+# Fase 113 — mesmo espírito de tamanho/tipo do memorial_anexos.py/
+# clientes_documentos.py, mas guardando o data URI COMPLETO em vez de só
+# o base64 puro: uma foto de perfil só tem UM consumidor (uma tag <img
+# src="...">), então guardar já pronta para uso evita reconstruir o
+# prefixo "data:<mime>;base64," toda vez que ela for exibida.
+FOTO_PERFIL_TIPOS_PERMITIDOS = ("image/jpeg", "image/png", "image/webp")
+FOTO_PERFIL_TAMANHO_MAXIMO_BYTES = 2 * 1024 * 1024
+
+
+def _validar_foto_perfil(data_uri):
+    """Recebe o data URI completo (o mesmo formato que `lerArquivoComoBase64`
+    já produz no front) e devolve ele mesmo, já validado — ou levanta
+    ApiError. `None`/string vazia é válido (significa "remover a foto")."""
+    if not data_uri:
+        return None
+    m = re.match(r"^data:([\w/+.-]+);base64,(.+)$", data_uri, re.DOTALL)
+    if not m:
+        raise ApiError("Foto inválida — envie um arquivo de imagem.", status=400)
+    tipo_mime, conteudo_base64 = m.group(1).lower(), m.group(2)
+    if tipo_mime not in FOTO_PERFIL_TIPOS_PERMITIDOS:
+        raise ApiError(
+            f"Tipo de imagem '{tipo_mime}' não permitido. Use JPEG, PNG ou WEBP.", status=400,
+        )
+    try:
+        bruto = base64.b64decode(conteudo_base64, validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError("Foto inválida — não foi possível ler o arquivo.", status=400)
+    if len(bruto) == 0:
+        raise ApiError("A foto enviada está vazia.", status=400)
+    if len(bruto) > FOTO_PERFIL_TAMANHO_MAXIMO_BYTES:
+        raise ApiError(
+            f"Foto muito grande ({len(bruto) / (1024 * 1024):.1f} MB). "
+            f"O limite é {FOTO_PERFIL_TAMANHO_MAXIMO_BYTES // (1024 * 1024)} MB.",
+            status=400,
+        )
+    return data_uri
+
+
+@bp.put("/minha-foto")
+@requires_auth
+def minha_foto():
+    """Autosserviço: pedido do usuário foi "cada operador" ter sua própria
+    foto — cada pessoa sobe a própria, sem precisar de um administrador
+    fazer isso por ela. Mandar `foto_perfil: null` remove a foto atual
+    (volta a mostrar as iniciais no lugar, ver renderShell em app.js)."""
+    usuario = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    foto_validada = _validar_foto_perfil(dados.get("foto_perfil"))
+    conn = get_db()
+    conn.execute("UPDATE usuarios SET foto_perfil = ? WHERE id = ?", (foto_validada, usuario["id"]))
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
+                     acao="foto_perfil_alterada" if foto_validada else "foto_perfil_removida",
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True, "foto_perfil": foto_validada})
+
+
 @bp.get("/me")
 @requires_auth
 def me():
@@ -432,6 +509,7 @@ def me():
         "email": usuario["email"],
         "dois_fatores_ativo": bool(usuario["dois_fatores_ativo"]),
         "notificar_por_email": bool(usuario["notificar_por_email"]),
+        "foto_perfil": usuario["foto_perfil"],
         # Fase 94 — "exige_2fa" no perfil virou só uma RECOMENDAÇÃO exibida
         # em Minha Conta (a Fase 92 bloqueava a API inteira até configurar;
         # o usuário pediu para escolher quando e poder desativar depois):

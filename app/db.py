@@ -137,6 +137,7 @@ SCHEMA_FILES = [
     "schema_fase103.sql",  # Fase 103 — Documentos do Cliente (obrigatório ao cadastrar pelo App de Vendas em campo)
     "schema_fase105.sql",  # Fase 105 — APS como módulo de permissão próprio (separado de "producao")
     "schema_fase111.sql",  # Fase 111 — Arquitetura Servidor + Terminais: registro de terminais conectados
+    "schema_fase113.sql",  # Fase 113 — Foto de perfil do operador (usuarios.foto_perfil)
 ]
 
 

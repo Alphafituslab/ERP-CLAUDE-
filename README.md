@@ -5192,6 +5192,68 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   (antes tinha sua própria cor por grupo). Testado ao vivo conferindo a
   cor computada de cada um dos 9 grupos (idêntica em todos) e o estado
   ativo de um subitem antes do deploy.
+- (Entregue na Fase 113) Foto de perfil do operador + logo nova no ERP +
+  renomeação da marca. Pedido do usuário, três partes na mesma mensagem:
+  1. "ter a opção de colocar a foto de cada operador logado no sistema,
+     assim cada um tem seu rosto ao logar" — nova coluna
+     `usuarios.foto_perfil` (`schema_fase113.sql`, TEXT nulável, mesmo
+     padrão base64-no-banco de `memorial_anexos`/`clientes_documentos`,
+     mas sem tabela própria por ser um campo único por usuário). Rota
+     nova de autosserviço `PUT /auth/minha-foto` (`app/routes/auth.py`)
+     — cada operador sobe/remove a própria foto, sem depender de um
+     administrador; valida tipo (`image/jpeg`, `image/png`,
+     `image/webp`) e tamanho (até 2 MB) antes de gravar. `GET /auth/me`
+     passou a incluir `foto_perfil` na resposta — como `_publico()` (em
+     `usuarios.py`) já tira só `senha_hash`/`dois_fatores_secret` de
+     todo o resto, as telas de administração de usuários já expõem o
+     campo novo sem nenhum código extra. Card novo "Foto de perfil" em
+     Minha Conta (escolher arquivo + salvar + remover) e o avatar do
+     rodapé do menu lateral (que desde a Fase 107 mostrava só as
+     iniciais) passa a mostrar a foto real quando ela existe,
+     `avatarUsuarioHtml()` caindo de volta nas iniciais para quem nunca
+     subiu uma. Testado ao vivo (dev server): upload, exibição na Minha
+     Conta e no rodapé lateral, remoção (volta pras iniciais nos dois
+     lugares), e as validações de tipo/tamanho recusando um PDF e uma
+     string que não é um data URI.
+  2. "subir imagem inclusive no Erp com a logo nova com fundo
+     transparente" — a Fase 110 tinha deliberadamente restringido a logo
+     nova só ao ícone do instalador/exe; agora ela entra no próprio ERP:
+     `frontend/static/img/logo_icone.png` (selo do menu lateral) e os
+     três ícones do PWA (`icon-192.png`, `icon-512.png`,
+     `icon-maskable-512.png`) foram regerados com Pillow a partir da
+     mesma imagem de origem (fundo transparente, preenchida em
+     quadrado antes de redimensionar), o maskable com a margem de
+     segurança de 30% que o Android exige para não cortar o símbolo ao
+     aplicar a máscara circular. O wordmark da tela de login
+     (`logo_alphafitus.png`) não foi tocado — não fazia parte do pedido.
+  3. "onde está escrito ALPHAFITUS OS passar para: ALPHAFITUS e deixar a
+     escrita como estava abaixo" — o texto da marca no topo do menu
+     lateral (`renderShell`, `app.js`) mudou de "ALPHAFITUS OS" para
+     "ALPHAFITUS", mantendo o subtítulo "Sistema Integrado de Gestão"
+     exatamente como estava. Conferido por busca que essa era a única
+     ocorrência de "ALPHAFITUS OS" em `app.js`/`index.html`/
+     `manifest.json`.
+- (Entregue na Fase 112) Corrigido: logout não revogava o "dispositivo
+  confiável" do 2FA. Pedido do usuário: "ao deslogar e logar novamente
+  deverá solicitar a senha ao entrar e no meu caso como administrador
+  pedir autenticação também de 6 dígitos". A senha já era sempre exigida
+  (nunca existiu um jeito de pular isso) — o problema real era mais
+  específico: a Fase 95 criou um token de "dispositivo confiável" que,
+  depois de uma verificação de 2FA bem-sucedida, deixa os próximos
+  LOGINS daquele navegador pularem o código de 6 dígitos por 24h — mas
+  `logout()` nunca revogava esse token, e o front nunca limpava ele do
+  `localStorage`, então deslogar e logar de novo dentro dessas 24h
+  pulava o 2FA silenciosamente, mesmo para o Administrador.
+  `POST /auth/logout` (`app/routes/auth.py`) passou a aceitar também o
+  `dispositivo_confiavel_token` do corpo da requisição e marcar esse
+  registro específico como revogado em `dispositivos_confiaveis_2fa`
+  (só o token daquele dispositivo — não derruba os outros terminais/
+  sessões do usuário); `limparSessao()` (`app.js`) passou a apagar
+  `alphafitus_dispositivo_2fa` do `localStorage` junto com o refresh
+  token. Testado ao vivo via API: ativar 2FA, confirmar com TOTP válido
+  (guardando o token de dispositivo confiável emitido), fazer logout,
+  logar de novo com o mesmo token — confirmado que agora `requires_2fa`
+  volta a `true` (antes da correção ficava `false`, pulando o código).
 - (Entregue na Fase 109) Painel Tempo Real: Kanban vira grade que se
   reorganiza sozinha, sem rolagem lateral. Pedido do usuário, com print
   da tela: "esta tela ainda está tendo que rolar pro lado pra ver tudo

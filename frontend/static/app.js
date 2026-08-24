@@ -188,6 +188,13 @@
     state.refreshToken = null;
     state.usuarioAtual = null;
     localStorage.removeItem("alphafitus_refresh_token");
+    // Fase 112 — o token de "dispositivo confiável" (Fase 95, pula o
+    // código de 6 dígitos por 24h) já foi revogado no servidor pelo
+    // dispatcher de logout (ver case "logout") quando isso vem de um
+    // logout de verdade; remover daqui também garante que uma sessão
+    // que caiu por outro motivo (token expirado, erro) não deixe um
+    // token de dispositivo confiável órfão no navegador.
+    localStorage.removeItem("alphafitus_dispositivo_2fa");
   }
 
   // ---------------------------------------------------------------------
@@ -651,6 +658,16 @@
     return (partes[0][0] + partes[partes.length - 1][0]).toUpperCase();
   }
 
+  // Fase 113 — pedido do usuário: "cada um tem seu rosto ao logar". Quando
+  // o usuário tem `foto_perfil` configurada mostra a foto real; senão cai
+  // de volta nas iniciais (Fase 107), sem quebrar quem nunca subiu foto.
+  function avatarUsuarioHtml(usuario) {
+    if (usuario && usuario.foto_perfil) {
+      return `<img class="rodape-lateral-avatar rodape-lateral-avatar-foto" src="${usuario.foto_perfil}" alt="">`;
+    }
+    return `<span class="rodape-lateral-avatar">${escapeHtml(iniciaisUsuario(usuario ? usuario.nome : ""))}</span>`;
+  }
+
   function renderShell(conteudoHtml, paginaAtiva) {
     const grupoAbertoUnico = calcularGrupoAbertoUnico(paginaAtiva);
     const linksHtml = ITENS_MENU.map((it) => {
@@ -682,11 +699,11 @@
           <span class="barra-lateral-blob barra-lateral-blob-2" aria-hidden="true"></span>
           <div class="marca">
             <span class="marca-selo"><img class="marca-icone" src="/static/img/logo_icone.png" alt=""></span>
-            <span>ALPHAFITUS OS<small>Sistema Integrado de Gestão</small></span>
+            <span>ALPHAFITUS<small>Sistema Integrado de Gestão</small></span>
           </div>
           <nav>${linksHtml}</nav>
           <div class="rodape-lateral-usuario">
-            <span class="rodape-lateral-avatar">${escapeHtml(iniciaisUsuario(state.usuarioAtual ? state.usuarioAtual.nome : ""))}</span>
+            ${avatarUsuarioHtml(state.usuarioAtual)}
             <span class="rodape-lateral-texto">
               <span class="rodape-lateral-nome">${escapeHtml(state.usuarioAtual ? state.usuarioAtual.nome : "")}</span>
               <span class="rodape-lateral-cargo">${escapeHtml((state.usuarioAtual && state.usuarioAtual.perfis && state.usuarioAtual.perfis.map((p) => p.nome).join(", ")) || "")}</span>
@@ -1561,6 +1578,23 @@
        <div class="cartao">
          <p><strong>${escapeHtml(me.nome)}</strong> — ${escapeHtml(me.email)}</p>
          <p class="texto-suave">Perfis: ${me.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "nenhum"}</p>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Foto de perfil</h3>
+         <div class="conta-foto-linha">
+           ${me.foto_perfil
+             ? `<img class="conta-foto-preview" src="${me.foto_perfil}" alt="">`
+             : `<span class="conta-foto-preview conta-foto-preview-vazia">${escapeHtml(iniciaisUsuario(me.nome))}</span>`}
+           <form data-form="salvar-foto-perfil" class="conta-foto-acoes">
+             <input type="file" accept="image/png,image/jpeg,image/webp" name="foto">
+             <div class="conta-foto-botoes">
+               <button type="submit" class="botao secundario pequeno">Salvar foto</button>
+               ${me.foto_perfil ? '<button type="button" class="botao perigo pequeno" data-acao="remover-foto-perfil">Remover foto</button>' : ""}
+             </div>
+           </form>
+         </div>
+         <p class="texto-suave">JPEG, PNG ou WEBP, até 2 MB.</p>
        </div>
 
        <div class="cartao">
@@ -11034,8 +11068,19 @@
         return;
       }
       case "logout": {
+        // Fase 112 — manda junto o token de "dispositivo confiável" (se
+        // este navegador tiver um guardado) para o servidor revogar ele
+        // também, não só a sessão — sem isso, logar de novo no mesmo
+        // navegador pulava o código de 6 dígitos até o token expirar
+        // sozinho (24h), mesmo depois de um logout deliberado.
         try {
-          await chamarApi("/auth/logout", { method: "POST", body: { refresh_token: state.refreshToken } });
+          await chamarApi("/auth/logout", {
+            method: "POST",
+            body: {
+              refresh_token: state.refreshToken,
+              dispositivo_confiavel_token: localStorage.getItem("alphafitus_dispositivo_2fa"),
+            },
+          });
         } catch (e) { /* mesmo se falhar no servidor, limpa localmente */ }
         pararPollingNotificacoes();
         pararHeartbeatTerminal();
@@ -11233,6 +11278,10 @@
       case "abrir-desativar-2fa":
         modalDesativar2fa();
         return;
+      case "remover-foto-perfil":
+        await chamarApi("/auth/minha-foto", { method: "PUT", body: { foto_perfil: null } });
+        definirFlash("ok", "Foto de perfil removida.");
+        return renderMinhaConta();
       case "encerrar-sessao":
         await chamarApi(`/auth/sessoes/${alvo.dataset.id}/encerrar`, { method: "POST" });
         definirFlash("ok", "Sessão encerrada.");
@@ -12507,6 +12556,14 @@
         });
         form.reset();
         definirFlash("ok", "Senha alterada com sucesso.");
+        return renderMinhaConta();
+      }
+      case "salvar-foto-perfil": {
+        const arquivo = form.querySelector('input[type="file"]').files[0];
+        if (!arquivo) throw new Error("Escolha uma foto primeiro.");
+        const conteudo = await lerArquivoComoBase64(arquivo);
+        await chamarApi("/auth/minha-foto", { method: "PUT", body: { foto_perfil: conteudo } });
+        definirFlash("ok", "Foto de perfil atualizada.");
         return renderMinhaConta();
       }
       case "confirmar-2fa": {
