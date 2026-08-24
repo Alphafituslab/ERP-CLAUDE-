@@ -257,13 +257,18 @@ body::before {
 .painel-etapa-nome { font-weight: 600; flex: 1 1 auto; min-width: 100px; }
 
 /* Fase 90 — Painel Tempo Real redesenhado em Kanban/pipeline: uma coluna
-   por ETAPA do negócio (não mais uma seção por módulo) — rolagem
-   horizontal própria (`.tabela-scroll` já existe para tabelas largas;
-   aqui é o quadro inteiro que precisa rolar de lado em telas estreitas,
-   sem o corpo da página rolar junto). */
-.painel-kanban { display: flex; gap: 14px; overflow-x: auto; padding-bottom: 8px; align-items: flex-start; }
+   por ETAPA do negócio (não mais uma seção por módulo). Fase 109 —
+   pedido do usuário: "corrigir para que não seja preciso rolar pro
+   lado e ver tudo sem rolagem" — antes era um quadro que rolava de
+   lado (como um Kanban de verdade), mas com várias colunas isso ainda
+   exigia rolagem horizontal para ver as últimas. Virou uma GRADE que
+   se reorganiza sozinha (mesmo padrão `auto-fit`/`minmax` já usado em
+   `.grade-stat`/`.portfolio-grade`): quantas colunas couberem lado a
+   lado na largura disponível, sobrando para as próximas linha(s) —
+   nunca precisa rolar de lado, só verticalmente como o resto da
+   página. */
+.painel-kanban { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 14px; align-items: start; }
 .painel-kanban-coluna {
-  flex: 0 0 300px;
   border: 1px solid var(--borda);
   border-radius: 8px;
   background: var(--superficie);

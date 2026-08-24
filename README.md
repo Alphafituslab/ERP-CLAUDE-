@@ -5192,6 +5192,25 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   (antes tinha sua própria cor por grupo). Testado ao vivo conferindo a
   cor computada de cada um dos 9 grupos (idêntica em todos) e o estado
   ativo de um subitem antes do deploy.
+- (Entregue na Fase 109) Painel Tempo Real: Kanban vira grade que se
+  reorganiza sozinha, sem rolagem lateral. Pedido do usuário, com print
+  da tela: "esta tela ainda está tendo que rolar pro lado pra ver tudo
+  — corrigir para que não seja preciso rolar pro lado". A Fase 90
+  desenhou o Painel Tempo Real como um quadro Kanban de verdade — colunas
+  de largura fixa (300px) que rolam de lado quando não cabem todas —, e a
+  Fase 106 (nenhuma tela deve exigir rolagem horizontal) explicitamente
+  tratou isso como exceção permitida ("conteúdo que realmente precisa de
+  rolagem própria, tabela larga, Kanban, continua rolando"). O usuário
+  agora pede o oposto para esta tela: nem essa rolagem interna deve
+  existir. `.painel-kanban` deixou de ser `display: flex; overflow-x:
+  auto` (quadro que rola) e virou `display: grid; grid-template-columns:
+  repeat(auto-fit, minmax(280px, 1fr))` (mesmo padrão responsivo já usado
+  em `.grade-stat`/`.portfolio-grade`) — as 8 colunas (Aprovação
+  Financeira, Separação, PCP→Compras, Compras, Quarentena/CQ, Produção,
+  Estoque Mínimo, Expedido/Coleta) se reorganizam sozinhas em quantas
+  linhas couberem, nunca precisando rolar de lado. Testado ao vivo em
+  1560px (4 colunas por linha) e 1024px (2 por linha) confirmando
+  rolagem horizontal zero nos dois casos.
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório
