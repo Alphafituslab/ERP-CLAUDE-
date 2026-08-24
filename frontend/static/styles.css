@@ -42,12 +42,31 @@
 
 * { box-sizing: border-box; }
 
+/* Fase 106 — pedido do usuário: "não quero que nem uma tela, ao entrar,
+   tenha que rolar pro lado para visualizar ela toda... se possível ela
+   deve se ajustar sozinha". A maior parte do sistema já era responsiva
+   (tabelas envolvidas em `.tabela-scroll` por `envolverTabelasComRolagem`
+   — Fase 38, grades com `auto-fill`/`auto-fit`, `.barra-acoes`/`.grade-
+   filtros` com `flex-wrap`, `.conteudo-principal` com `min-width: 0` para
+   não travar a largura do flex) — mas nada impedia a PÁGINA INTEIRA de
+   rolar de lado se algum elemento específico (um valor sem quebra, um
+   componente novo esquecido de testar numa tela estreita) ultrapassasse a
+   largura da viewport por engano. `overflow-x: hidden` aqui é a garantia
+   definitiva: a página em si NUNCA rola de lado, não importa o que
+   aconteça lá dentro — conteúdo que realmente precisa de rolagem própria
+   (tabela larga, Kanban) continua rolando normalmente dentro do seu
+   próprio container (`overflow-x` num container interno funciona mesmo
+   com o body em `hidden` — são contextos de rolagem independentes), só
+   que sem nunca arrastar a barra lateral/cabeçalho junto. */
+html { overflow-x: hidden; }
 body {
   margin: 0;
   font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
   background: var(--fundo);
   color: var(--texto);
   font-size: 14px;
+  overflow-x: hidden;
+  max-width: 100vw;
 }
 
 button, input, select {

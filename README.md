@@ -5125,6 +5125,28 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   devolve 403) e um perfil só-Produção sem APS (vê só "Produção & PCP",
   `GET /aps/agenda`/`GET /aps/mrp` devolvem 403), além de confirmar que
   PCP/Compras continuam vendo os dois grupos normalmente (sem regressão).
+- (Entregue na Fase 106) Nenhuma tela deve exigir rolagem horizontal.
+  Pedido do usuário: "não quero que nem uma tela, ao entrar, tenha que
+  rolar pro lado... se possível ela deve se ajustar sozinha". O sistema
+  já tinha boa parte da base responsiva pronta desde fases anteriores
+  (`envolverTabelasComRolagem`, Fase 38, envolve toda `<table>` recém-
+  renderizada — tanto em telas quanto em modais — numa `.tabela-scroll`
+  com rolagem própria; grades usam `auto-fill`/`auto-fit` com `minmax`;
+  `.barra-acoes`/`.grade-filtros` têm `flex-wrap`; `.conteudo-principal`
+  tem `min-width: 0`, o ajuste clássico de flexbox que evita um item
+  "empurrar" o container para fora). O que faltava era uma garantia
+  definitiva contra qualquer caso não previsto: `html, body { overflow-x:
+  hidden }` (`styles.css`) — a PÁGINA em si nunca mais rola de lado,
+  não importa o que aconteça dentro dela; conteúdo que realmente precisa
+  de rolagem própria (tabela larga, Kanban do Painel Tempo Real) continua
+  rolando normalmente dentro do seu próprio container, sem arrastar a
+  barra lateral/cabeçalho junto (contextos de rolagem aninhados são
+  independentes em CSS). Testado ao vivo em várias larguras (1280px,
+  1024px, 768px) em Painel Executivo (grades de KPI), Painel Tempo Real
+  (Kanban), Itens e Comercial (tabelas) e um modal largo — inclusive um
+  teste de estresse forçando uma linha de tabela artificialmente enorme
+  (1900px): a tabela passou a rolar internamente, e a página continuou
+  com rolagem horizontal zero em todos os casos.
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório
