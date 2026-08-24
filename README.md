@@ -5175,6 +5175,23 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   com texto claro, como sempre foi. Testado ao vivo em várias larguras
   (1280px desktop, 390px gaveta mobile) e nos dois temas antes do
   deploy.
+- (Entregue na Fase 108) Menu lateral: removida a cor por módulo, igual
+  ao mockup. Pedido do usuário logo após a Fase 107 ir ao ar: "deixar
+  igual ao Sidebar que você enviou sem mudanças de cor, exatamente como
+  o Sidebar". O tema 3D ANTIGO (anterior ao mockup) dava a cada grupo do
+  menu (Qualidade, Produção, Estoque...) uma cor própria — cartão com
+  fundo/borda tingidos, badge colorido atrás do ícone, subitem ativo com
+  fundo semitransparente na cor do grupo. O mockup aprovado nunca teve
+  isso: cada grupo era só um rótulo discreto em maiúsculas com um ícone
+  pequeno neutro, e QUALQUER item ativo (de grupo ou não) usava a mesma
+  pílula clara com o mesmo traço mint — nunca uma cor diferente por
+  módulo. Removido todo o sistema `--cor-grupo`/`--menu-qualidade` etc.
+  (nenhum uso restante, paleta antiga só no histórico do git); grupo
+  virou rótulo neutro sem cartão/borda; subitem ativo passou a usar
+  exatamente a mesma pílula branca + traço mint que os itens de topo
+  (antes tinha sua própria cor por grupo). Testado ao vivo conferindo a
+  cor computada de cada um dos 9 grupos (idêntica em todos) e o estado
+  ativo de um subitem antes do deploy.
 - (Entregue na Fase 103) Documentos do Cliente obrigatórios ao cadastrar
   pelo App de Vendas em campo. Pedido do usuário: "quando um
   representante/vendedor vai visitar um cliente... seja obrigatório
