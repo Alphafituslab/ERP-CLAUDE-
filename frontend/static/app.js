@@ -6516,7 +6516,7 @@
         ["metodologias_aplicadas", "Metodologias Aplicadas", "textarea"],
     ]},
     { numero: 5, titulo: "Cálculos", campos: [
-        ["calculos_nutricionais", "Cálculos Nutricionais", "textarea"],
+        ["calculos_nutricionais", "Cálculos Nutricionais", "calc-nutricionais"],
     ]},
     { numero: 6, titulo: "Alegações", campos: [
         ["alegacoes", "Alegações", "textarea"],
@@ -6548,6 +6548,105 @@
     ["exportar", "Exportar"],
   ];
 
+  // =======================================================================
+  // EDITOR ESTRUTURADO — CÁLCULOS NUTRICIONAIS (Fase 116)
+  //
+  // Pedido do usuário: "trazer tudo igual... verificar se está tudo
+  // funcionando perfeitamente" — o sistema antigo editava este campo numa
+  // tela própria com tabela (uma linha por nutriente) e cálculo automático
+  // de % da dose mínima/máxima da IN 28/2018 da ANVISA, em vez do textarea
+  // de texto livre que o AlphafitusOS tinha até aqui. O campo continua
+  // sendo a MESMA coluna de texto (`memoriais.calculos_nutricionais`,
+  // nenhuma migration) — só o CONTEÚDO agora é um JSON estruturado,
+  // prefixado com "__CALCV1__" (mesmo marcador do sistema original, para
+  // dado antigo/legado continuar reconhecível e para nunca confundir com
+  // texto livre solto no campo — qualquer valor sem esse prefixo é tratado
+  // como "nenhum cálculo estruturado ainda", nunca dá erro).
+  //
+  // Especificação replicada com fidelidade a partir do código-fonte do
+  // sistema original (componente calc-nutricionais-editor.tsx) — cada
+  // fórmula abaixo bate com a original campo a campo. Duas adaptações
+  // conscientes, por este ser um app sem framework (sem React/DOM
+  // virtual): (1) reordenar linhas usa botões ▲▼ em vez de arrastar — o
+  // RESULTADO final (posição no array) é idêntico, só a interação muda;
+  // (2) a sincronização automática com Composição Nutricional/Composição
+  // Centesimal (que no original vivia FORA deste editor, na tela do
+  // memorial) fica pendente até esses dois editores também virem
+  // estruturados — até lá, o campo "Fonte" aqui é texto livre.
+  const CALC_NUTRICIONAIS_MAGIC = "__CALCV1__";
+
+  function parseCalcNutricionais(valor) {
+    if (!valor || !valor.startsWith(CALC_NUTRICIONAIS_MAGIC)) return { nutrientes: [] };
+    try {
+      const parsed = JSON.parse(valor.slice(CALC_NUTRICIONAIS_MAGIC.length));
+      if (!Array.isArray(parsed.nutrientes)) return { nutrientes: [] };
+      return parsed;
+    } catch {
+      return { nutrientes: [] };
+    }
+  }
+  function serializeCalcNutricionais(dadosCalc) {
+    return CALC_NUTRICIONAIS_MAGIC + JSON.stringify(dadosCalc);
+  }
+
+  const GRUPOS_POPULACIONAIS_CALC = [
+    "0 a 6 meses", "7 a 11 meses", "1 a 3 anos", "4 a 8 anos", "9 a 18 anos",
+    "≥ 19 anos", "Gestantes", "Lactantes",
+  ];
+  const UNIDADES_MEDIDA_CALC = ["mg", "µg", "g", "UI"];
+  const FUNDAMENTO_LEGAL_PADRAO_CALC =
+    "De acordo com a RDC nº 243/2018 e a Instrução Normativa nº 28/2018 da ANVISA, o nutriente é " +
+    "permitido como constituinte em suplementos alimentares, desde que observados os limites mínimos " +
+    "e máximos estabelecidos para o grupo populacional indicado no produto.\n\nA IN nº 28/2018 define, " +
+    "em seu Anexo III, os limites mínimos de nutrientes que devem ser fornecidos pelos suplementos " +
+    "alimentares na recomendação diária de consumo. No Anexo IV da mesma norma, são definidos os " +
+    "limites máximos de nutrientes que não devem ser ultrapassados.";
+
+  function novoNutrienteCalc() {
+    return {
+      id: (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `tmp-${Date.now()}-${Math.random()}`,
+      nutriente: "", fonte: "", fundamentoLegal: FUNDAMENTO_LEGAL_PADRAO_CALC,
+      qtdIngrediente: "", grupoPopulacional: "≥ 19 anos",
+      doseMinRef: "", doseMaxRef: "", unidade: "mg", aceitacaoMin: "", aceitacaoMax: "",
+    };
+  }
+
+  // Fórmula EXATA do sistema original — "livre" (sem exigência) tanto para
+  // "" quanto para 0 digitado; % é sempre contra o valor de referência
+  // efetivo da própria linha (nunca uma consulta ao vivo do catálogo).
+  function calcularNutriente(n) {
+    const qtd = Number(n.qtdIngrediente) || 0;
+    const minLivre = n.doseMinRef === "" || Number(n.doseMinRef) === 0;
+    const doseMin = minLivre ? 0 : Number(n.doseMinRef);
+    const maxLivre = n.doseMaxRef === "" || Number(n.doseMaxRef) === 0;
+    const doseMax = maxLivre ? 0 : Number(n.doseMaxRef);
+    const pctMin = doseMin > 0 ? (qtd / doseMin) * 100 : 0;
+    const pctMax = (!maxLivre && doseMax > 0) ? (qtd / doseMax) * 100 : 0;
+    return { elementar: qtd, pctMin, pctMax, minLivre, maxLivre, doseMin, doseMax };
+  }
+
+  // Faixa de aceitação (tolerância analítica) — independente da IN
+  // 28/2018, calculada à parte, exatamente como no original.
+  function faixaAceitacaoCalc(n) {
+    const qtd = Number(n.qtdIngrediente) || 0;
+    const aMin = (typeof n.aceitacaoMin === "number" && n.aceitacaoMin > 0) ? n.aceitacaoMin : null;
+    const aMax = (typeof n.aceitacaoMax === "number" && n.aceitacaoMax > 0) ? n.aceitacaoMax : null;
+    const realMin = (aMin !== null && qtd > 0) ? (qtd * aMin) / 100 : null;
+    const realMax = (aMax !== null && qtd > 0) ? (qtd * aMax) / 100 : null;
+    return { aMin, aMax, realMin, realMax, hasFaixa: aMin !== null || aMax !== null };
+  }
+
+  function fmtPtCalc(n, dec) {
+    dec = dec === undefined ? 2 : dec;
+    return Number(n).toLocaleString("pt-BR", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  }
+  function fmtMgPtCalc(n) {
+    return Number.isInteger(n) ? n.toLocaleString("pt-BR", { maximumFractionDigits: 0 }) : fmtPtCalc(n, 2);
+  }
+  function normalizarTextoCalc(s) {
+    return (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  }
+
   function campoMemorialHtml(campo, rotulo, tipo, valorAtual, mostrarBotaoCatalogo) {
     // Fase 29: campos mapeados em CAMPO_MEMORIAL_PARA_CATALOGO ganham um
     // botão "+ Catálogo" ao lado do rótulo — só quando o chamador pedir
@@ -6559,11 +6658,334 @@
     const botaoCatalogoHtml = catalogoChave
       ? ` <button type="button" class="botao secundario pequeno" style="margin-left:8px;" data-acao="abrir-catalogo-memorial-campo" data-campo="${campo}" data-catalogo="${catalogoChave}">+ Catálogo</button>`
       : "";
+    if (tipo === "calc-nutricionais") {
+      return `<div class="campo">
+        <label>${rotulo}</label>
+        <textarea name="${campo}" data-calc-nutricionais-valor style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
+        <div data-calc-nutricionais-widget></div>
+      </div>`;
+    }
     return `<div class="campo"><label>${rotulo}${botaoCatalogoHtml}</label>${
       tipo === "textarea"
         ? `<textarea name="${campo}">${escapeHtml(valorAtual || "")}</textarea>`
         : `<input name="${campo}" value="${escapeHtml(valorAtual || "")}">`
     }</div>`;
+  }
+
+  // ---- Estado + renderização do widget (fora do fluxo de re-render de
+  // string do resto do app — este widget re-desenha só o próprio
+  // container via DOM direto, para não perder o que foi digitado nas
+  // OUTRAS abas do memorial, que continuam no mesmo <form>) ----
+  let calcNutricionaisEstado = null; // { linhas, colapsados: Set, catalogo, podeEditar }
+
+  function sincronizarTextareaCalcNutricionais() {
+    const textarea = document.querySelector("[data-calc-nutricionais-valor]");
+    if (!textarea) return;
+    textarea.value = serializeCalcNutricionais({ nutrientes: calcNutricionaisEstado.linhas });
+  }
+
+  function badgeResultadoCalc(tipo, calc) {
+    const livre = tipo === "min" ? calc.minLivre : calc.maxLivre;
+    if (livre) {
+      const rotulo = tipo === "min" ? "Dose Mín.: Livre ✓" : "Dose Máx.: Livre ✓";
+      return `<span class="calc-badge calc-badge-ok">${rotulo}</span>`;
+    }
+    const pct = tipo === "min" ? calc.pctMin : calc.pctMax;
+    const dose = tipo === "min" ? calc.doseMin : calc.doseMax;
+    if (dose <= 0) return "";
+    const ok = tipo === "min" ? pct >= 100 : pct <= 100;
+    const rotulo = `${fmtPtCalc(pct)}% da dose ${tipo === "min" ? "mínima" : "máxima"} ${ok ? "✓" : "⚠"}`;
+    return `<span class="calc-badge ${ok ? "calc-badge-ok" : "calc-badge-alerta"}">${rotulo}</span>`;
+  }
+
+  // Equivalente ao CalcResultView do original — usado tanto no modo
+  // leitura do card quanto (futuramente) na geração de PDF, para nunca
+  // haver duas lógicas de exibição divergentes.
+  function renderizarResultadoCalc(n) {
+    const calc = calcularNutriente(n);
+    if (!(calc.elementar > 0)) {
+      return '<p class="texto-suave" style="font-style:italic;">Sem dados de cálculo informados.</p>';
+    }
+    const faixa = faixaAceitacaoCalc(n);
+    const nomeMinusculo = (n.nutriente || "nutriente").toLowerCase();
+
+    const linha1 = `<tr>
+      <td>${fmtMgPtCalc(calc.elementar)} ${escapeHtml(n.unidade)}</td>
+      <td>${calc.minLivre ? "Livre" : calc.doseMin > 0 ? `${fmtMgPtCalc(calc.doseMin)} ${escapeHtml(n.unidade)}` : "—"}</td>
+      <td class="${calc.minLivre || calc.pctMin >= 100 ? "calc-celula-ok" : "calc-celula-alerta"}">
+        ${calc.minLivre ? "✓ Livre" : calc.doseMin > 0 ? `${fmtPtCalc(calc.pctMin)}%` : "—"}
+      </td>
+      <td>${calc.maxLivre ? "Livre" : calc.doseMax > 0 ? `${fmtMgPtCalc(calc.doseMax)} ${escapeHtml(n.unidade)}` : "—"}</td>
+      <td class="${calc.maxLivre || calc.pctMax <= 100 ? "calc-celula-ok" : "calc-celula-alerta"}">
+        ${calc.maxLivre ? "✓ Livre" : calc.doseMax > 0 ? `${fmtPtCalc(calc.pctMax)}%` : "—"}
+      </td>
+    </tr>`;
+    const tabela1 = `<table class="calc-tabela-resultado">
+      <thead><tr><th>Qtd. por porção</th><th>Dose mín. IN 28/2018</th><th>% Dose mín.</th><th>Dose máx. IN 28/2018</th><th>% Dose máx.</th></tr></thead>
+      <tbody>${linha1}</tbody>
+    </table>`;
+
+    const tabela2 = faixa.hasFaixa
+      ? `<table class="calc-tabela-resultado">
+          <thead><tr><th>Faixa de Aceitação (%)</th><th>Qtd. Mín. Aceita</th><th>Qtd. Declarada</th></tr></thead>
+          <tbody><tr>
+            <td>${faixa.aMin !== null ? String(faixa.aMin).replace(".", ",") : "—"}% a ${faixa.aMax !== null ? String(faixa.aMax).replace(".", ",") : "—"}%</td>
+            <td>${faixa.realMin !== null ? fmtMgPtCalc(faixa.realMin) : "—"} ${escapeHtml(n.unidade)}</td>
+            <td class="calc-celula-destaque">${fmtMgPtCalc(calc.elementar)} ${escapeHtml(n.unidade)}</td>
+          </tr></tbody>
+        </table>`
+      : "";
+
+    const partes = [];
+    if (calc.minLivre) {
+      partes.push(`<p><strong>Dose mínima:</strong> Não há dose mínima estabelecida pela IN 28/2018 para ${escapeHtml(nomeMinusculo)} — sem exigência de quantidade mínima (<strong>livre</strong>).</p>`);
+    } else if (calc.doseMin > 0) {
+      const diffMin = calc.pctMin - 100;
+      partes.push(diffMin >= 0
+        ? `<p><strong>Dose mínima:</strong> ${fmtMgPtCalc(calc.elementar)} ${escapeHtml(n.unidade)} / ${fmtMgPtCalc(calc.doseMin)} ${escapeHtml(n.unidade)} × 100 = <strong>${fmtPtCalc(calc.pctMin)}%</strong> da dose mínima de referência — o produto está ${fmtPtCalc(diffMin)}% acima do limite mínimo exigido para ${escapeHtml(nomeMinusculo)}.</p>`
+        : `<p><strong>Dose mínima:</strong> ${fmtMgPtCalc(calc.elementar)} ${escapeHtml(n.unidade)} / ${fmtMgPtCalc(calc.doseMin)} ${escapeHtml(n.unidade)} × 100 = <strong>${fmtPtCalc(calc.pctMin)}%</strong> da dose mínima de referência — o produto está ${fmtPtCalc(Math.abs(diffMin))}% abaixo do limite mínimo exigido para ${escapeHtml(nomeMinusculo)}. ⚠</p>`);
+    }
+    if (calc.maxLivre) {
+      partes.push(`<p><strong>Dose máxima:</strong> Não há dose máxima estabelecida pela IN 28/2018 para ${escapeHtml(nomeMinusculo)} — consumo máximo <strong>livre</strong>.</p>`);
+    } else if (calc.doseMax > 0) {
+      partes.push(calc.pctMax <= 100
+        ? `<p><strong>Dose máxima:</strong> ${fmtMgPtCalc(calc.elementar)} ${escapeHtml(n.unidade)} / ${fmtMgPtCalc(calc.doseMax)} ${escapeHtml(n.unidade)} × 100 = <strong>${fmtPtCalc(calc.pctMax)}%</strong> da dose máxima permitida — permanecendo dentro do limite máximo estabelecido para ${escapeHtml(nomeMinusculo)}.</p>`
+        : `<p><strong>Dose máxima:</strong> ${fmtMgPtCalc(calc.elementar)} ${escapeHtml(n.unidade)} / ${fmtMgPtCalc(calc.doseMax)} ${escapeHtml(n.unidade)} × 100 = <strong>${fmtPtCalc(calc.pctMax)}%</strong> da dose máxima permitida — ULTRAPASSA em ${fmtPtCalc(calc.pctMax - 100)}% o limite máximo para ${escapeHtml(nomeMinusculo)}. ⚠</p>`);
+    }
+    if (faixa.hasFaixa && faixa.realMin !== null && faixa.realMax !== null) {
+      partes.push(`<p><strong>Faixa de aceitação:</strong> A quantidade declarada de ${fmtMgPtCalc(calc.elementar)} ${escapeHtml(n.unidade)} deve situar-se entre <strong>${fmtMgPtCalc(faixa.realMin)} ${escapeHtml(n.unidade)}</strong> (${faixa.aMin}%) e <strong>${fmtMgPtCalc(faixa.realMax)} ${escapeHtml(n.unidade)}</strong> (${faixa.aMax}%), conforme a faixa de aceitação cadastrada para ${escapeHtml(nomeMinusculo)}.</p>`);
+    }
+
+    const fundamentoHtml = n.fundamentoLegal
+      ? `<p class="texto-suave" style="white-space:pre-wrap; margin-top:10px;">${escapeHtml(n.fundamentoLegal)}</p>`
+      : "";
+
+    return `${tabela1}${tabela2}<div class="calc-conclusao">${partes.join("")}</div>${fundamentoHtml}`;
+  }
+
+  function renderizarCardCalcNutriente(n, idx, total) {
+    const calc = calcularNutriente(n);
+    const colapsado = calcNutricionaisEstado.colapsados.has(n.id);
+    const opcoesGrupo = GRUPOS_POPULACIONAIS_CALC
+      .map((g) => `<option value="${escapeHtml(g)}" ${n.grupoPopulacional === g ? "selected" : ""}>${escapeHtml(g)}</option>`)
+      .join("");
+    const opcoesUnidade = UNIDADES_MEDIDA_CALC
+      .map((u) => `<option value="${escapeHtml(u)}" ${n.unidade === u ? "selected" : ""}>${escapeHtml(u)}</option>`)
+      .join("");
+    return `<div class="calc-card" data-calc-id="${n.id}">
+      <div class="calc-card-cabecalho" data-calc-acao="colapsar" data-calc-id="${n.id}">
+        <div class="calc-card-titulo">
+          <strong>${n.nutriente ? escapeHtml(n.nutriente) : "(sem nome)"}</strong>
+          ${badgeResultadoCalc("min", calc)}${badgeResultadoCalc("max", calc)}
+        </div>
+        <div class="calc-card-botoes">
+          <button type="button" class="botao-icone" title="Mover para cima" data-calc-acao="mover-cima" data-calc-id="${n.id}" ${idx === 0 ? "disabled" : ""}>▲</button>
+          <button type="button" class="botao-icone" title="Mover para baixo" data-calc-acao="mover-baixo" data-calc-id="${n.id}" ${idx === total - 1 ? "disabled" : ""}>▼</button>
+          <button type="button" class="botao-icone" title="Remover" data-calc-acao="remover" data-calc-id="${n.id}">🗑</button>
+          <button type="button" class="botao-icone" title="${colapsado ? "Expandir" : "Colapsar"}" data-calc-acao="colapsar" data-calc-id="${n.id}">${colapsado ? "▾" : "▴"}</button>
+        </div>
+      </div>
+      ${colapsado ? "" : `<div class="calc-card-corpo">
+        <div class="linha-detalhe">
+          <div class="campo" style="flex:2; position:relative;">
+            <label>Nome do Ativo/Nutriente</label>
+            <input data-calc-campo="nutriente" data-calc-id="${n.id}" value="${escapeHtml(n.nutriente)}" autocomplete="off">
+            <div class="calc-sugestoes" data-calc-sugestoes="${n.id}" hidden></div>
+          </div>
+          <div class="campo" style="flex:2;">
+            <label>Fonte/Matéria-Prima</label>
+            <input data-calc-campo="fonte" data-calc-id="${n.id}" value="${escapeHtml(n.fonte)}">
+          </div>
+          <div class="campo" style="flex:1;">
+            <label>Grupo Populacional</label>
+            <select data-calc-campo="grupoPopulacional" data-calc-id="${n.id}">${opcoesGrupo}</select>
+          </div>
+        </div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>Qtd. por cápsula/porção</label>
+            <input type="number" step="any" data-calc-campo="qtdIngrediente" data-calc-id="${n.id}" value="${n.qtdIngrediente}" placeholder="ex: 1534.67"></div>
+          <div class="campo"><label>Unidade</label><select data-calc-campo="unidade" data-calc-id="${n.id}">${opcoesUnidade}</select></div>
+          <div class="campo"><label>Dose Mínima Ref. (IN 28/2018)</label>
+            <input type="number" step="any" data-calc-campo="doseMinRef" data-calc-id="${n.id}" value="${n.doseMinRef}" placeholder="vazio = Livre"></div>
+          <div class="campo"><label>Dose Máxima Ref. (IN 28/2018)</label>
+            <input type="number" step="any" data-calc-campo="doseMaxRef" data-calc-id="${n.id}" value="${n.doseMaxRef}" placeholder="vazio = Livre"></div>
+        </div>
+        <div class="linha-detalhe">
+          <div class="campo"><label>Faixa de Aceitação Mínima (%)</label>
+            <input data-calc-campo="aceitacaoMin" data-calc-id="${n.id}" value="${n.aceitacaoMin === "" ? "" : String(n.aceitacaoMin).replace(".", ",")}" placeholder="ex: 98,00"></div>
+          <div class="campo"><label>Faixa de Aceitação Máxima (%)</label>
+            <input data-calc-campo="aceitacaoMax" data-calc-id="${n.id}" value="${n.aceitacaoMax === "" ? "" : String(n.aceitacaoMax).replace(".", ",")}" placeholder="ex: 101,00"></div>
+        </div>
+        <div class="campo">
+          <label>Fundamentação Legal e Técnica</label>
+          <textarea data-calc-campo="fundamentoLegal" data-calc-id="${n.id}" rows="4">${escapeHtml(n.fundamentoLegal)}</textarea>
+        </div>
+        <div class="calc-card-resultado">${renderizarResultadoCalc(n)}</div>
+      </div>`}
+    </div>`;
+  }
+
+  function renderizarCalcNutricionaisWidget() {
+    const container = document.querySelector("[data-calc-nutricionais-widget]");
+    if (!container) return;
+    const { linhas, podeEditar } = calcNutricionaisEstado;
+    if (!podeEditar) {
+      container.innerHTML = linhas.length
+        ? linhas.map((n, i) => `<div class="calc-leitura-item">
+            <p style="text-transform:uppercase;"><strong>${i + 1}. ${escapeHtml(n.nutriente || "(sem nome)")}</strong>${n.fonte ? ` — proveniente de ${escapeHtml(n.fonte)}` : ""}</p>
+            ${renderizarResultadoCalc(n)}
+          </div>${i < linhas.length - 1 ? "<hr>" : ""}`).join("")
+        : '<p class="texto-suave" style="font-style:italic;">Nenhum cálculo nutricional informado.</p>';
+      return;
+    }
+    const cardsHtml = linhas.length
+      ? linhas.map((n, i) => renderizarCardCalcNutriente(n, i, linhas.length)).join("")
+      : '<p class="texto-suave" style="font-style:italic;">Nenhum nutriente adicionado. Clique em "Adicionar Nutriente" para começar.</p>';
+    container.innerHTML = `${cardsHtml}
+      <button type="button" class="botao secundario" data-calc-acao="adicionar" style="margin-top:8px;">+ Adicionar Nutriente</button>`;
+  }
+
+  function atualizarLinhaCalc(id, mutador) {
+    const linha = calcNutricionaisEstado.linhas.find((n) => n.id === id);
+    if (!linha) return;
+    mutador(linha);
+    sincronizarTextareaCalcNutricionais();
+  }
+
+  function iniciarWidgetCalcNutricionais(valorInicial, podeEditar) {
+    const container = document.querySelector("[data-calc-nutricionais-widget]");
+    if (!container) return; // aba "Cálculos" pode não ter sido a inicial — widget só existe se o campo foi renderizado
+    calcNutricionaisEstado = {
+      linhas: parseCalcNutricionais(valorInicial).nutrientes,
+      colapsados: new Set(),
+      catalogo: [],
+      podeEditar,
+    };
+    renderizarCalcNutricionaisWidget();
+    if (!podeEditar) return;
+
+    chamarApi("/memorial/catalogos/nutrientes").then((itens) => {
+      calcNutricionaisEstado.catalogo = itens.filter((i) => i.ativo);
+    }).catch(() => { /* catálogo é só um atalho — segue sem autocomplete se falhar */ });
+
+    // Um listener local por tipo de evento, delegado no próprio container
+    // do widget — não usa o dispatcher global de data-acao/data-form do
+    // resto do app, porque este widget precisa reagir a CADA tecla/troca
+    // (recalcular badges), não só a clique/submit.
+    container.addEventListener("click", (e) => {
+      const alvo = e.target.closest("[data-calc-acao]");
+      if (!alvo) return;
+      const acao = alvo.dataset.calcAcao;
+      const id = alvo.dataset.calcId;
+      if (acao === "adicionar") {
+        calcNutricionaisEstado.linhas.push(novoNutrienteCalc());
+      } else if (acao === "remover") {
+        calcNutricionaisEstado.linhas = calcNutricionaisEstado.linhas.filter((n) => n.id !== id);
+        calcNutricionaisEstado.colapsados.delete(id);
+      } else if (acao === "colapsar") {
+        if (calcNutricionaisEstado.colapsados.has(id)) calcNutricionaisEstado.colapsados.delete(id);
+        else calcNutricionaisEstado.colapsados.add(id);
+      } else if (acao === "mover-cima" || acao === "mover-baixo") {
+        const idx = calcNutricionaisEstado.linhas.findIndex((n) => n.id === id);
+        const novoIdx = acao === "mover-cima" ? idx - 1 : idx + 1;
+        if (novoIdx < 0 || novoIdx >= calcNutricionaisEstado.linhas.length) return;
+        const [linha] = calcNutricionaisEstado.linhas.splice(idx, 1);
+        calcNutricionaisEstado.linhas.splice(novoIdx, 0, linha);
+      } else {
+        return;
+      }
+      sincronizarTextareaCalcNutricionais();
+      renderizarCalcNutricionaisWidget();
+    });
+
+    container.addEventListener("input", (e) => {
+      const alvo = e.target.closest("[data-calc-campo]");
+      if (!alvo) return;
+      const campo = alvo.dataset.calcCampo;
+      const id = alvo.dataset.calcId;
+      if (campo === "nutriente") {
+        // Autocomplete: filtra o catálogo por substring normalizado
+        // (acento/maiúscula insensível), agrupado por categoria — mesma
+        // regra do original, sem a UI de agrupamento visual completa.
+        const termo = normalizarTextoCalc(alvo.value);
+        const painel = container.querySelector(`[data-calc-sugestoes="${id}"]`);
+        if (painel) {
+          const encontrados = calcNutricionaisEstado.catalogo
+            .filter((c) => normalizarTextoCalc(c.nome).includes(termo))
+            .slice(0, 20);
+          if (encontrados.length) {
+            painel.innerHTML = encontrados.map((c) => {
+              const min = c.dose_minima != null ? `Mín: ${c.dose_minima} ${c.unidade_dose || c.unidade || ""}` : "";
+              const max = c.dose_maxima != null ? `Máx: ${c.dose_maxima} ${c.unidade_dose || c.unidade || ""}` : (c.dose_minima != null ? "Máx: Livre" : "");
+              return `<div class="calc-sugestao-item" data-calc-sugestao-id="${c.id}">
+                <strong>${escapeHtml(c.nome)}</strong>
+                <span class="texto-suave" style="font-size:12px;">${escapeHtml([min, max].filter(Boolean).join(" · "))}</span>
+              </div>`;
+            }).join("");
+            painel.hidden = false;
+          } else {
+            painel.hidden = true;
+          }
+        }
+        atualizarLinhaCalc(id, (n) => { n.nutriente = alvo.value; });
+        return;
+      }
+      atualizarLinhaCalc(id, (n) => {
+        if (campo === "aceitacaoMin" || campo === "aceitacaoMax") {
+          const num = parseFloat(String(alvo.value).replace(",", "."));
+          n[campo] = isNaN(num) ? "" : num;
+        } else {
+          n[campo] = alvo.value;
+        }
+      });
+      // Só o card correspondente precisa recalcular badges/resultado —
+      // evita reconstruir a lista inteira (perderia o foco do campo que
+      // está sendo digitado). Recalcula na perda de foco (evento
+      // "change", abaixo) para o valor numérico já estar "assentado".
+    });
+
+    container.addEventListener("focusout", (e) => {
+      // Fecha o painel de sugestões ao sair do campo (mesmo espírito do
+      // "180ms depois do blur" do original — aqui basta esconder, o
+      // mousedown no item já rodou antes do focusout disparar).
+      if (e.target.closest("[data-calc-campo='nutriente']")) {
+        const id = e.target.dataset.calcId;
+        const painel = container.querySelector(`[data-calc-sugestoes="${id}"]`);
+        if (painel) setTimeout(() => { painel.hidden = true; }, 150);
+      }
+    });
+
+    container.addEventListener("change", (e) => {
+      const alvo = e.target.closest("[data-calc-campo]");
+      if (!alvo) return;
+      // Campos numéricos/select já foram gravados no "input"; "change" só
+      // dispara o RE-RENDER do card (badges/tabela de resultado), que no
+      // "input" a gente evita para não perder o foco a cada tecla digitada.
+      renderizarCalcNutricionaisWidget();
+    });
+
+    container.addEventListener("mousedown", (e) => {
+      const item = e.target.closest("[data-calc-sugestao-id]");
+      if (!item) return;
+      e.preventDefault(); // evita o blur/focusout roubar o clique antes do handler rodar
+      const painel = item.closest("[data-calc-sugestoes]");
+      const id = painel.dataset.calcSugestoes;
+      const cat = calcNutricionaisEstado.catalogo.find((c) => String(c.id) === item.dataset.calcSugestaoId);
+      if (!cat) return;
+      atualizarLinhaCalc(id, (n) => {
+        n.nutriente = cat.nome;
+        if (cat.dose_minima != null) n.doseMinRef = cat.dose_minima;
+        if (cat.dose_maxima != null) n.doseMaxRef = cat.dose_maxima;
+        if (cat.grupo_populacional) n.grupoPopulacional = cat.grupo_populacional;
+        if (cat.fundamento_legal) n.fundamentoLegal = cat.fundamento_legal;
+        n.fonte = n.fonte || cat.fonte_materia_prima || "";
+        n.unidade = cat.unidade_dose || cat.unidade || n.unidade || "mg";
+        if (cat.aceitacao_min != null) n.aceitacaoMin = cat.aceitacao_min;
+        if (cat.aceitacao_max != null) n.aceitacaoMax = cat.aceitacao_max;
+      });
+      painel.hidden = true;
+      renderizarCalcNutricionaisWidget();
+    });
   }
 
   function formatarTamanhoArquivo(bytes) {
@@ -6796,6 +7218,7 @@
        </div>`,
       "memorial"
     );
+    iniciarWidgetCalcNutricionais(memorial.calculos_nutricionais, podeEditar);
   }
 
   function modalAssinarMemorial(memorialId) {

@@ -5220,6 +5220,46 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 116, parte 1) Memorial Técnico — editor estruturado de
+  "Cálculos Nutricionais" (o campo `calculos_nutricionais` do memorial
+  deixa de ser texto livre e ganha uma tela própria com tabela, uma linha
+  por nutriente, cálculo automático de % da dose mínima/máxima da IN
+  28/2018 da ANVISA). Continuação da Fase 115 — pedido do usuário: "trazer
+  tudo igual... verificar se está tudo funcionando perfeitamente". A maior
+  peça faltante identificada na auditoria de paridade (5 editores
+  estruturados no total; este é o primeiro).
+  - Especificação levantada campo a campo do código-fonte original
+    (componente `calc-nutricionais-editor.tsx`, ~1027 linhas) por um
+    agente de pesquisa dedicado, depois implementada com fidelidade em
+    `frontend/static/app.js` — nenhuma migration nova: o campo continua
+    sendo a mesma coluna de texto de sempre, só o CONTEÚDO virou JSON
+    estruturado, com o mesmo marcador `__CALCV1__` do sistema original (um
+    valor sem esse prefixo continua sendo tratado como "nenhum cálculo
+    ainda", nunca dá erro — dado legado é preservado, só não é
+    interpretado como estruturado).
+  - Cada linha: nome do nutriente (com autocomplete do catálogo
+    `nutrientes`, agrupado/filtrado por substring como no original), fonte/
+    matéria-prima, grupo populacional, quantidade por porção, unidade,
+    dose mínima/máxima de referência (vazio ou zero = "livre", exatamente
+    como no original), faixa de aceitação analítica (%). Badges de
+    resultado (✓/⚠), tabela de % calculado e parágrafo de conclusão
+    textual — fórmulas E arredondamento (`toLocaleString pt-BR`, inteiro
+    sem casas decimais, fracionário com 2) reproduzidos exatamente iguais
+    ao original, inclusive uma inconsistência do original preservada de
+    propósito (a faixa de aceitação aparece com vírgula decimal na tabela
+    mas com ponto no texto de conclusão — assim era no sistema antigo).
+  - Duas adaptações conscientes, por este app não ter framework/DOM
+    virtual: reordenar usa botões ▲▼ em vez de arrastar (mesmo resultado
+    final — troca de posição no array); a sincronização automática com
+    Composição Nutricional/Composição Centesimal (que no original
+    autopreenchia "Fonte" e "Qtd." vindas de outro editor) fica pendente
+    até esses dois editores também ficarem estruturados — até lá, "Fonte"
+    é texto livre aqui.
+  Testado ao vivo, ponta a ponta: adicionar/remover/reordenar linha,
+  autocomplete selecionando item do catálogo (preenche dose mín/máx
+  automaticamente), edição de quantidade recalculando os badges e a tabela
+  em tempo real, faixa de aceitação com entrada em vírgula, salvar e
+  recarregar a página confirmando que o JSON persiste e volta idêntico.
 - (Entregue na Fase 115) Memorial Técnico — campos e catálogos faltando
   para paridade com o sistema antigo. Pedido do usuário: "trazer tudo
   igual, cada funcionalidade ok, não mudar nada, verificar se está tudo
