@@ -122,12 +122,14 @@ def criar_empresa():
     cur = conn.execute(
         """
         INSERT INTO memorial_empresas (nome_fantasia, razao_social, cnpj, ie, responsavel_tecnico,
-                                        crf, endereco, cidade, estado, cep, telefone, email, criado_por)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                        crf, endereco, cidade, estado, cep, telefone, email,
+                                        telefone_contato, criado_por)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (nome_fantasia, razao_social, cnpj, dados.get("ie"), dados.get("responsavel_tecnico"),
          dados.get("crf"), dados.get("endereco"), dados.get("cidade"), dados.get("estado"),
-         dados.get("cep"), dados.get("telefone"), dados.get("email"), usuario_atual["id"]),
+         dados.get("cep"), dados.get("telefone"), dados.get("email"),
+         dados.get("telefone_contato"), usuario_atual["id"]),
     )
     empresa_id = cur.lastrowid
     audit.registrar(conn, tabela="memorial_empresas", registro_id=empresa_id, usuario_id=usuario_atual["id"],
@@ -154,7 +156,7 @@ def editar_empresa(empresa_id):
         raise ApiError("status deve ser 'ativo' ou 'inativo'.", status=400)
 
     campos = ("nome_fantasia", "razao_social", "ie", "responsavel_tecnico", "crf", "endereco",
-              "cidade", "estado", "cep", "telefone", "email")
+              "cidade", "estado", "cep", "telefone", "email", "telefone_contato")
     valores = {c: dados.get(c, row[c]) for c in campos}
     if not (valores["nome_fantasia"] or "").strip() or not (valores["razao_social"] or "").strip():
         raise ApiError("nome_fantasia e razao_social não podem ficar em branco.", status=400)
@@ -164,12 +166,13 @@ def editar_empresa(empresa_id):
         UPDATE memorial_empresas
         SET nome_fantasia = ?, razao_social = ?, ie = ?, responsavel_tecnico = ?, crf = ?,
             endereco = ?, cidade = ?, estado = ?, cep = ?, telefone = ?, email = ?,
-            status = ?, atualizado_em = ?, atualizado_por = ?
+            telefone_contato = ?, status = ?, atualizado_em = ?, atualizado_por = ?
         WHERE id = ?
         """,
         (valores["nome_fantasia"], valores["razao_social"], valores["ie"], valores["responsavel_tecnico"],
          valores["crf"], valores["endereco"], valores["cidade"], valores["estado"], valores["cep"],
-         valores["telefone"], valores["email"], status, _now_iso(), usuario_atual["id"], empresa_id),
+         valores["telefone"], valores["email"], valores["telefone_contato"],
+         status, _now_iso(), usuario_atual["id"], empresa_id),
     )
     novo_row = conn.execute("SELECT * FROM memorial_empresas WHERE id = ?", (empresa_id,)).fetchone()
     audit.registrar(conn, tabela="memorial_empresas", registro_id=empresa_id, usuario_id=usuario_atual["id"],
@@ -187,6 +190,9 @@ CAMPOS_PRODUTO = (
     "armazenamento", "quantidade_capsulas_totais", "peso_liquido", "tamanho_capsulas",
     "tipo_capsulas", "tipo_produto", "referencias_comerciais", "comprimento_rotulo",
     "largura_rotulo", "tamanho_pote", "tamanho_capsula", "numero_protocolo_anvisa",
+    # Fase 115 — "sabor" (produtosTable.sabor no sistema original), único
+    # campo de produto que faltava para paridade.
+    "sabor",
 )
 
 

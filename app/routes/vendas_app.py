@@ -812,6 +812,15 @@ def abandonar_rascunho(pedido_id):
     return jsonify({"status": "ok"})
 
 
+# Fase 114 — pedido do usuário: "...até colocar o cliente, forma de
+# pagamento e ser enviado ao módulo de pedidos". Mesmos valores já usados
+# na baixa de conta a receber (Financeiro), pra não inventar um vocabulário
+# novo de forma de pagamento dentro do sistema — "dinheiro" cobre também
+# "a combinar", que é como o vendedor usa esta opção em campo quando ainda
+# não fechou a forma exata com o cliente.
+FORMAS_PAGAMENTO_VALIDAS = ("pix", "boleto", "cartao", "dinheiro")
+
+
 @bp.post("/rascunhos/<int:pedido_id>/enviar")
 @requires_permission("vendas_app", "enviar_pedido")
 def enviar_rascunho(pedido_id):
@@ -835,9 +844,20 @@ def enviar_rascunho(pedido_id):
     jeito nos dois casos: o rascunho já foi "enviado", só o que muda é se
     ele já virou uma venda confirmada ou se está aguardando aprovação."""
     usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    forma_pagamento = dados.get("forma_pagamento")
     conn = get_db()
     _expirar_sessoes_rascunho_vencidas(conn)
     sessao = _sessao_do_pedido_ou_erro(conn, pedido_id, usuario_atual["id"])
+
+    # Fase 114 — só o App de Vendas exige forma de pagamento no envio (a
+    # tela de desktop, em comercial.py, continua sem essa exigência — quem
+    # decide isso lá é o Financeiro, na hora da baixa, como sempre foi).
+    if forma_pagamento not in FORMAS_PAGAMENTO_VALIDAS:
+        raise ApiError(
+            f"Informe uma forma de pagamento válida: {', '.join(FORMAS_PAGAMENTO_VALIDAS)}.", status=400,
+        )
+    conn.execute("UPDATE pedidos_venda SET forma_pagamento = ? WHERE id = ?", (forma_pagamento, pedido_id))
 
     pedido, status_http = confirmar_pedido_ou_solicitar_aprovacao(conn, pedido_id, usuario_atual["id"])
 

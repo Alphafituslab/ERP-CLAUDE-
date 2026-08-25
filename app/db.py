@@ -138,6 +138,8 @@ SCHEMA_FILES = [
     "schema_fase105.sql",  # Fase 105 — APS como módulo de permissão próprio (separado de "producao")
     "schema_fase111.sql",  # Fase 111 — Arquitetura Servidor + Terminais: registro de terminais conectados
     "schema_fase113.sql",  # Fase 113 — Foto de perfil do operador (usuarios.foto_perfil)
+    "schema_fase114.sql",  # Fase 114 — Portfólio com fotos (itens.imagem) + forma_pagamento no App de Vendas
+    "schema_fase115.sql",  # Fase 115 — Memorial Técnico: campos/catálogos faltando (paridade com sistema antigo)
 ]
 
 

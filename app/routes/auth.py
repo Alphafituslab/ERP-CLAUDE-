@@ -1,13 +1,11 @@
-import base64
-import binascii
 import datetime
-import re
 import secrets
 
 from flask import Blueprint, g, jsonify, request
 
 from .. import audit, security
 from ..context import ApiError, AuthError, client_device, client_ip, get_current_user, get_db
+from ..imagens import validar_imagem_base64
 from ..permissions import requires_auth
 
 bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
@@ -433,44 +431,6 @@ def trocar_senha():
     return jsonify({"ok": True})
 
 
-# Fase 113 — mesmo espírito de tamanho/tipo do memorial_anexos.py/
-# clientes_documentos.py, mas guardando o data URI COMPLETO em vez de só
-# o base64 puro: uma foto de perfil só tem UM consumidor (uma tag <img
-# src="...">), então guardar já pronta para uso evita reconstruir o
-# prefixo "data:<mime>;base64," toda vez que ela for exibida.
-FOTO_PERFIL_TIPOS_PERMITIDOS = ("image/jpeg", "image/png", "image/webp")
-FOTO_PERFIL_TAMANHO_MAXIMO_BYTES = 2 * 1024 * 1024
-
-
-def _validar_foto_perfil(data_uri):
-    """Recebe o data URI completo (o mesmo formato que `lerArquivoComoBase64`
-    já produz no front) e devolve ele mesmo, já validado — ou levanta
-    ApiError. `None`/string vazia é válido (significa "remover a foto")."""
-    if not data_uri:
-        return None
-    m = re.match(r"^data:([\w/+.-]+);base64,(.+)$", data_uri, re.DOTALL)
-    if not m:
-        raise ApiError("Foto inválida — envie um arquivo de imagem.", status=400)
-    tipo_mime, conteudo_base64 = m.group(1).lower(), m.group(2)
-    if tipo_mime not in FOTO_PERFIL_TIPOS_PERMITIDOS:
-        raise ApiError(
-            f"Tipo de imagem '{tipo_mime}' não permitido. Use JPEG, PNG ou WEBP.", status=400,
-        )
-    try:
-        bruto = base64.b64decode(conteudo_base64, validate=True)
-    except (binascii.Error, ValueError):
-        raise ApiError("Foto inválida — não foi possível ler o arquivo.", status=400)
-    if len(bruto) == 0:
-        raise ApiError("A foto enviada está vazia.", status=400)
-    if len(bruto) > FOTO_PERFIL_TAMANHO_MAXIMO_BYTES:
-        raise ApiError(
-            f"Foto muito grande ({len(bruto) / (1024 * 1024):.1f} MB). "
-            f"O limite é {FOTO_PERFIL_TAMANHO_MAXIMO_BYTES // (1024 * 1024)} MB.",
-            status=400,
-        )
-    return data_uri
-
-
 @bp.put("/minha-foto")
 @requires_auth
 def minha_foto():
@@ -480,7 +440,7 @@ def minha_foto():
     (volta a mostrar as iniciais no lugar, ver renderShell em app.js)."""
     usuario = g.usuario_atual
     dados = request.get_json(silent=True) or {}
-    foto_validada = _validar_foto_perfil(dados.get("foto_perfil"))
+    foto_validada = validar_imagem_base64(dados.get("foto_perfil"))
     conn = get_db()
     conn.execute("UPDATE usuarios SET foto_perfil = ? WHERE id = ?", (foto_validada, usuario["id"]))
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],

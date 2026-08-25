@@ -1797,6 +1797,18 @@
         <div class="campo"><label>Descrição</label><input name="descricao" value="${escapeHtml(item.descricao)}" required></div>
         <div class="campo"><label>Estoque mínimo</label><input name="estoque_minimo" type="number" step="any" value="${item.estoque_minimo ?? ""}"></div>
         <div class="campo"><label>Categoria (opcional)</label><input name="categoria" value="${escapeHtml(item.categoria || "")}" placeholder="ex.: Proteínas, Vitaminas — só usada para agrupar no Portfólio do App de Vendas"></div>
+        <div class="campo">
+          <label>Foto do produto (opcional — usada no Portfólio do App de Vendas)</label>
+          <div class="conta-foto-linha">
+            ${item.imagem
+              ? `<img class="conta-foto-preview" src="${item.imagem}" alt="">`
+              : `<span class="conta-foto-preview conta-foto-preview-vazia">${escapeHtml((item.descricao || "?")[0].toUpperCase())}</span>`}
+            <div class="conta-foto-acoes">
+              <input type="file" name="imagem_arquivo" accept="image/png,image/jpeg,image/webp">
+              ${item.imagem ? '<label style="font-weight:400;"><input type="checkbox" name="remover_imagem"> Remover foto atual</label>' : ""}
+            </div>
+          </div>
+        </div>
         <div class="campo"><label>Status</label>
           <select name="status">
             <option value="ativo" ${item.status === "ativo" ? "selected" : ""}>Ativo</option>
@@ -5322,6 +5334,24 @@
       { nome: "unidade_dose", rotulo: "Unidade da Dose", tipo: "input" },
       { nome: "categoria", rotulo: "Categoria", tipo: "input" },
       { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
+      // Fase 115 — paridade com catalogoNutrientesTable do sistema original.
+      { nome: "pureza_padrao", rotulo: "Pureza Padrão (%)", tipo: "input" },
+      { nome: "vd_referencia", rotulo: "VD de Referência", tipo: "input" },
+      { nome: "grupo_populacional", rotulo: "Grupo Populacional", tipo: "input" },
+      { nome: "fundamento_legal", rotulo: "Fundamento Legal", tipo: "input" },
+      { nome: "aceitacao_min", rotulo: "Aceitação Mínima (%)", tipo: "input" },
+      { nome: "aceitacao_max", rotulo: "Aceitação Máxima (%)", tipo: "input" },
+      { nome: "tipo_composicao", rotulo: "Tipo de Composição", tipo: "input" },
+      { nome: "fonte_materia_prima", rotulo: "Fonte da Matéria-Prima", tipo: "input" },
+    ]],
+    ["componentes", "Componentes", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+      { nome: "pureza_padrao", rotulo: "Pureza Padrão (%)", tipo: "input" },
+      { nome: "unidade", rotulo: "Unidade", tipo: "input" },
+      { nome: "categoria", rotulo: "Categoria", tipo: "input" },
+      { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
+      { nome: "aceitacao_min", rotulo: "Aceitação Mínima (%)", tipo: "input" },
+      { nome: "aceitacao_max", rotulo: "Aceitação Máxima (%)", tipo: "input" },
     ]],
     ["legislacoes", "Legislações", [
       { nome: "codigo", rotulo: "Código", tipo: "input", obrigatorio: true },
@@ -5339,6 +5369,14 @@
     ["tipos_produto", "Tipos de Produto", [
       { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
       { nome: "tem_capsula", rotulo: "Tem Cápsula", tipo: "checkbox" },
+    ]],
+    ["opcoes_capsula", "Opções de Cápsula", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+    ]],
+    ["tipos_pote", "Tipos de Pote", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+      { nome: "largura_rotulo", rotulo: "Largura do Rótulo", tipo: "input" },
+      { nome: "comprimento_rotulo", rotulo: "Comprimento do Rótulo", tipo: "input" },
     ]],
     ["advertencias", "Advertências", [
       { nome: "texto", rotulo: "Texto", tipo: "textarea", obrigatorio: true },
@@ -5360,6 +5398,9 @@
       { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
       { nome: "tipo", rotulo: "Tipo", tipo: "input" },
       { nome: "auto_incluir", rotulo: "Incluir Automaticamente", tipo: "checkbox" },
+      // Fase 115 — paridade com catalogoReferenciasTable do sistema original.
+      { nome: "grupo", rotulo: "Grupo", tipo: "input" },
+      { nome: "doi", rotulo: "DOI", tipo: "input" },
     ]],
   ];
 
@@ -6058,7 +6099,8 @@
       <div class="linha-detalhe">
         <div class="campo" style="flex:1;"><label>Telefone</label><input name="telefone" value="${escapeHtml(e.telefone || "")}"></div>
         <div class="campo" style="flex:1;"><label>Email</label><input name="email" type="email" value="${escapeHtml(e.email || "")}"></div>
-      </div>`;
+      </div>
+      <div class="campo"><label>Telefone de Contato</label><input name="telefone_contato" value="${escapeHtml(e.telefone_contato || "")}"></div>`;
   }
 
   function modalNovaMemorialEmpresa() {
@@ -6216,6 +6258,8 @@
     ["referencias_comerciais", "Referências Comerciais", "input"],
     ["comprimento_rotulo", "Comprimento do Rótulo", "input"],
     ["largura_rotulo", "Largura do Rótulo", "input"],
+    // Fase 115 — paridade com produtosTable.sabor do sistema original.
+    ["sabor", "Sabor", "input"],
   ];
 
   function camposProdutoExtraHtml(p) {
@@ -7387,6 +7431,14 @@
     return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
   }
 
+  // Fase 114 — forma de pagamento escolhida no envio de um pedido pelo App
+  // de Vendas (ver vendas_app.py::FORMAS_PAGAMENTO_VALIDAS); pedidos
+  // criados pela tela de desktop não têm esse campo preenchido.
+  const ROTULOS_FORMA_PAGAMENTO = { pix: "Pix", boleto: "Boleto", cartao: "Cartão", dinheiro: "Dinheiro / A combinar" };
+  function rotuloFormaPagamento(valor) {
+    return ROTULOS_FORMA_PAGAMENTO[valor] || valor;
+  }
+
   // Fase 102 — aprovação financeira do CADASTRO do cliente (diferente da
   // aprovação de cada pedido, Fase 83): decide se o cliente já está apto
   // a comprar.
@@ -8288,6 +8340,7 @@
            <div><span class="rotulo">Cliente</span><br>${escapeHtml(pedido.cliente_razao_social)} — ${escapeHtml(pedido.cliente_cnpj)}</div>
            <div><span class="rotulo">Criado em</span><br>${fmtData(pedido.criado_em)}</div>
            <div><span class="rotulo">Valor total do pedido</span><br>R$ ${Number(pedido.valor_total).toFixed(2)}</div>
+           ${pedido.forma_pagamento ? `<div><span class="rotulo">Forma de pagamento</span><br>${escapeHtml(rotuloFormaPagamento(pedido.forma_pagamento))}</div>` : ""}
          </div>
          ${pedido.motivo_cancelamento ? `<p class="mensagem-erro">Cancelado: ${escapeHtml(pedido.motivo_cancelamento)}</p>` : ""}
          ${preChecagemHtml}
@@ -8995,15 +9048,24 @@
   // diferenciar os dois casos.
   const CHAVE_PENDENTE_ENVIO_VENDAS = "alphafitus_pedido_pendente_envio_vendas";
 
-  function marcarPedidoPendenteDeEnvio(pedidoId) {
-    localStorage.setItem(CHAVE_PENDENTE_ENVIO_VENDAS, String(pedidoId));
+  // Fase 114 — guarda também a forma de pagamento escolhida junto com o
+  // pedido pendente: sem internet, o reenvio automático (evento "online"
+  // abaixo, ou o botão "Tentar enviar agora") precisa reenviar o MESMO
+  // corpo de requisição, senão o backend recusa por falta de forma_pagamento.
+  function marcarPedidoPendenteDeEnvio(pedidoId, formaPagamento) {
+    localStorage.setItem(CHAVE_PENDENTE_ENVIO_VENDAS, JSON.stringify({ pedidoId, formaPagamento }));
   }
   function limparPedidoPendenteDeEnvio() {
     localStorage.removeItem(CHAVE_PENDENTE_ENVIO_VENDAS);
   }
   function pedidoPendenteDeEnvio() {
     const v = localStorage.getItem(CHAVE_PENDENTE_ENVIO_VENDAS);
-    return v ? Number(v) : null;
+    if (!v) return null;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return null;
+    }
   }
 
   // Sincronização automática enquanto a tela do App de Vendas está aberta
@@ -9031,9 +9093,12 @@
     }, 20000);
   }
 
-  async function tentarEnviarPedidoPendente(pedidoId) {
+  async function tentarEnviarPedidoPendente(pedidoId, formaPagamento) {
     try {
-      const resultadoEnvioPendente = await chamarApi(`/vendas-app/rascunhos/${pedidoId}/enviar`, { method: "POST" });
+      const resultadoEnvioPendente = await chamarApi(`/vendas-app/rascunhos/${pedidoId}/enviar`, {
+        method: "POST",
+        body: { forma_pagamento: formaPagamento },
+      });
       limparPedidoPendenteDeEnvio();
       // Fase 63 — acima do limite de crédito do cliente, o pedido não fica
       // 'confirmado' na hora: fica em rascunho aguardando aprovação de
@@ -9063,7 +9128,7 @@
 
   window.addEventListener("online", () => {
     const pendente = pedidoPendenteDeEnvio();
-    if (pendente) tentarEnviarPedidoPendente(pendente);
+    if (pendente) tentarEnviarPedidoPendente(pendente.pedidoId, pendente.formaPagamento);
   });
 
   async function renderAppVendas(silencioso) {
@@ -9086,12 +9151,12 @@
     const rascunho = rascunhoResp.rascunho;
     state.cache.rascunhoAppVendas = rascunho;
 
-    const idPendente = pedidoPendenteDeEnvio();
-    const bannerPendenteHtml = idPendente
+    const pendente = pedidoPendenteDeEnvio();
+    const bannerPendenteHtml = pendente
       ? `<div class="cartao">
            <p class="mensagem-erro">Você tem um pedido aguardando envio — não foi possível enviar na última
            tentativa por falta de internet, mas o rascunho continua montado no servidor, nada foi perdido.
-           <button class="botao pequeno" data-acao="tentar-enviar-pendente-vendas" data-id="${idPendente}">Tentar enviar agora</button></p>
+           <button class="botao pequeno" data-acao="tentar-enviar-pendente-vendas" data-id="${pendente.pedidoId}" data-forma-pagamento="${escapeHtml(pendente.formaPagamento)}">Tentar enviar agora</button></p>
          </div>`
       : "";
 
@@ -9172,7 +9237,7 @@
        <div class="cartao">
          <p class="texto-suave">Rascunho ativo até <strong>${fmtData(rascunho.sessao ? rascunho.sessao.expira_em : rascunho.sessao_expira_em)}</strong> — sincronizar, adicionar ou remover um item renova esse prazo. Se ele passar sem nenhuma dessas ações, ou se você fechar o app sem enviar, o pedido é cancelado sozinho e o saldo reservado volta para os outros vendedores.</p>
          <div style="display:flex; gap:8px; flex-wrap:wrap;">
-           <button class="botao" data-acao="enviar-rascunho-vendas" data-id="${rascunho.id}">Enviar pedido</button>
+           <button class="botao" data-acao="abrir-enviar-rascunho-vendas" data-id="${rascunho.id}">Enviar pedido</button>
            <button class="botao secundario perigo" data-acao="abandonar-rascunho-vendas" data-id="${rascunho.id}">Abandonar rascunho</button>
          </div>
        </div>`,
@@ -9180,6 +9245,32 @@
     );
 
     if (location.hash === "#/app-vendas") iniciarSincronizacaoAppVendas();
+  }
+
+  // Fase 114 — pedido do usuário: escolher a forma de pagamento faz parte
+  // do fluxo "cliente → forma de pagamento → enviar ao módulo de pedidos".
+  function modalEnviarRascunhoVendas(rascunho) {
+    abrirModal(`
+      <h3>Enviar pedido</h3>
+      <p class="texto-suave">${escapeHtml(rascunho.cliente_razao_social)} — ${(rascunho.itens || []).length}
+      ${(rascunho.itens || []).length === 1 ? "item" : "itens"} — <strong>${fmtMoeda(rascunho.valor_total)}</strong></p>
+      <p class="texto-suave">O sistema vai tentar reservar o estoque de verdade (FEFO) — se outro vendedor já
+      tiver enviado um pedido que consumiu o saldo primeiro, esta tentativa pode falhar.</p>
+      <form data-form="enviar-rascunho-vendas" data-id="${rascunho.id}">
+        <div class="campo"><label>Forma de pagamento</label>
+          <select name="forma_pagamento" required autofocus>
+            <option value="">Selecione…</option>
+            <option value="pix">Pix</option>
+            <option value="boleto">Boleto</option>
+            <option value="cartao">Cartão</option>
+            <option value="dinheiro">Dinheiro / A combinar</option>
+          </select>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Enviar pedido</button>
+        </div>
+      </form>`);
   }
 
   // ============================================================
@@ -9245,16 +9336,21 @@
         <div class="portfolio-grade">
           ${cat.itens.map((item) => `
             <div class="portfolio-card">
-              <div class="portfolio-card-topo">
-                <span class="mono texto-suave" style="font-size:12px;">${escapeHtml(item.codigo)}</span>
-                <span class="texto-suave" style="font-size:12px;">Disp.: ${item.saldo_disponivel_para_venda}</span>
+              ${item.imagem
+                ? `<img class="portfolio-card-imagem" src="${item.imagem}" alt="">`
+                : `<div class="portfolio-card-imagem portfolio-card-imagem-vazia" aria-hidden="true">${escapeHtml((item.descricao || "?")[0].toUpperCase())}</div>`}
+              <div class="portfolio-card-corpo">
+                <div class="portfolio-card-topo">
+                  <span class="mono texto-suave" style="font-size:12px;">${escapeHtml(item.codigo)}</span>
+                  <span class="texto-suave" style="font-size:12px;">Disp.: ${item.saldo_disponivel_para_venda}</span>
+                </div>
+                <h4 style="margin:6px 0 12px;">${escapeHtml(item.descricao)}</h4>
+                <button class="botao pequeno" style="width:100%;" data-acao="selecionar-item-portfolio"
+                  data-id="${item.id}" data-codigo="${escapeHtml(item.codigo)}" data-descricao="${escapeHtml(item.descricao)}"
+                  data-disponivel="${item.saldo_disponivel_para_venda}" ${item.saldo_disponivel_para_venda <= 0 ? "disabled" : ""}>
+                  ${item.saldo_disponivel_para_venda <= 0 ? "Sem saldo" : "+ Selecionar"}
+                </button>
               </div>
-              <h4 style="margin:6px 0 12px;">${escapeHtml(item.descricao)}</h4>
-              <button class="botao pequeno" style="width:100%;" data-acao="selecionar-item-portfolio"
-                data-id="${item.id}" data-codigo="${escapeHtml(item.codigo)}" data-descricao="${escapeHtml(item.descricao)}"
-                data-disponivel="${item.saldo_disponivel_para_venda}" ${item.saldo_disponivel_para_venda <= 0 ? "disabled" : ""}>
-                ${item.saldo_disponivel_para_venda <= 0 ? "Sem saldo" : "+ Selecionar"}
-              </button>
             </div>`).join("")}
         </div>`)
       .join("") || '<p class="texto-suave">Nenhum produto vendável ativo cadastrado ainda.</p>';
@@ -12236,36 +12332,10 @@
       case "sincronizar-app-vendas":
         return renderAppVendas();
       case "tentar-enviar-pendente-vendas":
-        return tentarEnviarPedidoPendente(Number(alvo.dataset.id));
-      case "enviar-rascunho-vendas": {
-        const pedidoId = Number(alvo.dataset.id);
-        if (!confirm("Enviar este pedido? O sistema vai tentar reservar o estoque de verdade (FEFO) — se outro vendedor já tiver enviado um pedido que consumiu o saldo primeiro, esta tentativa pode falhar.")) return;
-        try {
-          const resultadoEnvioRascunho = await chamarApi(`/vendas-app/rascunhos/${pedidoId}/enviar`, { method: "POST" });
-          limparPedidoPendenteDeEnvio();
-          // Fase 63 — acima do limite de crédito do cliente, o pedido não
-          // vira uma venda confirmada na hora: fica em rascunho aguardando
-          // aprovação de outro usuário (mesma alçada da tela de Comercial
-          // no desktop). O envio em si deu certo — só o texto muda.
-          if (resultadoEnvioRascunho.pedido && resultadoEnvioRascunho.pedido.confirmacao_pendente_criada_id) {
-            definirFlash("ok", "Pedido enviado — como o valor ultrapassa o limite de crédito do cliente, aguarda aprovação de outro usuário antes de virar uma venda confirmada.");
-          } else {
-            definirFlash("ok", "Pedido enviado com sucesso.");
-          }
-          return renderAppVendas();
-        } catch (erro) {
-          if (erro.status === undefined) {
-            // Falha de rede (sem internet), não um erro de negócio — o
-            // rascunho continua montado no servidor exatamente como
-            // estava. Marca como pendente para tentar de novo sozinho
-            // quando a conexão voltar (ver window.addEventListener("online", ...)).
-            marcarPedidoPendenteDeEnvio(pedidoId);
-            definirFlash("erro", "Sem conexão com a internet agora — o pedido ficou marcado como pendente de envio. Vamos tentar enviar de novo automaticamente quando a internet voltar (ou use \"Tentar enviar agora\").");
-            return renderAppVendas();
-          }
-          throw erro;
-        }
-      }
+        return tentarEnviarPedidoPendente(Number(alvo.dataset.id), alvo.dataset.formaPagamento);
+      case "abrir-enviar-rascunho-vendas":
+        modalEnviarRascunhoVendas(state.cache.rascunhoAppVendas);
+        return;
       case "abandonar-rascunho-vendas":
         if (!confirm("Abandonar este rascunho? O pedido será cancelado e a reserva temporária dos itens será liberada para outros vendedores.")) return;
         await chamarApi(`/vendas-app/rascunhos/${alvo.dataset.id}/abandonar`, { method: "POST" });
@@ -12598,21 +12668,28 @@
         return renderItens();
       }
       case "editar-item": {
-        await chamarApi(`/itens/${form.dataset.id}`, {
-          method: "PUT",
-          body: {
-            descricao: dados.get("descricao"),
-            estoque_minimo: dados.get("estoque_minimo") ? Number(dados.get("estoque_minimo")) : null,
-            status: dados.get("status"),
-            categoria: dados.get("categoria") || null,
-            // Fase 70 — dados fiscais.
-            ncm: dados.get("ncm") || null,
-            cfop_padrao: dados.get("cfop_padrao") || null,
-            origem_mercadoria: dados.get("origem_mercadoria") || "0",
-            cest: dados.get("cest") || null,
-            codigo_tributario_icms: dados.get("codigo_tributario_icms") || null,
-          },
-        });
+        const corpoEditarItem = {
+          descricao: dados.get("descricao"),
+          estoque_minimo: dados.get("estoque_minimo") ? Number(dados.get("estoque_minimo")) : null,
+          status: dados.get("status"),
+          categoria: dados.get("categoria") || null,
+          // Fase 70 — dados fiscais.
+          ncm: dados.get("ncm") || null,
+          cfop_padrao: dados.get("cfop_padrao") || null,
+          origem_mercadoria: dados.get("origem_mercadoria") || "0",
+          cest: dados.get("cest") || null,
+          codigo_tributario_icms: dados.get("codigo_tributario_icms") || null,
+        };
+        // Fase 114 — foto do produto: só inclui "imagem" no corpo quando o
+        // usuário escolheu um arquivo novo ou marcou "remover foto atual" —
+        // sem isso, o backend mantém a foto que já estava (merge parcial).
+        const arquivoImagemItem = form.querySelector('input[name="imagem_arquivo"]').files[0];
+        if (arquivoImagemItem) {
+          corpoEditarItem.imagem = await lerArquivoComoBase64(arquivoImagemItem);
+        } else if (form.querySelector('input[name="remover_imagem"]')?.checked) {
+          corpoEditarItem.imagem = null;
+        }
+        await chamarApi(`/itens/${form.dataset.id}`, { method: "PUT", body: corpoEditarItem });
         fecharModais();
         definirFlash("ok", "Item atualizado.");
         return renderItens();
@@ -13912,7 +13989,7 @@
             cnpj: dados.get("cnpj"), ie: dados.get("ie"), responsavel_tecnico: dados.get("responsavel_tecnico"),
             crf: dados.get("crf"), endereco: dados.get("endereco"), cidade: dados.get("cidade"),
             estado: dados.get("estado"), cep: dados.get("cep"), telefone: dados.get("telefone"),
-            email: dados.get("email"),
+            email: dados.get("email"), telefone_contato: dados.get("telefone_contato"),
           },
         });
         fecharModais();
@@ -13927,7 +14004,7 @@
             ie: dados.get("ie"), responsavel_tecnico: dados.get("responsavel_tecnico"), crf: dados.get("crf"),
             endereco: dados.get("endereco"), cidade: dados.get("cidade"), estado: dados.get("estado"),
             cep: dados.get("cep"), telefone: dados.get("telefone"), email: dados.get("email"),
-            status: dados.get("status"),
+            telefone_contato: dados.get("telefone_contato"), status: dados.get("status"),
           },
         });
         fecharModais();
@@ -14225,6 +14302,39 @@
         fecharModais();
         definirFlash("ok", "Verba aplicada ao rascunho.");
         return renderAppVendas();
+      }
+      case "enviar-rascunho-vendas": {
+        const pedidoId = Number(form.dataset.id);
+        const formaPagamento = dados.get("forma_pagamento");
+        try {
+          const resultadoEnvioRascunho = await chamarApi(`/vendas-app/rascunhos/${pedidoId}/enviar`, {
+            method: "POST", body: { forma_pagamento: formaPagamento },
+          });
+          fecharModais();
+          limparPedidoPendenteDeEnvio();
+          // Fase 63 — acima do limite de crédito do cliente, o pedido não
+          // vira uma venda confirmada na hora: fica em rascunho aguardando
+          // aprovação de outro usuário (mesma alçada da tela de Comercial
+          // no desktop). O envio em si deu certo — só o texto muda.
+          if (resultadoEnvioRascunho.pedido && resultadoEnvioRascunho.pedido.confirmacao_pendente_criada_id) {
+            definirFlash("ok", "Pedido enviado — como o valor ultrapassa o limite de crédito do cliente, aguarda aprovação de outro usuário antes de virar uma venda confirmada.");
+          } else {
+            definirFlash("ok", "Pedido enviado com sucesso.");
+          }
+          return renderAppVendas();
+        } catch (erro) {
+          if (erro.status === undefined) {
+            // Falha de rede (sem internet), não um erro de negócio — o
+            // rascunho continua montado no servidor exatamente como
+            // estava. Marca como pendente para tentar de novo sozinho
+            // quando a conexão voltar (ver window.addEventListener("online", ...)).
+            fecharModais();
+            marcarPedidoPendenteDeEnvio(pedidoId, formaPagamento);
+            definirFlash("erro", "Sem conexão com a internet agora — o pedido ficou marcado como pendente de envio. Vamos tentar enviar de novo automaticamente quando a internet voltar (ou use \"Tentar enviar agora\").");
+            return renderAppVendas();
+          }
+          throw erro;
+        }
       }
       case "filtrar-minhas-comissoes":
         return renderMinhasComissoes(Number(dados.get("ano")), Number(dados.get("mes")));

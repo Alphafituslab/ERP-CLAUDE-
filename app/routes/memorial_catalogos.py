@@ -70,6 +70,35 @@ CATALOGOS_CONFIG = {
             "unidade_dose": {"rotulo": "unidade da dose"},
             "categoria": {"rotulo": "categoria"},
             "descricao": {"rotulo": "descrição"},
+            # Fase 115 — campos que faltavam para paridade com
+            # `catalogoNutrientesTable` do sistema original: alimentam o
+            # cálculo automático de %VD/dose e a validação de faixa de
+            # aceitação nos editores estruturados (Fase 116).
+            "pureza_padrao": {"rotulo": "pureza padrão (%)"},
+            "vd_referencia": {"rotulo": "VD de referência"},
+            "grupo_populacional": {"rotulo": "grupo populacional"},
+            "fundamento_legal": {"rotulo": "fundamento legal"},
+            "aceitacao_min": {"rotulo": "aceitação mínima (%)"},
+            "aceitacao_max": {"rotulo": "aceitação máxima (%)"},
+            "tipo_composicao": {"rotulo": "tipo de composição"},
+            "fonte_materia_prima": {"rotulo": "fonte da matéria-prima"},
+        },
+    },
+    # Fase 115 — catálogo novo (não existia no AlphafitusOS), equivalente a
+    # `catalogoComponentesTable` do sistema original: mesmo papel do
+    # catálogo "nutrientes" acima, mas para componentes que não são
+    # nutrientes de rotulagem obrigatória (ex.: extratos, blends
+    # proprietários).
+    "componentes": {
+        "label": "Componentes",
+        "campos": {
+            "nome": {"obrigatorio": True, "rotulo": "nome"},
+            "pureza_padrao": {"rotulo": "pureza padrão (%)"},
+            "unidade": {"default": "g", "rotulo": "unidade"},
+            "categoria": {"rotulo": "categoria"},
+            "descricao": {"rotulo": "descrição"},
+            "aceitacao_min": {"rotulo": "aceitação mínima (%)"},
+            "aceitacao_max": {"rotulo": "aceitação máxima (%)"},
         },
     },
     "legislacoes": {
@@ -96,6 +125,21 @@ CATALOGOS_CONFIG = {
         "campos": {
             "nome": {"obrigatorio": True, "rotulo": "nome"},
             "tem_capsula": {"tipo": "bool", "default": False, "rotulo": "tem cápsula"},
+        },
+    },
+    # Fase 115 — catálogos novos: no sistema original, "Tipos de Produto"
+    # tinha dois catálogos irmãos separados (`catalogoOpcoesCapsulaTable`,
+    # `catalogoTiposPoteTable`) que o AlphafitusOS ainda não tinha.
+    "opcoes_capsula": {
+        "label": "Opções de Cápsula",
+        "campos": {"nome": {"obrigatorio": True, "rotulo": "nome"}},
+    },
+    "tipos_pote": {
+        "label": "Tipos de Pote",
+        "campos": {
+            "nome": {"obrigatorio": True, "rotulo": "nome"},
+            "largura_rotulo": {"rotulo": "largura do rótulo"},
+            "comprimento_rotulo": {"rotulo": "comprimento do rótulo"},
         },
     },
     "advertencias": {
@@ -128,6 +172,13 @@ CATALOGOS_CONFIG = {
             "descricao": {"rotulo": "descrição"},
             "tipo": {"rotulo": "tipo"},
             "auto_incluir": {"tipo": "bool", "default": False, "rotulo": "incluir automaticamente"},
+            # Fase 115 — campos que faltavam para paridade com
+            # `catalogoReferenciasTable`: "grupo" agrupa referências que o
+            # editor de Referências Bibliográficas (Fase 116) usa junto com
+            # "auto_incluir" para incluir um grupo inteiro de uma vez;
+            # "doi" é o link direto da publicação.
+            "grupo": {"rotulo": "grupo"},
+            "doi": {"rotulo": "DOI"},
         },
     },
 }

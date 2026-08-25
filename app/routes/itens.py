@@ -4,6 +4,7 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import audit
 from ..context import ApiError, client_device, client_ip, get_db
+from ..imagens import validar_imagem_base64
 from ..permissions import requires_permission
 from .estoque import saldo_total_disponivel_item
 
@@ -194,14 +195,25 @@ def editar(item_id):
     if isinstance(categoria, str):
         categoria = categoria.strip() or None
 
+    # Fase 114 — foto do produto, usada como imagem do card no Portfólio do
+    # App de Vendas (ver migrations/schema_fase114.sql). Só valida/atualiza
+    # quando "imagem" vem no corpo da requisição — sem a chave, mantém a
+    # foto atual do item intacta (mesmo padrão de merge parcial do resto
+    # deste endpoint).
+    if "imagem" in dados:
+        imagem = validar_imagem_base64(dados.get("imagem"))
+    else:
+        imagem = row["imagem"]
+
     conn.execute(
         """
         UPDATE itens SET descricao = ?, estoque_minimo = ?, status = ?, ncm = ?, cfop_padrao = ?,
-               origem_mercadoria = ?, cest = ?, codigo_tributario_icms = ?, categoria = ?, atualizado_em = ?, atualizado_por = ?
+               origem_mercadoria = ?, cest = ?, codigo_tributario_icms = ?, categoria = ?, imagem = ?,
+               atualizado_em = ?, atualizado_por = ?
         WHERE id = ?
         """,
         (descricao, estoque_minimo, status, ncm, cfop_padrao, origem_mercadoria, cest,
-         codigo_tributario_icms, categoria, _now_iso(), usuario_atual["id"], item_id),
+         codigo_tributario_icms, categoria, imagem, _now_iso(), usuario_atual["id"], item_id),
     )
     novo_row = conn.execute("SELECT * FROM itens WHERE id = ?", (item_id,)).fetchone()
     audit.registrar(conn, tabela="itens", registro_id=item_id, usuario_id=usuario_atual["id"],

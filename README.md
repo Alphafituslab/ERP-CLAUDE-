@@ -5192,6 +5192,71 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   (antes tinha sua própria cor por grupo). Testado ao vivo conferindo a
   cor computada de cada um dos 9 grupos (idêntica em todos) e o estado
   ativo de um subitem antes do deploy.
+- (Entregue na Fase 114) Portfólio com fotos + forma de pagamento no App
+  de Vendas. Pedido do usuário: "ao clicar em portfólio deixar eu criar um
+  portfólio com fotos, nomes, imagens... e esse portfólio deve aparecer no
+  app de vendas onde a partir dele ao clicar em uma imagem ela vai sendo
+  adicionada ao carrinho até colocar o cliente, forma de pagamento e ser
+  enviado ao módulo de pedidos". A tela Portfólio (Fase 77) e o carrinho/
+  cliente/envio do App de Vendas já existiam — faltava só a foto por
+  produto e a forma de pagamento no envio.
+  - `itens.imagem` (`schema_fase114.sql`) — mesmo padrão base64 (data URI
+    completo) de `usuarios.foto_perfil` (Fase 113); validação extraída
+    para `app/imagens.py::validar_imagem_base64()` (novo módulo
+    compartilhado — Fase 113 tinha uma cópia local dessa mesma validação
+    em `auth.py`, agora reaproveitada por `itens.py` também). Card do
+    Portfólio (`app.js`) mostra a imagem quando existe, senão cai num
+    placeholder com a inicial do nome; upload/remoção na edição do item.
+  - `pedidos_venda.forma_pagamento` (nulável — só o App de Vendas exige
+    preenchimento; a tela de desktop continua decidindo isso no Financeiro,
+    como sempre foi). `POST /vendas-app/rascunhos/<id>/enviar` passou a
+    exigir `forma_pagamento` (pix/boleto/cartão/dinheiro-a combinar) no
+    corpo; "Enviar pedido" no App de Vendas agora abre um modal pedindo
+    isso antes de enviar, em vez de um `confirm()` simples. A fila de
+    reenvio offline (pedido pendente por falta de internet) passou a
+    guardar a forma de pagamento junto com o ID do pedido, para reenviar
+    o corpo completo quando a conexão voltar.
+  Testado via API (upload/validação/remoção de foto, envio com e sem
+  forma de pagamento) e no navegador (card do Portfólio com foto real,
+  avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
+  aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 115) Memorial Técnico — campos e catálogos faltando
+  para paridade com o sistema antigo. Pedido do usuário: "trazer tudo
+  igual, cada funcionalidade ok, não mudar nada, verificar se está tudo
+  funcionando perfeitamente" — depois de o usuário enviar um backup em
+  JSON do sistema "Anvisa Technical Memorial" (que ele usava antes,
+  Node/React/Postgres, hospedado no Replit) e o código-fonte original
+  (zip do repositório), uma auditoria campo a campo comparando os dois
+  sistemas encontrou várias lacunas — esta fase fecha as que são só
+  "campo/catálogo faltando" (as lacunas de FUNCIONALIDADE INTEIRA — editores
+  estruturados com cálculo automático, módulo Portfólio, Tabelas
+  Nutricionais reutilizáveis, PDF/e-mail da Padronização, biblioteca de
+  snapshots — ficam para fases seguintes, na ordem combinada com o
+  usuário). Mudanças:
+  - `memorial_empresas.telefone_contato` e `memorial_produtos.sabor`
+    (`schema_fase115.sql`) — campos simples que existiam no sistema
+    original e não tinham equivalente.
+  - `memorial_catalogo_itens.catalogo` tinha um `CHECK` fixo com só 10
+    valores (Fase 26) — recriado com mais 3: `componentes`,
+    `opcoes_capsula`, `tipos_pote` (SQLite não permite `ALTER` de `CHECK`
+    diretamente, então a migration recria a tabela — copia os dados,
+    dropa a antiga, renomeia a nova).
+  - `CATALOGOS_CONFIG` (`memorial_catalogos.py`) ganhou os 2 catálogos
+    novos citados acima, mais 8 campos no catálogo "Nutrientes" (pureza
+    padrão, VD de referência, grupo populacional, fundamento legal,
+    aceitação mín/máx, tipo de composição, fonte da matéria-prima — são
+    os campos que alimentam o cálculo automático dos editores estruturados
+    que ainda faltam construir) e 2 campos no catálogo "Referências"
+    (grupo, DOI). Como esse catálogo é 100% orientado a config (a coluna
+    `dados` é um JSON, não colunas fixas), nenhuma migration foi
+    necessária para os campos novos — só os catálogos novos (`componentes`,
+    `opcoes_capsula`, `tipos_pote`) precisaram da migration do `CHECK`
+    acima. O mesmo `CATALOGOS_MEMORIAL` do frontend (`app.js`) foi
+    espelhado campo a campo.
+  Testado via API num banco de teste: os 3 catálogos novos aceitam item
+  (`POST /memorial/catalogos/<chave>`), os campos novos de "Nutrientes" e
+  "Referências" persistem e voltam na resposta, `telefone_contato` e
+  `sabor` persistem em empresa/produto (criação e edição).
 - (Entregue na Fase 113) Foto de perfil do operador + logo nova no ERP +
   renomeação da marca. Pedido do usuário, três partes na mesma mensagem:
   1. "ter a opção de colocar a foto de cada operador logado no sistema,
