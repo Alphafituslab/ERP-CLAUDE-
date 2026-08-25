@@ -6509,7 +6509,7 @@
         ["lista_ingredientes", "Lista de Ingredientes", "textarea"],
     ]},
     { numero: 3, titulo: "Formulação", campos: [
-        ["composicao_centesimal", "Composição Centesimal", "textarea"],
+        ["composicao_centesimal", "Composição Centesimal", "composicao-centesimal"],
         ["calculo_quantidade", "Cálculo de Quantidade", "textarea"],
     ]},
     { numero: 4, titulo: "Metodologias", campos: [
@@ -6663,6 +6663,13 @@
         <label>${rotulo}</label>
         <textarea name="${campo}" data-calc-nutricionais-valor style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
         <div data-calc-nutricionais-widget></div>
+      </div>`;
+    }
+    if (tipo === "composicao-centesimal") {
+      return `<div class="campo">
+        <label>${rotulo}</label>
+        <textarea name="${campo}" data-centesimal-valor style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
+        <div data-centesimal-widget></div>
       </div>`;
     }
     return `<div class="campo"><label>${rotulo}${botaoCatalogoHtml}</label>${
@@ -6988,6 +6995,511 @@
     });
   }
 
+  // =======================================================================
+  // EDITOR ESTRUTURADO — COMPOSIÇÃO CENTESIMAL (Fase 116, parte 2)
+  //
+  // Mesmo espírito do editor de Cálculos Nutricionais acima: o campo
+  // `composicao_centesimal` continua sendo a mesma coluna de texto de
+  // sempre (nenhuma migration), só o CONTEÚDO virou JSON estruturado —
+  // desta vez SEM prefixo mágico (diferente de "__CALCV1__"; o sistema
+  // original também não usava um aqui, confirmado na especificação).
+  //
+  // Três recortes conscientes em relação ao original, além dos já feitos
+  // no editor anterior (reordenar com botões, não arrastar):
+  //   1. Não replica a "autocura" de um bug histórico de truncamento em
+  //      mcg do sistema antigo — não existe dado legado truncado para
+  //      curar aqui, o AlphafitusOS nunca teve esse bug.
+  //   2. A busca por "componente" já cadastrado usa correspondência exata
+  //      (normalizada), não a busca difusa por palavras-chave do
+  //      original — mais simples, e ainda cobre o caso comum (selecionar
+  //      do catálogo).
+  //   3. Sem a trava de "senha master" no campo de pureza — o Alphafitus
+  //      já usa a permissão de verdade (`memoriais.editar`) para
+  //      controlar quem edita, o que é estritamente melhor que uma senha
+  //      separada (mesma decisão já registrada na auditoria da Fase 115
+  //      sobre o mecanismo de senha master do sistema antigo).
+  // =======================================================================
+  const LINHA_CENTESIMAL_DEFAULT = {
+    componente: "", categoria: "", purezaAtivo: "", quantidadeIngrediente: "",
+    quantidadeElementar: "", unidadeEntrada: "", aceitacaoMin: "", aceitacaoMax: "",
+  };
+
+  function parseComposicaoCentesimal(valor) {
+    if (valor) {
+      try {
+        const parsed = JSON.parse(valor);
+        if (parsed && Array.isArray(parsed.linhas)) {
+          return {
+            descricaoMassa: parsed.descricaoMassa || "",
+            linhas: parsed.linhas.map((l) => ({ ...LINHA_CENTESIMAL_DEFAULT, ...l })),
+          };
+        }
+      } catch { /* segue pro default abaixo */ }
+    }
+    return { descricaoMassa: "", linhas: [{ ...LINHA_CENTESIMAL_DEFAULT }] };
+  }
+  function serializeComposicaoCentesimal(dados) {
+    return JSON.stringify(dados);
+  }
+
+  const CATEGORIAS_CENTESIMAL = [
+    ["", "— sem categoria —", "#94a3b8"],
+    ["ingrediente", "Ingrediente Ativo", "#16a34a"],
+    ["excipiente", "Excipiente", "#2563eb"],
+    ["corante", "Corante", "#d97706"],
+    ["capsula", "Cápsula", "#7c3aed"],
+  ];
+  function corCategoriaCentesimal(cat) {
+    const item = CATEGORIAS_CENTESIMAL.find(([c]) => c === (cat || ""));
+    return item ? item[2] : "#94a3b8";
+  }
+  function rotuloCategoriaCentesimal(cat) {
+    const item = CATEGORIAS_CENTESIMAL.find(([c]) => c === (cat || ""));
+    return item && item[0] ? item[1] : "—";
+  }
+
+  // Fórmulas EXATAS do original — tudo persistido em mg; "unidadeEntrada"
+  // só controla como o campo Ingrediente é EXIBIDO/editado (µg vs mg), o
+  // valor guardado é sempre convertido de volta pra mg.
+  function calcElementarCentesimal(qtdIng, pureza) {
+    if (qtdIng === "" || qtdIng === null || qtdIng === undefined) return "";
+    const p = (pureza === "" || pureza === null || pureza === undefined) ? 100 : Number(pureza);
+    return Math.round(((Number(qtdIng) * p) / 100) * 1e7) / 1e7;
+  }
+  function calcIngredienteCentesimal(qtdElem, pureza) {
+    if (qtdElem === "" || qtdElem === null || qtdElem === undefined) return "";
+    const p = (pureza === "" || pureza === null || pureza === undefined) ? 100 : Number(pureza);
+    if (p === 0) return "";
+    return Math.round(((Number(qtdElem) * 100) / p) * 1e7) / 1e7;
+  }
+
+  function fmtVirgulaCentesimal(n, dec) {
+    return Number(n).toFixed(dec).replace(".", ",");
+  }
+  function fmtMgCentesimal(n, isMcg) {
+    return fmtVirgulaCentesimal(n, isMcg ? 5 : 2);
+  }
+  function parseFaixaCentesimalStr(v) {
+    if (v === "" || v === null || v === undefined) return "";
+    const num = parseFloat(String(v).replace(",", "."));
+    return isNaN(num) ? "" : num;
+  }
+
+  // Algoritmo "fecha em 100%", idêntico ao original: percentual nunca é
+  // digitado, é sempre derivado da quantidade de cada linha contra o
+  // total — trunca pra baixo em 2 casas (piso de 0,01 se a linha tem
+  // quantidade), depois distribui o resíduo de +0,01 nos MENORES valores
+  // primeiro (se faltou fechar 100%) ou tira -0,01 dos MAIORES primeiro
+  // (se passou de 100%). Por construção, a soma exibida sempre fecha
+  // 100,00% — nunca existe alerta de "soma diferente de 100%".
+  function calcularCentesimaisAjustadas(linhas) {
+    const valores = linhas.map((l) =>
+      l.quantidadeIngrediente === "" || l.quantidadeIngrediente === null || l.quantidadeIngrediente === undefined
+        ? null : Number(l.quantidadeIngrediente)
+    );
+    const totalIng = valores.reduce((acc, v) => acc + (v && !isNaN(v) ? v : 0), 0);
+    if (!totalIng) return linhas.map(() => "—");
+
+    const itens = valores.map((v, idx) => {
+      if (v === null || isNaN(v) || v === 0) return null;
+      const raw = (v / totalIng) * 100;
+      const floor2 = Math.max(0.01, Math.floor(raw * 100) / 100);
+      return { idx, raw, floorCs: Math.round(floor2 * 100) };
+    });
+    const validos = itens.filter(Boolean);
+    const sumFloorCs = validos.reduce((acc, it) => acc + it.floorCs, 0);
+    const delta = 10000 - sumFloorCs;
+
+    if (delta > 0) {
+      const ordenados = [...validos].sort((a, b) => a.raw - b.raw);
+      for (let i = 0; i < delta && i < ordenados.length; i++) ordenados[i].floorCs += 1;
+    } else if (delta < 0) {
+      const ordenados = [...validos].sort((a, b) => b.raw - a.raw);
+      for (let i = 0; i < -delta && i < ordenados.length; i++) ordenados[i].floorCs -= 1;
+    }
+
+    const resultado = linhas.map(() => "—");
+    for (const it of validos) resultado[it.idx] = fmtVirgulaCentesimal(it.floorCs / 100, 2);
+    return resultado;
+  }
+
+  let centesimalEstado = null; // { descricaoMassa, linhas, catalogoNutrientes, catalogoCapsulas, podeEditar }
+
+  function sincronizarTextareaCentesimal() {
+    const textarea = document.querySelector("[data-centesimal-valor]");
+    if (!textarea) return;
+    textarea.value = serializeComposicaoCentesimal({
+      descricaoMassa: centesimalEstado.descricaoMassa,
+      linhas: centesimalEstado.linhas,
+    });
+    // Fase 116 — ponto 5.5c da especificação: toda mudança na Composição
+    // Centesimal empurra o "Elementar" de cada linha pro "Qtd. por
+    // porção" do Cálculo Nutricional cujo nome bater (substring
+    // normalizado, nos dois sentidos) — mesma direção exata do sistema
+    // original (nunca o contrário).
+    if (calcNutricionaisEstado) {
+      let mudou = false;
+      for (const n of calcNutricionaisEstado.linhas) {
+        const match = centesimalEstado.linhas.find((l) =>
+          l.componente &&
+          (normalizarTextoCalc(l.componente).includes(normalizarTextoCalc(n.nutriente)) ||
+           normalizarTextoCalc(n.nutriente).includes(normalizarTextoCalc(l.componente)))
+        );
+        if (!match) continue;
+        const elementar = match.quantidadeElementar;
+        if (elementar === "" || elementar === null || elementar === undefined) continue;
+        const qtd = typeof elementar === "number" ? elementar : parseFloat(String(elementar));
+        if (isNaN(qtd) || n.qtdIngrediente === qtd) continue;
+        n.qtdIngrediente = qtd;
+        mudou = true;
+      }
+      if (mudou) {
+        sincronizarTextareaCalcNutricionais();
+        renderizarCalcNutricionaisWidget();
+      }
+    }
+  }
+
+  function totaisCentesimal() {
+    let ing = 0, elem = 0;
+    for (const l of centesimalEstado.linhas) {
+      if (typeof l.quantidadeIngrediente === "number") ing += l.quantidadeIngrediente;
+      if (typeof l.quantidadeElementar === "number") elem += l.quantidadeElementar;
+    }
+    return { ing, elem };
+  }
+
+  function renderizarLinhaCentesimalEdicao(l, idx, percentuais) {
+    const opcoesCategoria = CATEGORIAS_CENTESIMAL
+      .map(([v, label]) => `<option value="${v}" ${l.categoria === v ? "selected" : ""}>${escapeHtml(label)}</option>`)
+      .join("");
+    const isMcg = l.unidadeEntrada === "mcg";
+    return `<tr style="border-left: 3px solid ${corCategoriaCentesimal(l.categoria)};">
+      <td>${idx + 1}</td>
+      <td style="position:relative; min-width:180px;">
+        <input data-centesimal-campo="componente" data-centesimal-idx="${idx}" value="${escapeHtml(l.componente)}" autocomplete="off" style="width:100%;">
+        <div class="calc-sugestoes" data-centesimal-sugestoes="${idx}" hidden></div>
+      </td>
+      <td><select data-centesimal-campo="categoria" data-centesimal-idx="${idx}">${opcoesCategoria}</select></td>
+      <td>
+        <input type="number" step="any" data-centesimal-campo="purezaAtivo" data-centesimal-idx="${idx}"
+          value="${l.purezaAtivo}" placeholder="100" style="width:70px;">
+      </td>
+      <td>
+        <input data-centesimal-campo="aceitacaoMin" data-centesimal-idx="${idx}" placeholder="mín %"
+          value="${l.aceitacaoMin === "" ? "" : String(l.aceitacaoMin).replace(".", ",")}" style="width:70px;"><br>
+        <input data-centesimal-campo="aceitacaoMax" data-centesimal-idx="${idx}" placeholder="máx %"
+          value="${l.aceitacaoMax === "" ? "" : String(l.aceitacaoMax).replace(".", ",")}" style="width:70px;">
+      </td>
+      <td>
+        <input type="number" step="any" data-centesimal-campo="quantidadeIngrediente" data-centesimal-idx="${idx}"
+          value="${l.quantidadeIngrediente === "" ? "" : (isMcg ? Number(l.quantidadeIngrediente) * 1000 : l.quantidadeIngrediente)}" style="width:90px;">
+        <select data-centesimal-campo="unidadeEntrada" data-centesimal-idx="${idx}" style="width:60px;">
+          <option value="" ${!isMcg ? "selected" : ""}>mg</option>
+          <option value="mcg" ${isMcg ? "selected" : ""}>µg</option>
+        </select>
+      </td>
+      <td class="calc-celula-destaque">
+        <input type="number" step="any" data-centesimal-campo="quantidadeElementar" data-centesimal-idx="${idx}"
+          value="${l.quantidadeElementar}" style="width:90px;"> mg
+      </td>
+      <td class="calc-celula-destaque">${percentuais[idx]}</td>
+      <td>
+        <button type="button" class="botao-icone" title="Mover para cima" data-centesimal-acao="mover-cima" data-centesimal-idx="${idx}">▲</button>
+        <button type="button" class="botao-icone" title="Mover para baixo" data-centesimal-acao="mover-baixo" data-centesimal-idx="${idx}">▼</button>
+      </td>
+      <td>${centesimalEstado.linhas.length > 1 ? `<button type="button" class="botao-icone" title="Remover" data-centesimal-acao="remover" data-centesimal-idx="${idx}">🗑</button>` : ""}</td>
+    </tr>`;
+  }
+
+  function renderizarComposicaoCentesimalWidget() {
+    const container = document.querySelector("[data-centesimal-widget]");
+    if (!container) return;
+    const { linhas, descricaoMassa, podeEditar } = centesimalEstado;
+    const percentuais = calcularCentesimaisAjustadas(linhas);
+    const { ing, elem } = totaisCentesimal();
+
+    if (!podeEditar) {
+      const grupos = CATEGORIAS_CENTESIMAL.map(([chave]) => chave);
+      let corpoHtml = "";
+      let contador = 0;
+      grupos.forEach((cat) => {
+        const linhasDoGrupo = linhas.map((l, idx) => ({ l, idx })).filter(({ l }) => (l.categoria || "") === cat);
+        if (!linhasDoGrupo.length) return;
+        corpoHtml += `<tr style="background:${corCategoriaCentesimal(cat)}22; border-left: 3px solid ${corCategoriaCentesimal(cat)};">
+          <td colspan="8"><strong>${escapeHtml(rotuloCategoriaCentesimal(cat))}</strong></td>
+        </tr>`;
+        linhasDoGrupo.forEach(({ l, idx }) => {
+          contador++;
+          const isMcg = l.unidadeEntrada === "mcg";
+          corpoHtml += `<tr>
+            <td>${contador}</td><td>${escapeHtml(l.componente || "—")}</td>
+            <td>${l.purezaAtivo === "" ? "auto" : fmtVirgulaCentesimal(l.purezaAtivo, 0) + "%"}</td>
+            <td>${l.aceitacaoMin !== "" || l.aceitacaoMax !== "" ? `${l.aceitacaoMin === "" ? "—" : fmtVirgulaCentesimal(l.aceitacaoMin, 2)}% a ${l.aceitacaoMax === "" ? "—" : fmtVirgulaCentesimal(l.aceitacaoMax, 2)}%` : "não definida"}</td>
+            <td>${l.quantidadeIngrediente === "" ? "—" : fmtMgCentesimal(l.quantidadeIngrediente, isMcg) + " mg"}</td>
+            <td>${l.quantidadeElementar === "" ? "—" : fmtMgCentesimal(l.quantidadeElementar, isMcg) + " mg"}</td>
+            <td>${percentuais[idx]}</td>
+          </tr>`;
+        });
+      });
+      container.innerHTML = `<table class="calc-tabela-resultado">
+        <thead><tr><th>Nº</th><th>Componente</th><th>Pureza</th><th>Faixa Aceitação</th><th>Ingrediente</th><th>Elementar</th><th>Centesimal (%)</th></tr></thead>
+        <tbody>${corpoHtml}</tbody>
+        <tfoot><tr><td colspan="4"><strong>${escapeHtml(descricaoMassa || "Massa total")}</strong></td>
+          <td><strong>${fmtVirgulaCentesimal(ing, 2)} mg</strong></td>
+          <td><strong>${fmtVirgulaCentesimal(elem, 2)} mg</strong></td>
+          <td><strong>100,00</strong></td></tr></tfoot>
+      </table>`;
+      return;
+    }
+
+    const linhasHtml = linhas.map((l, idx) => renderizarLinhaCentesimalEdicao(l, idx, percentuais)).join("");
+    container.innerHTML = `
+      <div class="campo"><label>Descrição da massa (ex.: "Massa total 1 cápsula Número 00")</label>
+        <input data-centesimal-massa value="${escapeHtml(descricaoMassa)}"></div>
+      <div style="overflow-x:auto;">
+        <table class="calc-tabela-resultado">
+          <thead><tr><th>Nº</th><th>Componente</th><th>Categoria</th><th>Pureza (%)</th><th>Faixa Aceit. (%)</th><th>Ingrediente</th><th>Elementar (mg)</th><th>Centesimal (%)</th><th colspan="2"></th></tr></thead>
+          <tbody>${linhasHtml}</tbody>
+          <tfoot><tr><td colspan="5"><strong>${escapeHtml(descricaoMassa || "Massa total")}</strong></td>
+            <td><strong>${fmtVirgulaCentesimal(ing, 2)} mg</strong></td>
+            <td><strong>${fmtVirgulaCentesimal(elem, 2)} mg</strong></td>
+            <td><strong>100,00</strong></td><td colspan="2"></td></tr></tfoot>
+        </table>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+        <button type="button" class="botao secundario pequeno" data-centesimal-acao="adicionar" data-centesimal-categoria="">+ Adicionar linha</button>
+        <button type="button" class="botao secundario pequeno" data-centesimal-acao="adicionar" data-centesimal-categoria="ingrediente" style="color:#16a34a;">+ Ingrediente Ativo</button>
+        <button type="button" class="botao secundario pequeno" data-centesimal-acao="adicionar" data-centesimal-categoria="excipiente" style="color:#2563eb;">+ Excipiente</button>
+        <button type="button" class="botao secundario pequeno" data-centesimal-acao="adicionar" data-centesimal-categoria="corante" style="color:#d97706;">+ Corante</button>
+        <button type="button" class="botao secundario pequeno" data-centesimal-acao="adicionar" data-centesimal-categoria="capsula" style="color:#7c3aed;">+ Cápsula</button>
+      </div>`;
+  }
+
+  // Busca difusa por palavras-chave — mesmo algoritmo do original: extrai
+  // palavras "significativas" (≥3 letras, ignora preposições) do termo e
+  // de cada nome do catálogo; um candidato entra se o conjunto MENOR de
+  // palavras estiver inteiramente contido no MAIOR (ex.: {arginina} ⊆
+  // {cloridrato, arginina}, via "cloridrato de l-arginina"). Com vários
+  // candidatos, desempata por quantos campos regulatórios o item tem
+  // preenchidos (pureza/faixa) — só decide se o 1º colocado tiver placar
+  // MAIOR que o 2º; empate ou ambiguidade não decide nada (undefined).
+  function palavrasSignificativasCentesimal(normStr) {
+    const stops = new Set(["de", "da", "do", "dos", "das", "em", "com", "por"]);
+    return new Set(normStr.replace(/-/g, " ").split(/\s+/).filter((w) => w.length >= 3 && !stops.has(w)));
+  }
+  function fuzzyEncontrarNutrienteCentesimal(termo, catalogo) {
+    const palavrasTermo = palavrasSignificativasCentesimal(normalizarTextoCalc(termo));
+    if (!palavrasTermo.size) return undefined;
+    const candidatos = [];
+    for (const c of catalogo) {
+      const palavrasNome = palavrasSignificativasCentesimal(normalizarTextoCalc(c.nome));
+      if (!palavrasNome.size) continue;
+      const [menor, maior] = palavrasTermo.size <= palavrasNome.size ? [palavrasTermo, palavrasNome] : [palavrasNome, palavrasTermo];
+      let subset = true;
+      for (const w of menor) { if (!maior.has(w)) { subset = false; break; } }
+      if (subset) candidatos.push(c);
+    }
+    if (candidatos.length === 1) return candidatos[0];
+    if (candidatos.length > 1) {
+      const pontuados = candidatos
+        .map((c) => ({
+          c,
+          score: (c.pureza_padrao != null ? 1 : 0) + (c.aceitacao_min != null ? 1 : 0) + (c.aceitacao_max != null ? 1 : 0),
+        }))
+        .sort((a, b) => b.score - a.score);
+      if (pontuados[0].score > 0 && (pontuados.length === 1 || pontuados[0].score > pontuados[1].score)) {
+        return pontuados[0].c;
+      }
+    }
+    return undefined;
+  }
+
+  function iniciarWidgetComposicaoCentesimal(valorInicial, podeEditar) {
+    const container = document.querySelector("[data-centesimal-widget]");
+    if (!container) return;
+    centesimalEstado = {
+      ...parseComposicaoCentesimal(valorInicial),
+      catalogoNutrientes: [],
+      catalogoCapsulas: [],
+      podeEditar,
+    };
+    renderizarComposicaoCentesimalWidget();
+    if (!podeEditar) return;
+
+    Promise.all([
+      chamarApi("/memorial/catalogos/nutrientes").catch(() => []),
+      chamarApi("/memorial/catalogos/opcoes_capsula").catch(() => []),
+    ]).then(([nutrientes, capsulas]) => {
+      centesimalEstado.catalogoNutrientes = nutrientes.filter((i) => i.ativo);
+      centesimalEstado.catalogoCapsulas = capsulas.filter((i) => i.ativo);
+    });
+
+    function aplicarNutrienteNaLinha(idx, cat) {
+      const l = centesimalEstado.linhas[idx];
+      l.componente = cat.nome;
+      if (cat.pureza_padrao != null) l.purezaAtivo = Number(cat.pureza_padrao);
+      if (cat.tipo_composicao && ["ingrediente", "excipiente", "corante", "capsula"].includes(cat.tipo_composicao)) {
+        l.categoria = cat.tipo_composicao;
+      }
+      const unidadeResolvida = cat.unidade_dose || cat.unidade || "";
+      l.unidadeEntrada = /^(mcg|µg|μg)$/i.test(unidadeResolvida) ? "mcg" : "";
+      if (cat.aceitacao_min != null) l.aceitacaoMin = Number(cat.aceitacao_min);
+      if (cat.aceitacao_max != null) l.aceitacaoMax = Number(cat.aceitacao_max);
+      // Mesma regra do original: preserva o Elementar se já preenchido
+      // (recalcula o Ingrediente a partir dele); senão preserva o
+      // Ingrediente e recalcula o Elementar.
+      if (l.quantidadeElementar !== "") {
+        l.quantidadeIngrediente = calcIngredienteCentesimal(l.quantidadeElementar, l.purezaAtivo);
+      } else if (l.quantidadeIngrediente !== "") {
+        l.quantidadeElementar = calcElementarCentesimal(l.quantidadeIngrediente, l.purezaAtivo);
+      }
+    }
+
+    container.addEventListener("click", (e) => {
+      const alvo = e.target.closest("[data-centesimal-acao]");
+      if (!alvo) return;
+      const acao = alvo.dataset.centesimalAcao;
+      const idx = alvo.dataset.centesimalIdx !== undefined ? Number(alvo.dataset.centesimalIdx) : null;
+      if (acao === "adicionar") {
+        centesimalEstado.linhas.push({ ...LINHA_CENTESIMAL_DEFAULT, categoria: alvo.dataset.centesimalCategoria || "" });
+      } else if (acao === "remover") {
+        if (centesimalEstado.linhas.length > 1) centesimalEstado.linhas.splice(idx, 1);
+      } else if (acao === "mover-cima" || acao === "mover-baixo") {
+        const novoIdx = acao === "mover-cima" ? idx - 1 : idx + 1;
+        if (novoIdx < 0 || novoIdx >= centesimalEstado.linhas.length) return;
+        const [linha] = centesimalEstado.linhas.splice(idx, 1);
+        centesimalEstado.linhas.splice(novoIdx, 0, linha);
+      } else {
+        return;
+      }
+      sincronizarTextareaCentesimal();
+      renderizarComposicaoCentesimalWidget();
+    });
+
+    container.addEventListener("mousedown", (e) => {
+      const item = e.target.closest("[data-centesimal-sugestao-id]");
+      if (!item) return;
+      e.preventDefault();
+      const painel = item.closest("[data-centesimal-sugestoes]");
+      const idx = Number(painel.dataset.centesimalSugestoes);
+      const tipo = item.dataset.tipo;
+      if (tipo === "capsula") {
+        centesimalEstado.linhas[idx].componente = item.dataset.nome;
+        centesimalEstado.linhas[idx].categoria = "capsula";
+      } else {
+        const cat = centesimalEstado.catalogoNutrientes.find((c) => String(c.id) === item.dataset.centesimalSugestaoId);
+        if (cat) aplicarNutrienteNaLinha(idx, cat);
+      }
+      painel.hidden = true;
+      sincronizarTextareaCentesimal();
+      renderizarComposicaoCentesimalWidget();
+    });
+
+    container.addEventListener("input", (e) => {
+      if (e.target.matches("[data-centesimal-massa]")) {
+        centesimalEstado.descricaoMassa = e.target.value;
+        sincronizarTextareaCentesimal();
+        return;
+      }
+      const alvo = e.target.closest("[data-centesimal-campo]");
+      if (!alvo) return;
+      const campo = alvo.dataset.centesimalCampo;
+      const idx = Number(alvo.dataset.centesimalIdx);
+      const l = centesimalEstado.linhas[idx];
+
+      if (campo === "componente") {
+        l.componente = alvo.value;
+        const termo = normalizarTextoCalc(alvo.value);
+        const painel = container.querySelector(`[data-centesimal-sugestoes="${idx}"]`);
+        if (painel) {
+          const doCatalogo = centesimalEstado.catalogoNutrientes
+            .filter((c) => normalizarTextoCalc(c.nome).includes(termo))
+            .slice(0, 15)
+            .map((c) => `<div class="calc-sugestao-item" data-centesimal-sugestao-id="${c.id}" data-tipo="nutriente">
+              <strong>${escapeHtml(c.nome)}</strong>
+              <span class="texto-suave" style="font-size:12px;">Catálogo${c.pureza_padrao != null ? ` · Pureza ${c.pureza_padrao}%` : ""}</span>
+            </div>`).join("");
+          const capsulasHtml = centesimalEstado.catalogoCapsulas
+            .map((c) => `<div class="calc-sugestao-item" data-tipo="capsula" data-nome="${escapeHtml(c.nome)}">
+              <strong>💊 ${escapeHtml(c.nome)}</strong>
+            </div>`).join("");
+          const conteudo = doCatalogo + capsulasHtml;
+          painel.innerHTML = conteudo || "";
+          painel.hidden = !conteudo;
+        }
+      } else if (campo === "categoria") {
+        l.categoria = alvo.value;
+      } else if (campo === "unidadeEntrada") {
+        // Reconverte o valor já digitado pro novo padrão de unidade, sem
+        // perder o número — só muda como ele é EXIBIDO/editado.
+        const eraIsMcg = l.unidadeEntrada === "mcg";
+        const novoIsMcg = alvo.value === "mcg";
+        l.unidadeEntrada = alvo.value;
+        if (eraIsMcg !== novoIsMcg) { /* valor interno já está em mg, nada a fazer */ }
+      } else if (campo === "purezaAtivo") {
+        l.purezaAtivo = alvo.value === "" ? "" : Number(alvo.value);
+        const isMcg = l.unidadeEntrada === "mcg";
+        if (l.quantidadeElementar !== "") {
+          l.quantidadeIngrediente = calcIngredienteCentesimal(l.quantidadeElementar, l.purezaAtivo);
+          const irmao = container.querySelector(`[data-centesimal-campo="quantidadeIngrediente"][data-centesimal-idx="${idx}"]`);
+          if (irmao) irmao.value = l.quantidadeIngrediente === "" ? "" : (isMcg ? l.quantidadeIngrediente * 1000 : l.quantidadeIngrediente);
+        } else if (l.quantidadeIngrediente !== "") {
+          l.quantidadeElementar = calcElementarCentesimal(l.quantidadeIngrediente, l.purezaAtivo);
+          const irmao = container.querySelector(`[data-centesimal-campo="quantidadeElementar"][data-centesimal-idx="${idx}"]`);
+          if (irmao) irmao.value = l.quantidadeElementar;
+        }
+      } else if (campo === "quantidadeIngrediente") {
+        const isMcg = l.unidadeEntrada === "mcg";
+        const digitado = alvo.value === "" ? "" : Number(alvo.value);
+        l.quantidadeIngrediente = digitado === "" ? "" : (isMcg ? digitado / 1000 : digitado);
+        l.quantidadeElementar = calcElementarCentesimal(l.quantidadeIngrediente, l.purezaAtivo);
+        // Atualiza só o CAMPO IRMÃO diretamente no DOM (não re-renderiza
+        // o widget inteiro) — assim o Elementar reage em tempo real
+        // enquanto a pessoa digita o Ingrediente, igual ao original, sem
+        // o campo que está sendo digitado perder o foco/cursor.
+        const irmao = container.querySelector(`[data-centesimal-campo="quantidadeElementar"][data-centesimal-idx="${idx}"]`);
+        if (irmao) irmao.value = l.quantidadeElementar;
+      } else if (campo === "quantidadeElementar") {
+        l.quantidadeElementar = alvo.value === "" ? "" : Number(alvo.value);
+        l.quantidadeIngrediente = calcIngredienteCentesimal(l.quantidadeElementar, l.purezaAtivo);
+        const isMcg = l.unidadeEntrada === "mcg";
+        const irmao = container.querySelector(`[data-centesimal-campo="quantidadeIngrediente"][data-centesimal-idx="${idx}"]`);
+        if (irmao) irmao.value = l.quantidadeIngrediente === "" ? "" : (isMcg ? l.quantidadeIngrediente * 1000 : l.quantidadeIngrediente);
+      } else if (campo === "aceitacaoMin" || campo === "aceitacaoMax") {
+        l[campo] = parseFaixaCentesimalStr(alvo.value);
+      }
+      sincronizarTextareaCentesimal();
+    });
+
+    container.addEventListener("focusout", (e) => {
+      const alvo = e.target.closest('[data-centesimal-campo="componente"]');
+      if (!alvo) return;
+      const idx = Number(alvo.dataset.centesimalIdx);
+      const painel = container.querySelector(`[data-centesimal-sugestoes="${idx}"]`);
+      if (painel) setTimeout(() => { painel.hidden = true; }, 150);
+
+      // Ao sair do campo: se o texto bater EXATO (normalizado) com um
+      // nome do catálogo, aplica automaticamente — senão tenta a busca
+      // difusa como último recurso, exatamente como o original.
+      const l = centesimalEstado.linhas[idx];
+      if (!l.componente) return;
+      const termoNorm = normalizarTextoCalc(l.componente);
+      let cat = centesimalEstado.catalogoNutrientes.find((c) => normalizarTextoCalc(c.nome) === termoNorm);
+      if (!cat) cat = fuzzyEncontrarNutrienteCentesimal(l.componente, centesimalEstado.catalogoNutrientes);
+      if (!cat) return;
+      aplicarNutrienteNaLinha(idx, cat);
+      sincronizarTextareaCentesimal();
+      renderizarComposicaoCentesimalWidget();
+    });
+
+    container.addEventListener("change", (e) => {
+      if (e.target.closest("[data-centesimal-campo]") || e.target.matches("[data-centesimal-massa]")) {
+        renderizarComposicaoCentesimalWidget();
+      }
+    });
+  }
+
   function formatarTamanhoArquivo(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -7219,6 +7731,7 @@
       "memorial"
     );
     iniciarWidgetCalcNutricionais(memorial.calculos_nutricionais, podeEditar);
+    iniciarWidgetComposicaoCentesimal(memorial.composicao_centesimal, podeEditar);
   }
 
   function modalAssinarMemorial(memorialId) {

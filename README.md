@@ -5220,6 +5220,52 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 116, parte 2) Memorial Técnico — editor estruturado de
+  "Composição Centesimal" (campo `composicao_centesimal`, aba "3.
+  Formulação"). Segundo dos 5 editores estruturados da auditoria de
+  paridade. Continua sem migration — mesmo campo de texto, agora com JSON
+  estruturado (sem prefixo mágico desta vez, igual ao sistema original:
+  só o Cálculo Nutricional usa `__CALCV1__`).
+  - Cada linha: componente (com autocomplete do catálogo de nutrientes E
+    do catálogo de opções de cápsula), categoria (Ingrediente Ativo/
+    Excipiente/Corante/Cápsula, com cor própria), pureza (%), faixa de
+    aceitação, quantidade em mg **ou µg** (alterna a unidade de exibição
+    sem perder o valor, sempre guardado em mg por baixo), e o cálculo
+    bidirecional Elementar ⇄ Ingrediente (`Elementar = Ingrediente ×
+    Pureza% / 100`, e o inverso) — editar qualquer um dos dois recalcula
+    o outro em tempo real, sem perder o campo em edição.
+  - O percentual centesimal de cada linha nunca é digitado — é sempre
+    derivado da quantidade contra o total e **sempre fecha em exatamente
+    100,00%**, reproduzindo o algoritmo de arredondamento do original:
+    trunca cada % para baixo em 2 casas, depois distribui o resíduo de
+    ±0,01 nos menores/maiores valores primeiro, até fechar. Testado com 3
+    linhas (50 + 33,33 + 33,33 = 116,66 no total) confirmando que o
+    resíduo cai exatamente na linha esperada pelo algoritmo (empate entre
+    duas linhas idênticas resolvido pela ordem de entrada, como no
+    original).
+  - **Sincronização entre os dois editores** (item mais delicado da
+    especificação): toda edição na Composição Centesimal empurra o
+    "Elementar" de cada linha para o "Qtd. por porção" do Cálculo
+    Nutricional cujo nome bater (substring normalizado, nos dois
+    sentidos) — testado ao vivo: mudar o Elementar de uma linha
+    "Vitamina C" na Centesimal recalculou instantaneamente o % da dose
+    mínima no card correspondente do Cálculo Nutricional (de 200% para
+    88,89%, virando de ✓ para ⚠).
+  - Busca difusa por palavras-chave (item que tinha ficado de fora da
+    primeira versão desta entrega, adicionado a pedido do usuário — "não
+    mudar a lógica de nada"): quando o nome digitado não bate exato com
+    nenhum item do catálogo, tenta achar por palavras significativas em
+    comum (ex.: "arginina" casa com "cloridrato de l-arginina"),
+    desempatando por quantos campos regulatórios o candidato tem
+    preenchidos — só decide se não houver ambiguidade, replicando a regra
+    exata do original.
+  - Três recortes conscientes, disclosed: (1) sem a "autocura" de um bug
+    de truncamento em µg do sistema antigo — não existe dado legado
+    truncado aqui para curar; (2) reordenar com botões ▲▼, não
+    arrastar (resultado final idêntico); (3) sem a trava de "senha
+    master" no campo de pureza — decisão já registrada na Fase 115, o
+    Alphafitus usa a permissão real (`memoriais.editar`) em vez de uma
+    senha separada.
 - (Entregue na Fase 116, parte 1) Memorial Técnico — editor estruturado de
   "Cálculos Nutricionais" (o campo `calculos_nutricionais` do memorial
   deixa de ser texto livre e ganha uma tela própria com tabela, uma linha
