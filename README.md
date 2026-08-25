@@ -5220,6 +5220,31 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 116, parte 3) Memorial Técnico — editor estruturado de
+  "Ensaios Microbiológicos" (campo `ensaios_microbiologicos`, aba "7.
+  Estudos"). Terceiro dos 5 editores estruturados — o mais simples: a
+  especificação levantada do código original confirmou que **não existe
+  nenhuma lógica de conformidade** (sem comparação numérica, sem catálogo
+  de legislação com valores de referência, sem símbolo OK/⚠) — é uma
+  planilha de texto livre (n/c/m/M do plano amostral são sempre texto,
+  mesmo sendo semanticamente números), com 6 ensaios padrão (Coliformes
+  totais, Salmonella, Estafilococos, Bolores e leveduras, E. coli,
+  Enterobacteriaceae) e uma observação técnica, ambos pré-preenchidos com
+  o mesmo texto do sistema original.
+  - "Adicionar ensaio", remover linha (bloqueado na última linha
+    restante), "Restaurar padrões" (sobrescreve tudo, inclusive a
+    observação), e desfazer com histórico local (até 20 estados) — tanto
+    pelo atalho **Ctrl+Z** quanto por um botão "Desfazer", igual ao
+    original (só o "toast com botão embutido" do original virou um aviso
+    simples dentro do próprio card, já que este app não tem um sistema de
+    notificação com ação embutida — mesmo resultado final, forma de
+    avisar mais simples).
+  - Sem migration (mesmo campo de texto de sempre) e sem prefixo mágico no
+    JSON (igual à Composição Centesimal).
+  Testado ao vivo: os 6 ensaios padrão carregam certinho num memorial
+  novo, remover uma linha mostra o aviso e Ctrl+Z restaura exatamente a
+  mesma linha na mesma posição, e o conteúdo editado persiste e volta
+  idêntico depois de salvar/recarregar.
 - (Entregue na Fase 116, parte 2) Memorial Técnico — editor estruturado de
   "Composição Centesimal" (campo `composicao_centesimal`, aba "3.
   Formulação"). Segundo dos 5 editores estruturados da auditoria de

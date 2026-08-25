@@ -6524,7 +6524,7 @@
     { numero: 7, titulo: "Estudos", campos: [
         ["metodos_analiticos", "Métodos Analíticos", "textarea"],
         ["estabilidade_acelerada", "Estabilidade Acelerada", "textarea"],
-        ["ensaios_microbiologicos", "Ensaios Microbiológicos", "textarea"],
+        ["ensaios_microbiologicos", "Ensaios Microbiológicos", "ensaios-microbiologicos"],
         ["justificativas_tecnicas", "Justificativas Técnicas", "textarea"],
         ["conclusao", "Conclusão Técnica", "textarea"],
     ]},
@@ -6670,6 +6670,13 @@
         <label>${rotulo}</label>
         <textarea name="${campo}" data-centesimal-valor style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
         <div data-centesimal-widget></div>
+      </div>`;
+    }
+    if (tipo === "ensaios-microbiologicos") {
+      return `<div class="campo">
+        <label>${rotulo}</label>
+        <textarea name="${campo}" data-ensaios-micro-valor style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
+        <div data-ensaios-micro-widget></div>
       </div>`;
     }
     return `<div class="campo"><label>${rotulo}${botaoCatalogoHtml}</label>${
@@ -7500,6 +7507,204 @@
     });
   }
 
+  // =======================================================================
+  // EDITOR ESTRUTURADO — ENSAIOS MICROBIOLÓGICOS (Fase 116, parte 3)
+  //
+  // O mais simples dos 5 — confirmado na especificação do original: NÃO
+  // existe nenhuma lógica de conformidade (comparação numérica, catálogo
+  // de legislação com valores de referência, símbolo OK/não-OK) — é uma
+  // planilha de texto livre (n/c/m/M do plano amostral são sempre string,
+  // mesmo sendo semanticamente números), com 6 ensaios padrão pré-
+  // preenchidos e um campo de observação. O campo `ensaios_microbiologicos`
+  // continua texto puro no banco (sem migration); o conteúdo agora é JSON
+  // puro, sem prefixo mágico (igual à Composição Centesimal).
+  //
+  // Adaptação consciente: o "desfazer" do original usava um toast com
+  // botão de ação embutido; aqui uso o mensagem de flash já existente do
+  // app (sem botão embutido) — o atalho Ctrl+Z continua idêntico e é o
+  // caminho principal de desfazer no original também.
+  // =======================================================================
+  const ENSAIOS_MICRO_DEFAULT = {
+    linhas: [
+      { analise: "Coliformes totais", n: "5", c: "2", m: "Até 10 UFC/g", M: "Até 10³ UFC/g" },
+      { analise: "Salmonella", n: "10", c: "0", m: "Ausente", M: "—" },
+      { analise: "Estafilococos coagulase positiva", n: "5", c: "1", m: "Até 10 UFC/g", M: "Até 10² UFC/g" },
+      { analise: "Bolores e leveduras", n: "5", c: "1", m: "Até 10³ UFC/g", M: "Até 10⁴ UFC/g" },
+      { analise: "Escherichia coli", n: "5", c: "2", m: "Ausente", M: "—" },
+      { analise: "Enterobacteriaceae", n: "5", c: "0", m: "Até 10 UFC/g", M: "—" },
+    ],
+    observacao:
+      "Observação: os valores de n, c, m e M apresentados no plano microbiológico representam os " +
+      "critérios do plano amostral. Para fins de interpretação consolidada do estudo de estabilidade e " +
+      "apresentação de resultados, adotou-se no quadro-síntese o limite interno de aceitação aplicável ao " +
+      "produto, conforme procedimento interno e enquadramento regulatório da categoria.",
+  };
+  const ENSAIOS_MICRO_MAX_HISTORICO = 20;
+
+  function parseEnsaiosMicrobiologicos(valor) {
+    if (valor) {
+      try {
+        const parsed = JSON.parse(valor);
+        if (parsed && Array.isArray(parsed.linhas)) return parsed;
+      } catch { /* segue pro default */ }
+    }
+    return JSON.parse(JSON.stringify(ENSAIOS_MICRO_DEFAULT)); // cópia funda, nunca o objeto compartilhado
+  }
+  function serializeEnsaiosMicrobiologicos(dados) {
+    return JSON.stringify(dados);
+  }
+
+  let ensaiosMicroEstado = null; // { dados: {linhas, observacao}, historico: [], podeEditar }
+
+  function sincronizarTextareaEnsaiosMicro() {
+    const textarea = document.querySelector("[data-ensaios-micro-valor]");
+    if (!textarea) return;
+    textarea.value = serializeEnsaiosMicrobiologicos(ensaiosMicroEstado.dados);
+  }
+
+  function empilharHistoricoEnsaiosMicro() {
+    ensaiosMicroEstado.historico = [...ensaiosMicroEstado.historico.slice(-ENSAIOS_MICRO_MAX_HISTORICO), JSON.parse(JSON.stringify(ensaiosMicroEstado.dados))];
+  }
+
+  function ajustarAlturaTextareaAuto(el) {
+    el.style.height = "auto";
+    el.style.height = el.scrollHeight + "px";
+  }
+
+  function renderizarEnsaiosMicroWidget() {
+    const container = document.querySelector("[data-ensaios-micro-widget]");
+    if (!container) return;
+    const { dados, podeEditar } = ensaiosMicroEstado;
+
+    if (!podeEditar) {
+      const linhasHtml = dados.linhas.map((l, i) => `<tr style="background:${i % 2 === 0 ? "transparent" : "var(--fundo-suave, rgba(0,0,0,0.03))"};">
+        <td style="font-weight:600;">${escapeHtml(l.analise || "—")}</td>
+        <td class="mono" style="text-align:center;">${escapeHtml(l.n || "")}</td>
+        <td class="mono" style="text-align:center;">${escapeHtml(l.c || "")}</td>
+        <td class="mono" style="text-align:center;">${escapeHtml(l.m || "")}</td>
+        <td class="mono" style="text-align:center;">${escapeHtml(l.M || "")}</td>
+      </tr>`).join("");
+      container.innerHTML = `<table class="calc-tabela-resultado">
+        <thead><tr><th>Análises Microbiológicas</th><th>n</th><th>c</th><th>m (mínimo aceitável)</th><th>M (máximo aceitável)</th></tr></thead>
+        <tbody>${linhasHtml}</tbody>
+      </table>
+      ${dados.observacao ? `<p class="texto-suave" style="font-style:italic; font-size:12px; margin-top:8px; padding-top:8px; border-top:1px solid var(--borda);">${escapeHtml(dados.observacao)}</p>` : ""}`;
+      return;
+    }
+
+    const linhasHtml = dados.linhas.map((l, idx) => `<tr>
+      <td style="min-width:220px;"><textarea data-ensaios-campo="analise" data-ensaios-idx="${idx}" rows="1" style="resize:none; overflow:hidden; min-height:32px;" placeholder="Nome do ensaio">${escapeHtml(l.analise || "")}</textarea></td>
+      <td><input class="mono" data-ensaios-campo="n" data-ensaios-idx="${idx}" value="${escapeHtml(l.n || "")}" style="width:50px; text-align:center;"></td>
+      <td><input class="mono" data-ensaios-campo="c" data-ensaios-idx="${idx}" value="${escapeHtml(l.c || "")}" style="width:50px; text-align:center;"></td>
+      <td><input class="mono" data-ensaios-campo="m" data-ensaios-idx="${idx}" value="${escapeHtml(l.m || "")}" style="width:140px;"></td>
+      <td><input class="mono" data-ensaios-campo="M" data-ensaios-idx="${idx}" value="${escapeHtml(l.M || "")}" style="width:140px;"></td>
+      <td>${dados.linhas.length > 1 ? `<button type="button" class="botao-icone" title="Remover" data-ensaios-acao="remover" data-ensaios-idx="${idx}">🗑</button>` : ""}</td>
+    </tr>`).join("");
+
+    container.innerHTML = `
+      <p class="texto-suave" data-ensaios-aviso style="min-height:16px; font-size:12.5px;"></p>
+      <div style="overflow-x:auto;">
+        <table class="calc-tabela-resultado">
+          <thead><tr><th>Análises Microbiológicas</th><th>n</th><th>c</th><th>m (mín. aceitável)</th><th>M (máx. aceitável)</th><th></th></tr></thead>
+          <tbody>${linhasHtml}</tbody>
+        </table>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">
+        <button type="button" class="botao secundario pequeno" data-ensaios-acao="adicionar">+ Adicionar ensaio</button>
+        <button type="button" class="botao secundario pequeno" data-ensaios-acao="desfazer" ${ensaiosMicroEstado.historico.length === 0 ? "disabled" : ""}>↩ Desfazer (Ctrl+Z)</button>
+        <button type="button" class="botao secundario pequeno" data-ensaios-acao="restaurar-padroes" style="margin-left:auto;">↺ Restaurar padrões</button>
+      </div>
+      <div class="campo" style="margin-top:10px;">
+        <label>Observação</label>
+        <textarea data-ensaios-observacao rows="3">${escapeHtml(dados.observacao || "")}</textarea>
+      </div>`;
+    container.querySelectorAll("textarea[data-ensaios-campo]").forEach(ajustarAlturaTextareaAuto);
+  }
+
+  function mostrarAvisoEnsaios(texto) {
+    const aviso = document.querySelector("[data-ensaios-aviso]");
+    if (!aviso) return;
+    aviso.textContent = texto;
+    setTimeout(() => { if (aviso.textContent === texto) aviso.textContent = ""; }, 4000);
+  }
+
+  function iniciarWidgetEnsaiosMicrobiologicos(valorInicial, podeEditar) {
+    const container = document.querySelector("[data-ensaios-micro-widget]");
+    if (!container) return;
+    ensaiosMicroEstado = { dados: parseEnsaiosMicrobiologicos(valorInicial), historico: [], podeEditar };
+    renderizarEnsaiosMicroWidget();
+    if (!podeEditar) return;
+
+    function desfazer() {
+      if (!ensaiosMicroEstado.historico.length) return false;
+      ensaiosMicroEstado.dados = ensaiosMicroEstado.historico.pop();
+      sincronizarTextareaEnsaiosMicro();
+      renderizarEnsaiosMicroWidget();
+      return true;
+    }
+
+    container.addEventListener("click", (e) => {
+      const alvo = e.target.closest("[data-ensaios-acao]");
+      if (!alvo) return;
+      const acao = alvo.dataset.ensaiosAcao;
+      if (acao === "desfazer") {
+        if (desfazer()) mostrarAvisoEnsaios("Ação desfeita.");
+        return;
+      }
+      empilharHistoricoEnsaiosMicro();
+      let aviso = null;
+      if (acao === "adicionar") {
+        ensaiosMicroEstado.dados.linhas.push({ analise: "", n: "5", c: "0", m: "", M: "" });
+      } else if (acao === "remover") {
+        const idx = Number(alvo.dataset.ensaiosIdx);
+        if (ensaiosMicroEstado.dados.linhas.length > 1) {
+          ensaiosMicroEstado.dados.linhas.splice(idx, 1);
+          aviso = "Linha removida — Ctrl+Z para desfazer.";
+        }
+      } else if (acao === "restaurar-padroes") {
+        ensaiosMicroEstado.dados = JSON.parse(JSON.stringify(ENSAIOS_MICRO_DEFAULT));
+        aviso = "Ensaios restaurados ao padrão.";
+      } else {
+        ensaiosMicroEstado.historico.pop(); // não era uma ação que muda dado — desempilha de volta
+        return;
+      }
+      sincronizarTextareaEnsaiosMicro();
+      renderizarEnsaiosMicroWidget();
+      if (aviso) mostrarAvisoEnsaios(aviso);
+    });
+
+    container.addEventListener("input", (e) => {
+      if (e.target.matches("[data-ensaios-observacao]")) {
+        ensaiosMicroEstado.dados.observacao = e.target.value;
+        sincronizarTextareaEnsaiosMicro();
+        return;
+      }
+      const alvo = e.target.closest("[data-ensaios-campo]");
+      if (!alvo) return;
+      const campo = alvo.dataset.ensaiosCampo;
+      const idx = Number(alvo.dataset.ensaiosIdx);
+      ensaiosMicroEstado.dados.linhas[idx][campo] = alvo.value;
+      if (campo === "analise") ajustarAlturaTextareaAuto(alvo);
+      sincronizarTextareaEnsaiosMicro();
+    });
+
+    // Ctrl+Z (sem Shift) desfaz — mesmo atalho do original, só ativo
+    // enquanto esta aba/widget existir no DOM (removido se a tela mudar,
+    // já que o listener some junto com o container ao renderizar outra
+    // rota — este listener fica preso ao `document`, então precisa
+    // checar se o widget ainda está montado antes de agir).
+    document.addEventListener("keydown", function ouvinteCtrlZEnsaios(e) {
+      if (!document.body.contains(container)) {
+        document.removeEventListener("keydown", ouvinteCtrlZEnsaios);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+        e.preventDefault();
+        if (desfazer()) mostrarAvisoEnsaios("Ação desfeita.");
+      }
+    });
+  }
+
   function formatarTamanhoArquivo(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -7732,6 +7937,7 @@
     );
     iniciarWidgetCalcNutricionais(memorial.calculos_nutricionais, podeEditar);
     iniciarWidgetComposicaoCentesimal(memorial.composicao_centesimal, podeEditar);
+    iniciarWidgetEnsaiosMicrobiologicos(memorial.ensaios_microbiologicos, podeEditar);
   }
 
   function modalAssinarMemorial(memorialId) {
