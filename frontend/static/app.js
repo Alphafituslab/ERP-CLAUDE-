@@ -6486,9 +6486,9 @@
         ["ingredientes_ativos", "Ingredientes Ativos", "textarea"],
         ["excipientes", "Excipientes", "textarea"],
         ["composicao_capsula", "Composição da Cápsula", "textarea"],
-        ["advertencias", "Advertências", "textarea"],
-        ["armazenamento", "Armazenamento", "textarea"],
-        ["modo_uso", "Modo de Uso", "textarea"],
+        ["advertencias", "Advertências", "seletor-catalogo"],
+        ["armazenamento", "Armazenamento", "seletor-catalogo"],
+        ["modo_uso", "Modo de Uso", "seletor-catalogo"],
         ["temperatura", "Temperatura do Estudo", "input"],
         ["umidade_relativa", "Umidade Relativa do Estudo", "input"],
         ["periodo_estudo", "Período do Estudo", "input"],
@@ -6513,23 +6513,23 @@
         ["calculo_quantidade", "Cálculo de Quantidade", "textarea"],
     ]},
     { numero: 4, titulo: "Metodologias", campos: [
-        ["metodologias_aplicadas", "Metodologias Aplicadas", "textarea"],
+        ["metodologias_aplicadas", "Metodologias Aplicadas", "seletor-catalogo"],
     ]},
     { numero: 5, titulo: "Cálculos", campos: [
         ["calculos_nutricionais", "Cálculos Nutricionais", "calc-nutricionais"],
     ]},
     { numero: 6, titulo: "Alegações", campos: [
-        ["alegacoes", "Alegações", "textarea"],
+        ["alegacoes", "Alegações", "seletor-catalogo"],
     ]},
     { numero: 7, titulo: "Estudos", campos: [
         ["metodos_analiticos", "Métodos Analíticos", "textarea"],
         ["estabilidade_acelerada", "Estabilidade Acelerada", "textarea"],
         ["ensaios_microbiologicos", "Ensaios Microbiológicos", "ensaios-microbiologicos"],
-        ["justificativas_tecnicas", "Justificativas Técnicas", "textarea"],
-        ["conclusao", "Conclusão Técnica", "textarea"],
+        ["justificativas_tecnicas", "Justificativas Técnicas", "seletor-catalogo"],
+        ["conclusao", "Conclusão Técnica", "seletor-catalogo"],
     ]},
     { numero: 8, titulo: "Legislação", campos: [
-        ["legislacao_aplicavel", "Legislação Aplicável", "textarea"],
+        ["legislacao_aplicavel", "Legislação Aplicável", "seletor-catalogo"],
         ["observacoes", "Observações", "textarea"],
     ]},
     { numero: 9, titulo: "Referências", campos: [
@@ -6677,6 +6677,13 @@
         <label>${rotulo}</label>
         <textarea name="${campo}" data-ensaios-micro-valor style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
         <div data-ensaios-micro-widget></div>
+      </div>`;
+    }
+    if (tipo === "seletor-catalogo") {
+      return `<div class="campo">
+        <label>${rotulo}</label>
+        <textarea name="${campo}" data-seletor-catalogo-valor="${campo}" style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
+        <div data-seletor-catalogo-widget="${campo}"></div>
       </div>`;
     }
     return `<div class="campo"><label>${rotulo}${botaoCatalogoHtml}</label>${
@@ -7705,6 +7712,215 @@
     });
   }
 
+  // =======================================================================
+  // WIDGET GENÉRICO — SELETOR MÚLTIPLO/ÚNICO DE CATÁLOGO (Fase 116, parte 4)
+  //
+  // Achado comparando com o site original de verdade (a pedido do
+  // usuário, depois de notar `{"selecionadas":[...]}` bruto aparecendo em
+  // "Advertências" após a importação): 8 campos do memorial que a
+  // auditoria de paridade tinha classificado como "texto livre com botão
+  // + Catálogo" são, na verdade, campos ESTRUTURADOS — uma seleção
+  // (múltipla ou única) de itens do catálogo, guardada como JSON puro
+  // (sem prefixo mágico), no formato `{"selecionadas":[{...}]}` ou
+  // `{"selecionado": {...} | null}`. Nenhuma migration necessária — o
+  // JSON já importado está no formato CERTO desde o início (é assim que
+  // o sistema original grava); só faltava este widget para interpretar
+  // e editar em vez de mostrar o JSON cru.
+  //
+  // Em vez de 8 componentes quase-idênticos, um widget genérico
+  // parametrizado por campo — cada entrada de CONFIG_SELETORES_CATALOGO
+  // descreve: de qual catálogo os itens vêm, se a seleção é múltipla ou
+  // única, como mostrar um item (texto), e quais campos do item do
+  // catálogo ficam "congelados" dentro do memorial ao selecionar (para o
+  // memorial continuar mostrando o texto certo mesmo se o catálogo mudar
+  // depois — mesmo espírito do original).
+  // =======================================================================
+  function _combinarLinhasNaoVazias(partes, separador) {
+    return partes.filter((p) => p !== null && p !== undefined && String(p).trim() !== "").join(separador);
+  }
+
+  const CONFIG_SELETORES_CATALOGO = {
+    advertencias: {
+      catalogo: "advertencias", multipla: true,
+      textoItem: (i) => i.texto,
+      campoEmbutido: (i) => ({ texto: i.texto }),
+    },
+    armazenamento: {
+      catalogo: "armazenamento", multipla: true,
+      textoItem: (i) => i.texto,
+      campoEmbutido: (i) => ({ texto: i.texto }),
+    },
+    modo_uso: {
+      catalogo: "modo_uso", multipla: false,
+      textoItem: (i) => i.descricao,
+      campoEmbutido: (i) => ({ descricao: i.descricao, tipo: i.tipo }),
+    },
+    alegacoes: {
+      catalogo: "alegacoes", multipla: true,
+      textoItem: (i) => _combinarLinhasNaoVazias([i.ativo_nutricional || i.ativo, i.alegacao], ": "),
+      campoEmbutido: (i) => ({ ativo: i.ativo_nutricional, alegacao: i.alegacao, referencia: i.referencia }),
+    },
+    legislacao_aplicavel: {
+      catalogo: "legislacoes", multipla: true,
+      textoItem: (i) => _combinarLinhasNaoVazias([i.codigo, i.titulo], " — "),
+      campoEmbutido: (i) => ({ codigo: i.codigo, titulo: i.titulo, categoria: i.categoria }),
+    },
+    metodologias_aplicadas: {
+      catalogo: "metodologias", multipla: true,
+      textoItem: (i) => i.nome,
+      // Mesma lógica de "buildAutoDescricao" do original: junta
+      // descrição + norma + princípio + aplicação num texto só ao
+      // selecionar, em vez de guardar só a referência solta do catálogo.
+      campoEmbutido: (i) => ({
+        nome: i.nome,
+        descricao: _combinarLinhasNaoVazias(
+          [i.descricao, i.norma ? `Metodologia: ${i.norma}` : "", i.principio ? `Princípio: ${i.principio}` : "", i.aplicacao ? `Aplicação: ${i.aplicacao}` : ""],
+          "\n\n"
+        ),
+      }),
+    },
+    justificativas_tecnicas: {
+      catalogo: "justificativas", multipla: true,
+      textoItem: (i) => i.titulo,
+      campoEmbutido: (i) => ({ titulo: i.titulo, texto: i.texto }),
+    },
+    conclusao: {
+      catalogo: "justificativas", multipla: true,
+      textoItem: (i) => i.titulo,
+      campoEmbutido: (i) => ({ titulo: i.titulo, texto: i.texto }),
+    },
+  };
+
+  let seletoresCatalogoEstado = {}; // { [campo]: { dados, catalogo, podeEditar } }
+
+  function _listaAtualSeletor(campo) {
+    const config = CONFIG_SELETORES_CATALOGO[campo];
+    const dados = seletoresCatalogoEstado[campo].dados;
+    return config.multipla ? dados.selecionadas : (dados.selecionado ? [dados.selecionado] : []);
+  }
+
+  function parseSelecaoCatalogo(campo, valor) {
+    const config = CONFIG_SELETORES_CATALOGO[campo];
+    if (config.multipla) {
+      if (valor) {
+        try {
+          const p = JSON.parse(valor);
+          if (p && Array.isArray(p.selecionadas)) return p;
+        } catch { /* segue pro fallback */ }
+        // Fallback legado: um texto solto vira um item pseudo, igual ao
+        // original faz para dado de antes desses campos virarem estruturados.
+        if (typeof valor === "string" && valor.trim()) {
+          return { selecionadas: [{ id: "__legado__", texto: valor.trim(), titulo: "Texto legado", ativo: "Texto legado", codigo: "Texto legado", nome: "Texto legado", descricao: valor.trim(), alegacao: valor.trim(), texto_: valor.trim() }] };
+        }
+      }
+      return { selecionadas: [] };
+    }
+    if (valor) {
+      try {
+        const p = JSON.parse(valor);
+        if (p && (p.selecionado === null || (p.selecionado && p.selecionado.id !== undefined))) return p;
+      } catch { /* segue pro fallback */ }
+    }
+    return { selecionado: null };
+  }
+
+  function sincronizarTextareaSeletor(campo) {
+    const textarea = document.querySelector(`[data-seletor-catalogo-valor="${campo}"]`);
+    if (!textarea) return;
+    textarea.value = JSON.stringify(seletoresCatalogoEstado[campo].dados);
+  }
+
+  function renderizarSeletorCatalogo(campo) {
+    const container = document.querySelector(`[data-seletor-catalogo-widget="${campo}"]`);
+    if (!container) return;
+    const config = CONFIG_SELETORES_CATALOGO[campo];
+    const estado = seletoresCatalogoEstado[campo];
+    const selecionados = _listaAtualSeletor(campo);
+
+    if (!estado.podeEditar) {
+      container.innerHTML = selecionados.length
+        ? `<ul class="lista-simples">${selecionados.map((i) => `<li>${escapeHtml(config.textoItem(i) || "")}</li>`).join("")}</ul>`
+        : '<p class="texto-suave" style="font-style:italic;">Nenhum item selecionado.</p>';
+      return;
+    }
+
+    const idsSelecionados = new Set(selecionados.map((i) => String(i.id)));
+    const selecionadosHtml = selecionados.length
+      ? selecionados.map((i) => `<div class="seletor-catalogo-selecionado">
+          <span>${escapeHtml(config.textoItem(i) || "")}</span>
+          <button type="button" class="botao-icone" title="Remover" data-seletor-acao="remover" data-seletor-campo="${campo}" data-seletor-id="${escapeHtml(String(i.id))}">✕</button>
+        </div>`).join("")
+      : '<p class="texto-suave" style="font-size:12.5px;">Nada selecionado ainda.</p>';
+    const opcoesHtml = estado.catalogo.map((c) => {
+      const marcado = idsSelecionados.has(String(c.id));
+      return `<label class="seletor-catalogo-opcao">
+        <input type="${config.multipla ? "checkbox" : "radio"}" name="seletor-${campo}"
+          data-seletor-acao="alternar" data-seletor-campo="${campo}" data-seletor-catalogo-id="${escapeHtml(String(c.id))}" ${marcado ? "checked" : ""}>
+        <span>${escapeHtml(config.textoItem(c) || "")}</span>
+      </label>`;
+    }).join("");
+
+    container.innerHTML = `
+      <div class="seletor-catalogo-selecionados">${selecionadosHtml}</div>
+      <details class="seletor-catalogo-lista">
+        <summary>Escolher do catálogo (${estado.catalogo.length} ${estado.catalogo.length === 1 ? "item" : "itens"})</summary>
+        <div class="seletor-catalogo-opcoes">${opcoesHtml || '<p class="texto-suave" style="font-size:12.5px;">Catálogo vazio.</p>'}</div>
+      </details>`;
+  }
+
+  function iniciarSeletorCatalogo(campo, valorInicial, podeEditar) {
+    const container = document.querySelector(`[data-seletor-catalogo-widget="${campo}"]`);
+    if (!container) return;
+    const config = CONFIG_SELETORES_CATALOGO[campo];
+    seletoresCatalogoEstado[campo] = { dados: parseSelecaoCatalogo(campo, valorInicial), catalogo: [], podeEditar };
+    renderizarSeletorCatalogo(campo);
+    if (!podeEditar) return;
+
+    chamarApi(`/memorial/catalogos/${config.catalogo}`).then((itens) => {
+      seletoresCatalogoEstado[campo].catalogo = itens.filter((i) => i.ativo);
+      renderizarSeletorCatalogo(campo);
+    }).catch(() => { /* segue sem opções do catálogo se a chamada falhar */ });
+
+    container.addEventListener("change", (e) => {
+      const alvo = e.target.closest('[data-seletor-acao="alternar"]');
+      if (!alvo) return;
+      const estado = seletoresCatalogoEstado[campo];
+      const item = estado.catalogo.find((c) => String(c.id) === alvo.dataset.seletorCatalogoId);
+      if (!item) return;
+      const embutido = { id: item.id, ...config.campoEmbutido(item) };
+      if (config.multipla) {
+        if (alvo.checked) {
+          if (!estado.dados.selecionadas.some((s) => String(s.id) === String(item.id))) {
+            estado.dados.selecionadas.push(embutido);
+          }
+        } else {
+          estado.dados.selecionadas = estado.dados.selecionadas.filter((s) => String(s.id) !== String(item.id));
+        }
+      } else {
+        estado.dados.selecionado = alvo.checked ? embutido : null;
+      }
+      sincronizarTextareaSeletor(campo);
+      renderizarSeletorCatalogo(campo);
+    });
+
+    container.addEventListener("click", (e) => {
+      const alvo = e.target.closest('[data-seletor-acao="remover"]');
+      if (!alvo) return;
+      const estado = seletoresCatalogoEstado[campo];
+      if (config.multipla) {
+        estado.dados.selecionadas = estado.dados.selecionadas.filter((s) => String(s.id) !== alvo.dataset.seletorId);
+      } else {
+        estado.dados.selecionado = null;
+      }
+      sincronizarTextareaSeletor(campo);
+      renderizarSeletorCatalogo(campo);
+    });
+  }
+
+  function iniciarTodosSeletoresCatalogo(memorial, podeEditar) {
+    Object.keys(CONFIG_SELETORES_CATALOGO).forEach((campo) => iniciarSeletorCatalogo(campo, memorial[campo], podeEditar));
+  }
+
   function formatarTamanhoArquivo(bytes) {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -7938,6 +8154,7 @@
     iniciarWidgetCalcNutricionais(memorial.calculos_nutricionais, podeEditar);
     iniciarWidgetComposicaoCentesimal(memorial.composicao_centesimal, podeEditar);
     iniciarWidgetEnsaiosMicrobiologicos(memorial.ensaios_microbiologicos, podeEditar);
+    iniciarTodosSeletoresCatalogo(memorial, podeEditar);
   }
 
   function modalAssinarMemorial(memorialId) {

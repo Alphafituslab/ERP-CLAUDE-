@@ -5220,6 +5220,40 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 116, parte 4) Memorial Técnico — widget genérico de
+  seleção de catálogo, para 8 campos que a auditoria de paridade da Fase
+  115 tinha classificado errado como "texto livre com botão + Catálogo".
+  Relato do usuário, com print: depois da importação, o campo
+  "Advertências" mostrava `{"selecionadas":[{"id":9,"texto":"..."}]}`
+  cru em vez de texto legível. Comparando diretamente com o sistema
+  original ao vivo (login temporário cedido pelo usuário, só para
+  conferência — nenhum dado de lá foi alterado), confirmei que
+  **Advertências, Armazenamento, Modo de Uso, Alegações, Legislação
+  Aplicável, Metodologias Aplicadas, Justificativas Técnicas e
+  Conclusão** são todos campos ESTRUTURADOS (uma seleção — múltipla ou
+  única — de itens do catálogo, `{"selecionadas":[...]}` ou
+  `{"selecionado": {...}|null}`), não texto livre. **Nenhum dado precisou
+  ser corrigido** — o JSON já importado estava no formato certo desde o
+  início (é assim que o sistema original grava); faltava só a tela para
+  interpretar e editar em vez de mostrar o JSON cru.
+  - Em vez de 8 componentes quase-idênticos, um widget genérico
+    parametrizado por campo (`CONFIG_SELETORES_CATALOGO`, `app.js`) — cada
+    entrada descreve de qual catálogo os itens vêm, se a seleção é
+    múltipla (checkbox) ou única (rádio, caso do Modo de Uso), como
+    mostrar um item, e quais campos ficam "congelados" no memorial ao
+    selecionar (mesmo espírito do original: o memorial continua mostrando
+    o texto certo mesmo se o catálogo mudar depois).
+  - "Metodologias Aplicadas" reproduz a mesma lógica de "descrição
+    automática" do original (junta descrição + norma + princípio +
+    aplicação num texto só ao selecionar, em vez de só guardar uma
+    referência solta ao catálogo).
+  - Fallback para dado legado (texto solto, de antes de qualquer desses
+    campos existir): vira um item pseudo-selecionado em vez de sumir ou
+    dar erro — mesmo espírito do original.
+  Testado ao vivo contra dados reais já importados (memorial
+  CERT-AF-1205.2025): os 8 campos renderizam a lista legível
+  corretamente, adicionar/remover item funciona, e salvar/recarregar
+  confirma que o JSON persiste e volta idêntico.
 - (Corrigido) Ícone do modo bandeja (`AlphafitusOS.exe`) às vezes abria o
   navegador ANTES do servidor terminar de subir, mostrando um erro de
   conexão que só sumia se a pessoa recarregasse a página. Relato do
