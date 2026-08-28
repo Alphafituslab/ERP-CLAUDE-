@@ -766,6 +766,17 @@ tr.linha-selecionada td { background: #e6eef7; }
 .memorial-nav a:hover { background: rgba(255,255,255,0.06); color: #fff; }
 .memorial-nav a.ativo { background: #24354c; color: #fff; font-weight: 600; }
 .memorial-content { flex: 1; min-width: 0; }
+/* Cabeçalho da tela de detalhe do memorial (Fase 116 parte 5) — título fixo
+   "Memorial Técnico" + selo, barra de ações, depois o código (texto suave)
+   e o nome do produto — nessa ordem, igual ao sistema original. */
+.memorial-cabecalho { margin: 12px 0 16px; }
+.memorial-cabecalho h2 { margin: 0 0 10px; }
+.memorial-cabecalho-acoes { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.memorial-cabecalho-produto { font-size: 15px; font-weight: 600; margin-top: 2px; }
+/* Campo em modo leitura (Fase 116 parte 5) — mesmo espaçamento vertical
+   usado pelos <div class="campo"> editáveis, só sem borda de input. */
+.campo-leitura { margin-bottom: 14px; }
+.campo-leitura .rotulo { display: block; color: var(--texto-suave); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; margin-bottom: 4px; }
 /* Grupo colapsável "Catálogos" dentro da navMemorial (Fase 26) — mesmo
    espaçamento/cor dos links soltos acima, só com um <details> nativo em
    vez de JS próprio para abrir/fechar. */

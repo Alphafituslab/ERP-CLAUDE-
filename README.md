@@ -5220,6 +5220,43 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 116, parte 5) Memorial Técnico — cabeçalho da tela de
+  detalhe refeito para bater 100% com o sistema original, e a tela passou a
+  abrir em modo LEITURA por padrão em vez de sempre editável. Pedido do
+  usuário, com print do cabeçalho original: "pode arrumar tudo deixar tudo
+  100% igual. inclusive a parte do print".
+  - **Cabeçalho**: título fixo "Memorial Técnico" + selo de status, uma
+    barra de botões (+ Novo Memorial / ✏ Editar / Alterar Status / ⬇
+    Exportar PDF / 🗑 excluir — ícone sozinho, vermelho, só quando o
+    memorial está em rascunho), depois o código em texto suave/menor, e só
+    então o nome do produto — nessa ordem exata, igual ao print. Todas as
+    ações reaproveitam handlers que já existiam (`novo-memorial`,
+    `baixar-pdf-completo-memorial`, `excluir-memorial`); só "Alterar
+    Status" mudou de lugar — antes era um formulário sempre visível dentro
+    do cartão de detalhe, agora é um botão que abre um modal com o mesmo
+    form/handler (`alterar-status-memorial`) de antes, sem tocar na lógica
+    de salvar.
+  - **Modo leitura por padrão**: a tela original só fica editável depois de
+    clicar em "Editar" — até então mostra os campos como texto estático.
+    O AlphafitusOS antes mostrava todo campo já editável direto (para quem
+    tinha permissão), sem essa etapa. Agora existe um estado
+    `modoEdicaoMemorialAtivo` (por aba/memorial, reseta ao abrir um
+    memorial novo) que controla os dois modos: em leitura, os campos de
+    texto simples viram `<div>` estático e os 4 widgets estruturados
+    (Cálculos Nutricionais, Composição Centesimal, Ensaios
+    Microbiológicos, os 8 seletores de catálogo da parte 4) já sabiam
+    renderizar em modo leitura sozinhos — só passaram a receber
+    `podeEditar && modoEdicaoMemorialAtivo` em vez de `podeEditar` puro. O
+    botão "✏ Editar" vira "✕ Cancelar edição" e alterna os dois modos sem
+    perder a aba em que a pessoa estava.
+  - Testado ao vivo, num servidor de desenvolvimento à parte apontando
+    para uma CÓPIA descartável do banco de produção (nunca o banco real):
+    abertura em modo leitura sem nenhum JSON cru visível, clique em
+    "Editar" liga a edição em todos os campos (inclusive os 4 widgets),
+    edição + salvar + confirmação de que o valor persiste, "Cancelar
+    edição" volta pro modo leitura limpo, modal de "Alterar Status" abre
+    com o status atual pré-selecionado, e o botão de excluir só aparece em
+    memoriais com status "rascunho".
 - (Entregue na Fase 116, parte 4) Memorial Técnico — widget genérico de
   seleção de catálogo, para 8 campos que a auditoria de paridade da Fase
   115 tinha classificado errado como "texto livre com botão + Catálogo".

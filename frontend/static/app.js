@@ -6647,7 +6647,25 @@
     return (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
   }
 
-  function campoMemorialHtml(campo, rotulo, tipo, valorAtual, mostrarBotaoCatalogo) {
+  function campoMemorialHtml(campo, rotulo, tipo, valorAtual, mostrarBotaoCatalogo, somenteLeitura) {
+    // Fase 116 parte 5 — no modo LEITURA (padrão de abertura da tela, igual
+    // ao original), um campo simples de texto/input vira texto estático em
+    // vez de um <input>/<textarea> editável — os 4 widgets especiais
+    // (calc-nutricionais, composicao-centesimal, ensaios-microbiologicos,
+    // seletor-catalogo) já controlam o próprio modo leitura sozinhos, via
+    // o parâmetro `podeEditar` passado na hora de iniciar cada um lá em
+    // `renderMemorialDetalhe` — não precisam de nada especial aqui.
+    if (somenteLeitura && (tipo === "textarea" || tipo === "input")) {
+      const vazio = valorAtual === null || valorAtual === undefined || valorAtual === "";
+      return `<div class="campo-leitura">
+        <span class="rotulo">${rotulo}</span><br>
+        ${vazio
+          ? '<span class="texto-suave">—</span>'
+          : tipo === "textarea"
+            ? `<div style="white-space:pre-wrap;">${escapeHtml(valorAtual)}</div>`
+            : escapeHtml(valorAtual)}
+      </div>`;
+    }
     // Fase 29: campos mapeados em CAMPO_MEMORIAL_PARA_CATALOGO ganham um
     // botão "+ Catálogo" ao lado do rótulo — só quando o chamador pedir
     // (mostrarBotaoCatalogo), porque campoMemorialHtml também é usada para
@@ -6697,6 +6715,14 @@
   // string do resto do app — este widget re-desenha só o próprio
   // container via DOM direto, para não perder o que foi digitado nas
   // OUTRAS abas do memorial, que continuam no mesmo <form>) ----
+  // Fase 116 parte 5 — no sistema original, a tela do memorial abre em modo
+  // LEITURA por padrão (campos como texto estático), com um botão "Editar"
+  // que vira a tela inteira pra edição — não campos sempre editáveis feito
+  // até aqui. Reseta pra leitura toda vez que se navega pra um memorial
+  // novo (`renderMemorialDetalhe` sem pedir explicitamente pra manter);
+  // o botão "Editar"/trocar de aba preserva o estado atual.
+  let modoEdicaoMemorialAtivo = false;
+
   let calcNutricionaisEstado = null; // { linhas, colapsados: Set, catalogo, podeEditar }
 
   function sincronizarTextareaCalcNutricionais() {
@@ -7944,10 +7970,6 @@
     const podePadronizar = temPermissao("memoriais", "padronizar");
     const jaAssinei = assinaturas.some((a) => a.usuario_id === state.usuarioAtual.id);
 
-    const opcoesStatus = Object.keys(STATUS_MEMORIAL_LABEL)
-      .map((s) => `<option value="${s}" ${s === memorial.status ? "selected" : ""}>${STATUS_MEMORIAL_LABEL[s]}</option>`)
-      .join("");
-
     // ---- Navegação das 14 abas (10 numeradas + 4 com nome) ----
     const navAbasHtml = `<div class="memorial-abas-nav">
       ${ABAS_MEMORIAL.map(
@@ -7972,19 +7994,29 @@
     // ver a lista do catálogo (sem `memorial_catalogos.visualizar`, a API
     // devolveria 403).
     const podeUsarCatalogosNoMemorial = podeEditar && temPermissao("memorial_catalogos", "visualizar");
-    const conteudoAbaZero = ABAS_MEMORIAL[0].campos.map(([c, r, t]) => campoMemorialHtml(c, r, t, memorial[c], podeUsarCatalogosNoMemorial)).join("");
+    // Fase 116 parte 5 — a tela abre em modo LEITURA por padrão (igual ao
+    // sistema original); só vira editável depois de clicar em "✏ Editar"
+    // no cabeçalho, o que liga `modoEdicaoMemorialAtivo`.
+    const emModoEdicao = podeEditar && modoEdicaoMemorialAtivo;
+    const somenteLeituraCampos = !emModoEdicao;
+    const conteudoAbaZero = ABAS_MEMORIAL[0].campos.map(([c, r, t]) => campoMemorialHtml(c, r, t, memorial[c], podeUsarCatalogosNoMemorial, somenteLeituraCampos)).join("");
     const abasNumeradasHtml = ABAS_MEMORIAL.map(
       (a) => `<div class="memorial-aba-conteudo" data-aba-conteudo="${a.numero}" ${String(a.numero) === abaInicial ? "" : "hidden"}>
         ${
           a.numero === 1
-            ? `<div class="linha-detalhe">
-                 <div class="campo" style="flex:1;"><label>Início do estudo</label><input name="data_inicio" type="date" value="${escapeHtml(memorial.data_inicio)}" required></div>
-                 <div class="campo" style="flex:1;"><label>Fim previsto do estudo</label><input name="data_fim" type="date" value="${escapeHtml(memorial.data_fim)}" required></div>
-               </div>`
+            ? (somenteLeituraCampos
+                ? `<div class="linha-detalhe">
+                     <div><span class="rotulo">Início do estudo</span><br>${fmtDataCurta(memorial.data_inicio)}</div>
+                     <div><span class="rotulo">Fim previsto do estudo</span><br>${fmtDataCurta(memorial.data_fim)}</div>
+                   </div>`
+                : `<div class="linha-detalhe">
+                     <div class="campo" style="flex:1;"><label>Início do estudo</label><input name="data_inicio" type="date" value="${escapeHtml(memorial.data_inicio)}" required></div>
+                     <div class="campo" style="flex:1;"><label>Fim previsto do estudo</label><input name="data_fim" type="date" value="${escapeHtml(memorial.data_fim)}" required></div>
+                   </div>`)
             : ""
         }
-        ${a.campos.map(([c, r, t]) => campoMemorialHtml(c, r, t, memorial[c], podeUsarCatalogosNoMemorial)).join("")}
-        ${podeEditar ? '<div class="cartao"><button class="botao" type="submit">Salvar conteúdo do memorial</button></div>' : ""}
+        ${a.campos.map(([c, r, t]) => campoMemorialHtml(c, r, t, memorial[c], podeUsarCatalogosNoMemorial, somenteLeituraCampos)).join("")}
+        ${emModoEdicao ? '<div class="cartao"><button class="botao" type="submit">Salvar conteúdo do memorial</button></div>' : ""}
       </div>`
     ).join("");
 
@@ -8106,12 +8138,29 @@
       </div>
     </div>`;
 
+    // Fase 116 parte 5 — cabeçalho reconstruído para bater 100% com o
+    // sistema original: título fixo "Memorial Técnico" + selo de status,
+    // uma barra de botões (Novo Memorial / Editar / Alterar Status /
+    // Exportar PDF / excluir), depois o código em texto menor/suave, e só
+    // então o nome do produto — nessa ordem exata (ver print enviado pelo
+    // usuário). Todas as ações reaproveitam handlers já existentes.
     renderShell(
       `<div class="memorial-shell">
          ${navMemorial("memoriais")}
          <div class="memorial-content">
            <a class="link-voltar" href="#/memorial/memoriais">&larr; Voltar para Memoriais</a>
-           <h2>${escapeHtml(memorial.codigo)} <span class="selo ${STATUS_MEMORIAL_SELO[memorial.status] || ""}">${STATUS_MEMORIAL_LABEL[memorial.status] || memorial.status}</span></h2>
+           <div class="memorial-cabecalho">
+             <h2>Memorial Técnico <span class="selo ${STATUS_MEMORIAL_SELO[memorial.status] || ""}">${STATUS_MEMORIAL_LABEL[memorial.status] || memorial.status}</span></h2>
+             <div class="memorial-cabecalho-acoes">
+               <button class="botao secundario" data-acao="novo-memorial">+ Novo Memorial</button>
+               ${podeEditar ? `<button class="botao secundario" data-acao="alternar-modo-edicao-memorial" data-id="${memorial.id}">${emModoEdicao ? "✕ Cancelar edição" : "✏ Editar"}</button>` : ""}
+               ${podeConcluir ? `<button class="botao secundario" data-acao="abrir-alterar-status-memorial" data-id="${memorial.id}" data-status-atual="${memorial.status}">Alterar Status</button>` : ""}
+               <button class="botao secundario" data-acao="baixar-pdf-completo-memorial" data-id="${memorial.id}" data-codigo="${escapeHtml(memorial.codigo)}">⬇ Exportar PDF</button>
+               ${podeExcluir && memorial.status === "rascunho" ? `<button class="botao perigo pequeno" title="Excluir memorial" data-acao="excluir-memorial" data-id="${memorial.id}">🗑</button>` : ""}
+             </div>
+             <div class="texto-suave">${escapeHtml(memorial.codigo)}</div>
+             <div class="memorial-cabecalho-produto">${escapeHtml(memorial.produto_nome)}</div>
+           </div>
            <div class="cartao">
              <div class="linha-detalhe">
                <div><span class="rotulo">Empresa</span><br>${escapeHtml(memorial.empresa_nome)}</div>
@@ -8120,25 +8169,12 @@
                <div><span class="rotulo">Fim previsto</span><br>${fmtDataCurta(memorial.data_fim)}</div>
                <div><span class="rotulo">Assinaturas</span><br>${memorial.assinaturas_count}/2</div>
              </div>
-             ${
-               podeConcluir
-                 ? `<form data-form="alterar-status-memorial" data-id="${memorial.id}" class="grade-filtros" style="margin-top:12px;">
-                      <div class="campo"><label>Alterar status</label><select name="status">${opcoesStatus}</select></div>
-                      <button class="botao secundario" type="submit">Aplicar</button>
-                    </form>`
-                 : ""
-             }
-             ${
-               podeExcluir && memorial.status === "rascunho"
-                 ? `<button class="botao perigo pequeno" style="margin-top:8px;" data-acao="excluir-memorial" data-id="${memorial.id}">Excluir memorial</button>`
-                 : ""
-             }
            </div>
 
            <div class="memorial-abas">
              ${navAbasHtml}
              ${
-               podeEditar
+               emModoEdicao
                  ? `<form data-form="editar-memorial" data-id="${memorial.id}">${abasNumeradasHtml}</form>`
                  : abasNumeradasHtml
              }
@@ -8151,10 +8187,28 @@
        </div>`,
       "memorial"
     );
-    iniciarWidgetCalcNutricionais(memorial.calculos_nutricionais, podeEditar);
-    iniciarWidgetComposicaoCentesimal(memorial.composicao_centesimal, podeEditar);
-    iniciarWidgetEnsaiosMicrobiologicos(memorial.ensaios_microbiologicos, podeEditar);
-    iniciarTodosSeletoresCatalogo(memorial, podeEditar);
+    iniciarWidgetCalcNutricionais(memorial.calculos_nutricionais, emModoEdicao);
+    iniciarWidgetComposicaoCentesimal(memorial.composicao_centesimal, emModoEdicao);
+    iniciarWidgetEnsaiosMicrobiologicos(memorial.ensaios_microbiologicos, emModoEdicao);
+    iniciarTodosSeletoresCatalogo(memorial, emModoEdicao);
+  }
+
+  // Fase 116 parte 5 — modal "Alterar Status", reaproveitando literalmente
+  // o mesmo form/handler (`data-form="alterar-status-memorial"`) que antes
+  // ficava sempre visível dentro do cartão de detalhe; só mudou de lugar.
+  function modalAlterarStatusMemorial(memorialId, statusAtual) {
+    const opcoes = Object.keys(STATUS_MEMORIAL_LABEL)
+      .map((s) => `<option value="${s}" ${s === statusAtual ? "selected" : ""}>${STATUS_MEMORIAL_LABEL[s]}</option>`)
+      .join("");
+    abrirModal(`
+      <h3>Alterar status do memorial</h3>
+      <form data-form="alterar-status-memorial" data-id="${memorialId}">
+        <div class="campo"><label>Novo status</label><select name="status">${opcoes}</select></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Aplicar</button>
+        </div>
+      </form>`);
   }
 
   function modalAssinarMemorial(memorialId) {
@@ -13565,6 +13619,14 @@
       case "abrir-assinar-memorial":
         modalAssinarMemorial(Number(alvo.dataset.id));
         return;
+      case "alternar-modo-edicao-memorial": {
+        const abaAtiva = document.querySelector(".memorial-abas-nav .memorial-aba-botao.ativa");
+        modoEdicaoMemorialAtivo = !modoEdicaoMemorialAtivo;
+        return renderMemorialDetalhe(Number(alvo.dataset.id), abaAtiva ? abaAtiva.dataset.aba : "0");
+      }
+      case "abrir-alterar-status-memorial":
+        modalAlterarStatusMemorial(Number(alvo.dataset.id), alvo.dataset.statusAtual);
+        return;
 
       // ---- Fase 27: abas numeradas + Anexos + Padronização ----
       case "trocar-aba-memorial": {
@@ -15419,6 +15481,7 @@
         await chamarApi(`/memorial/memoriais/${form.dataset.id}/status`, {
           method: "POST", body: { status: dados.get("status") },
         });
+        fecharModais();
         definirFlash("ok", "Status do memorial atualizado.");
         return renderMemorialDetalhe(Number(form.dataset.id));
       }
