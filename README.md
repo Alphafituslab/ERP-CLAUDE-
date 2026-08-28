@@ -5220,6 +5220,18 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Corrigido) Ícone do modo bandeja (`AlphafitusOS.exe`) às vezes abria o
+  navegador ANTES do servidor terminar de subir, mostrando um erro de
+  conexão que só sumia se a pessoa recarregasse a página. Relato do
+  usuário: "estou clicando no ícone do ERP no meu desktop, primeiro ele
+  dá um erro e após ele abre". Causa: `app_launcher_tray.py` abria o
+  navegador num tempo FIXO de 1,5s depois de iniciar o servidor —
+  suficiente na maioria das vezes, mas `seed.rodar_seed()`/Waitress podem
+  demorar mais que isso com um banco maior (ex.: logo depois de uma
+  importação grande, como a do Memorial na Fase 121). Corrigido para
+  esperar de verdade: consulta `/api/v1/saude` a cada 200ms (até 20s) e
+  só abre o navegador quando o servidor responder de fato, em vez de
+  adivinhar um tempo fixo.
 - (Entregue na Fase 116, parte 3) Memorial Técnico — editor estruturado de
   "Ensaios Microbiológicos" (campo `ensaios_microbiologicos`, aba "7.
   Estudos"). Terceiro dos 5 editores estruturados — o mais simples: a

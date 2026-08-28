@@ -17,6 +17,9 @@ import logging
 import os
 import sys
 import threading
+import time
+import urllib.error
+import urllib.request
 import webbrowser
 
 from app_launcher import (
@@ -111,7 +114,29 @@ def main():
         # atalho não parece fazer nada visível (o servidor sobe em
         # segundo plano, só o ícone aparece na bandeja), o que já
         # confundiu um usuário real achando que "não abriu".
-        threading.Timer(1.5, lambda: webbrowser.open("http://localhost:5000")).start()
+        #
+        # Antes disso era um tempo fixo de 1,5s — funcionava na maioria
+        # das vezes, mas com um banco maior (ex.: depois de uma
+        # importação grande) o `seed.rodar_seed()`/Waitress podem
+        # demorar mais que isso pra ficar pronto, e o navegador abria
+        # ANTES do servidor responder — dava erro de conexão na hora,
+        # corrigindo sozinho só se o usuário recarregasse a página.
+        # Agora espera de verdade o servidor responder (consulta
+        # /api/v1/saude a cada 200ms, até 20s) antes de abrir — some o
+        # erro sem precisar adivinhar quanto tempo esperar.
+        def _abrir_quando_pronto():
+            prazo_final = time.monotonic() + 20
+            while time.monotonic() < prazo_final:
+                try:
+                    with urllib.request.urlopen("http://localhost:5000/api/v1/saude", timeout=1) as resp:
+                        if resp.status == 200:
+                            break
+                except (urllib.error.URLError, OSError):
+                    pass
+                time.sleep(0.2)
+            webbrowser.open("http://localhost:5000")
+
+        threading.Thread(target=_abrir_quando_pronto, daemon=True).start()
     except Exception:
         logging.exception("Erro fatal ao iniciar")
         mostrar_erro_windows(
