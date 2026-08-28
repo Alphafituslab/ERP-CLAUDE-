@@ -6505,12 +6505,19 @@
         ["objetivo", "Objetivo", "textarea"],
     ]},
     { numero: 2, titulo: "Comp. Nutricional", campos: [
-        ["composicao_nutricional", "Composição Nutricional", "textarea"],
+        ["composicao_nutricional", "Composição Nutricional", "composicao-nutricional"],
         ["lista_ingredientes", "Lista de Ingredientes", "textarea"],
     ]},
+    // Fase 122 — "calculo_quantidade" saiu daqui como campo próprio: é só
+    // metadado de apoio (unidade + rótulos "Massa total em..."/"Total da
+    // dose...") que o widget de Composição Centesimal usa por baixo dos
+    // panos pro resumo "Cálculo por Cápsula/Porção" — nunca teve editor
+    // de verdade nesta tela (só mostrava o JSON cru quando virou modo
+    // leitura, Fase 116 parte 5). O campo continua existindo no banco e
+    // sendo lido pelo PDF Completo — só não aparece mais como "campo"
+    // solto aqui.
     { numero: 3, titulo: "Formulação", campos: [
         ["composicao_centesimal", "Composição Centesimal", "composicao-centesimal"],
-        ["calculo_quantidade", "Cálculo de Quantidade", "textarea"],
     ]},
     { numero: 4, titulo: "Metodologias", campos: [
         ["metodologias_aplicadas", "Metodologias Aplicadas", "seletor-catalogo"],
@@ -6650,11 +6657,12 @@
   function campoMemorialHtml(campo, rotulo, tipo, valorAtual, mostrarBotaoCatalogo, somenteLeitura) {
     // Fase 116 parte 5 — no modo LEITURA (padrão de abertura da tela, igual
     // ao original), um campo simples de texto/input vira texto estático em
-    // vez de um <input>/<textarea> editável — os 4 widgets especiais
-    // (calc-nutricionais, composicao-centesimal, ensaios-microbiologicos,
-    // seletor-catalogo) já controlam o próprio modo leitura sozinhos, via
-    // o parâmetro `podeEditar` passado na hora de iniciar cada um lá em
-    // `renderMemorialDetalhe` — não precisam de nada especial aqui.
+    // vez de um <input>/<textarea> editável — os widgets especiais
+    // (calc-nutricionais, composicao-centesimal, composicao-nutricional,
+    // ensaios-microbiologicos, seletor-catalogo) já controlam o próprio
+    // modo leitura sozinhos, via o parâmetro `podeEditar` passado na hora
+    // de iniciar cada um lá em `renderMemorialDetalhe` — não precisam de
+    // nada especial aqui.
     if (somenteLeitura && (tipo === "textarea" || tipo === "input")) {
       const vazio = valorAtual === null || valorAtual === undefined || valorAtual === "";
       return `<div class="campo-leitura">
@@ -6676,6 +6684,13 @@
     const botaoCatalogoHtml = catalogoChave
       ? ` <button type="button" class="botao secundario pequeno" style="margin-left:8px;" data-acao="abrir-catalogo-memorial-campo" data-campo="${campo}" data-catalogo="${catalogoChave}">+ Catálogo</button>`
       : "";
+    if (tipo === "composicao-nutricional") {
+      return `<div class="campo">
+        <label>${rotulo}</label>
+        <textarea name="${campo}" data-composicao-nutricional-valor style="display:none;">${escapeHtml(valorAtual || "")}</textarea>
+        <div data-composicao-nutricional-widget></div>
+      </div>`;
+    }
     if (tipo === "calc-nutricionais") {
       return `<div class="campo">
         <label>${rotulo}</label>
@@ -6899,6 +6914,597 @@
     sincronizarTextareaCalcNutricionais();
   }
 
+  // =======================================================================
+  // Composição Nutricional (Fase 122) — porta com fidelidade os 3
+  // componentes originais (`composicao-nutricional-editor.tsx`,
+  // `composicao-nutricional-alimento-editor.tsx`,
+  // `composicao-nutricional-switcher.tsx`), extraídos direto do
+  // código-fonte pra esta fase. Antes deste widget, o campo só existia
+  // como textarea de JSON cru (mesmo em modo leitura) — bug relatado pelo
+  // usuário com print.
+  //
+  // Envelope salvo no campo `composicao_nutricional`:
+  //   {"tipoTabela": "padrao"|"alimento", "dadosPadrao": "<json-string>|null", "dadosAlimento": "<json-string>|null"}
+  // Os dois slots (padrão/alimento) são SEMPRE mantidos os dois, mesmo
+  // quando só um está "ativo" — trocar de tipo NUNCA apaga o outro
+  // (replica o original: troca é 100% não-destrutiva).
+  //
+  // Adaptações deliberadas em relação ao original (documentadas no
+  // README, mesmo espírito das outras já feitas nesta sessão):
+  //   - reordenar linha usa botões ▲▼ em vez de arrastar (mesmo padrão já
+  //     usado em Cálculos Nutricionais/Composição Centesimal);
+  //   - sem painel de "Templates salvos" nem importação de CSV — só o
+  //     fluxo principal (catálogo + edição manual);
+  //   - o layout "horizontal" (frase corrida) da tabela padrão fica
+  //     pendente — só o layout "vertical" (tabela) está implementado; o
+  //     campo `layoutTabela` é preservado no dado se já existir, só não
+  //     tem editor visual pra alternar ainda.
+  // =======================================================================
+  const GRUPOS_ETARIOS_NUTRICIONAL = [
+    { key: "adultos", label: "≥ 19 anos (adultos)" },
+    { key: "9-18a", label: "9–18 anos" },
+    { key: "4-8a", label: "4–8 anos" },
+    { key: "1-3a", label: "1–3 anos" },
+    { key: "7-11m", label: "7–11 meses" },
+    { key: "0-6m", label: "0–6 meses" },
+    { key: "gestantes", label: "Gestantes" },
+    { key: "lactantes", label: "Lactantes" },
+  ];
+
+  // Tabela de VD de referência (ANVISA/DRI) — cópia literal da constante
+  // VD_REF do componente original, usada como fallback quando o
+  // catálogo de nutrientes não tem `vd_referencia` configurado pro item.
+  const VD_REF_NUTRICIONAL = {
+    "valor energetico": { unidade: "kcal", "0-6m": 550, "7-11m": 700, "1-3a": 1000, "4-8a": 1500, "9-18a": 2500, adultos: 2000, gestantes: 2300, lactantes: 2600 },
+    "carboidratos": { unidade: "g", "0-6m": 60, "7-11m": 95, "1-3a": 130, "4-8a": 200, "9-18a": 300, adultos: 300, gestantes: 345, lactantes: 360 },
+    "acucares adicionados": { unidade: "g", "4-8a": 25, "9-18a": 50, adultos: 50, gestantes: 55, lactantes: 65 },
+    "acucares totais": { unidade: "g", "0-6m": 12, "7-11m": 19, "1-3a": 26, "4-8a": 40, "9-18a": 60, adultos: 60, gestantes: 69, lactantes: 72 },
+    "proteinas": { unidade: "g", "0-6m": 9, "7-11m": 11, "1-3a": 25, "4-8a": 35, "9-18a": 60, adultos: 50, gestantes: 55, lactantes: 65 },
+    "gorduras totais": { unidade: "g", "0-6m": 30, "7-11m": 27, "1-3a": 33, "4-8a": 50, "9-18a": 60, adultos: 65, gestantes: 75, lactantes: 85 },
+    "gorduras saturadas": { unidade: "g", "1-3a": 16, "4-8a": 16, "9-18a": 27, adultos: 20, gestantes: 25, lactantes: 28 },
+    "gorduras trans": { unidade: "g", "1-3a": 1, "4-8a": 1.5, "9-18a": 2.5, adultos: 2, gestantes: 2.5, lactantes: 2.5 },
+    "gorduras monoinsaturadas": { unidade: "g", "1-3a": 11, "4-8a": 16, "9-18a": 27, adultos: 20, gestantes: 23, lactantes: 28 },
+    "gorduras poli-insaturadas": { unidade: "g", "1-3a": 11, "4-8a": 16, "9-18a": 27, adultos: 23, gestantes: 23, lactantes: 28 },
+    "omega 3": { unidade: "g", "1-3a": 2, "4-8a": 3, "9-18a": 13, adultos: 22, gestantes: 18, lactantes: 20 },
+    "omega 6": { unidade: "g", "1-3a": 11, "4-8a": 16, "9-18a": 27, adultos: 25, gestantes: 25, lactantes: 29 },
+    "colesterol": { unidade: "mg", "4-8a": 150, "9-18a": 300, adultos: 300, gestantes: 300, lactantes: 300 },
+    "fibras alimentares": { unidade: "g", "1-3a": 19, "4-8a": 25, "9-18a": 38, adultos: 25, gestantes: 28, lactantes: 29 },
+    "fibra alimentar": { unidade: "g", "1-3a": 19, "4-8a": 25, "9-18a": 38, adultos: 25, gestantes: 28, lactantes: 29 },
+    "sodio": { unidade: "mg", "0-6m": 120, "7-11m": 370, "1-3a": 1000, "4-8a": 2000, "9-18a": 2000, adultos: 2000, gestantes: 2000, lactantes: 2000 },
+    "vitamina a": { unidade: "μg", "0-6m": 400, "7-11m": 500, "1-3a": 300, "4-8a": 400, "9-18a": 900, adultos: 800, gestantes: 770, lactantes: 1300 },
+    "vitamina d": { unidade: "μg", "0-6m": 10, "7-11m": 10, "1-3a": 15, "4-8a": 15, "9-18a": 15, adultos: 15, gestantes: 15, lactantes: 15 },
+    "vitamina e": { unidade: "mg", "0-6m": 4, "7-11m": 5, "1-3a": 6, "4-8a": 7, "9-18a": 15, adultos: 15, gestantes: 15, lactantes: 19 },
+    "vitamina c": { unidade: "mg", "0-6m": 25, "7-11m": 30, "1-3a": 55, "4-8a": 75, "9-18a": 120, adultos: 100, gestantes: 85, lactantes: 120 },
+    "acido ascorbico": { unidade: "mg", "0-6m": 25, "7-11m": 30, "1-3a": 55, "4-8a": 75, "9-18a": 120, adultos: 100, gestantes: 85, lactantes: 120 },
+    "riboflavina": { unidade: "mg", "0-6m": 0.3, "7-11m": 0.4, "1-3a": 0.5, "4-8a": 0.6, "9-18a": 1.3, adultos: 1.2, gestantes: 1.4, lactantes: 1.6 },
+    "vitamina b2": { unidade: "mg", "0-6m": 0.3, "7-11m": 0.4, "1-3a": 0.5, "4-8a": 0.6, "9-18a": 1.3, adultos: 1.2, gestantes: 1.4, lactantes: 1.6 },
+    "niacina": { unidade: "mg", "0-6m": 2, "7-11m": 4, "1-3a": 6, "4-8a": 8, "9-18a": 15, adultos: 15, gestantes: 18, lactantes: 17 },
+    "vitamina b3": { unidade: "mg", "0-6m": 2, "7-11m": 4, "1-3a": 6, "4-8a": 8, "9-18a": 15, adultos: 15, gestantes: 18, lactantes: 17 },
+    "vitamina b6": { unidade: "mg", "0-6m": 0.1, "7-11m": 0.3, "1-3a": 0.5, "4-8a": 0.6, "9-18a": 1.3, adultos: 1.7, gestantes: 1.9, lactantes: 2 },
+    "piridoxina": { unidade: "mg", "0-6m": 0.1, "7-11m": 0.3, "1-3a": 0.5, "4-8a": 0.6, "9-18a": 1.3, adultos: 1.7, gestantes: 1.9, lactantes: 2 },
+    "biotina": { unidade: "μg", "7-11m": 6, "1-3a": 8, "4-8a": 12, "9-18a": 25, adultos: 30, gestantes: 30, lactantes: 35 },
+    "acido folico": { unidade: "μg", "0-6m": 65, "7-11m": 80, "1-3a": 150, "4-8a": 200, "9-18a": 400, adultos: 400, gestantes: 600, lactantes: 500 },
+    "folato": { unidade: "μg", "0-6m": 65, "7-11m": 80, "1-3a": 150, "4-8a": 200, "9-18a": 400, adultos: 400, gestantes: 600, lactantes: 500 },
+    "tiamina": { unidade: "mg", "0-6m": 0.2, "7-11m": 0.3, "1-3a": 0.5, "4-8a": 0.6, "9-18a": 1.2, adultos: 1.2, gestantes: 1.4, lactantes: 1.4 },
+    "vitamina b1": { unidade: "mg", "0-6m": 0.2, "7-11m": 0.3, "1-3a": 0.5, "4-8a": 0.6, "9-18a": 1.2, adultos: 1.2, gestantes: 1.4, lactantes: 1.4 },
+    "vitamina b12": { unidade: "μg", "0-6m": 0.4, "7-11m": 0.5, "1-3a": 0.9, "4-8a": 1.2, "9-18a": 2.4, adultos: 2.4, gestantes: 2.6, lactantes: 2.8 },
+    "cobalamina": { unidade: "μg", "0-6m": 0.4, "7-11m": 0.5, "1-3a": 0.9, "4-8a": 1.2, "9-18a": 2.4, adultos: 2.4, gestantes: 2.6, lactantes: 2.8 },
+    "vitamina k": { unidade: "μg", "0-6m": 2, "7-11m": 2.5, "1-3a": 30, "4-8a": 55, "9-18a": 75, adultos: 120, gestantes: 90, lactantes: 90 },
+    "pantotenico": { unidade: "mg", "0-6m": 1.7, "7-11m": 1.8, "1-3a": 2, "4-8a": 3, "9-18a": 5, adultos: 5, gestantes: 6, lactantes: 7 },
+    "acido pantotenico": { unidade: "mg", "0-6m": 1.7, "7-11m": 1.8, "1-3a": 2, "4-8a": 3, "9-18a": 5, adultos: 5, gestantes: 6, lactantes: 7 },
+    "calcio": { unidade: "mg", "0-6m": 200, "7-11m": 260, "1-3a": 700, "4-8a": 1000, "9-18a": 1300, adultos: 1000, gestantes: 1300, lactantes: 1300 },
+    "cobre": { unidade: "μg", "0-6m": 200, "7-11m": 220, "1-3a": 340, "4-8a": 440, "9-18a": 890, adultos: 900, gestantes: 1000, lactantes: 1300 },
+    "cromio": { unidade: "μg", "0-6m": 0.2, "7-11m": 5.5, "1-3a": 11, "4-8a": 15, "9-18a": 35, adultos: 30, gestantes: 30, lactantes: 45 },
+    "ferro": { unidade: "mg", "0-6m": 0.27, "7-11m": 11, "1-3a": 7, "4-8a": 10, "9-18a": 15, adultos: 8, gestantes: 27, lactantes: 10 },
+    "fluor": { unidade: "mg", "0-6m": 0.01, "7-11m": 0.5, "1-3a": 0.7, "4-8a": 1, "9-18a": 3, adultos: 4, gestantes: 3, lactantes: 3 },
+    "fosforo": { unidade: "mg", "0-6m": 100, "7-11m": 275, "1-3a": 460, "4-8a": 500, "9-18a": 1250, adultos: 700, gestantes: 1250, lactantes: 1250 },
+    "iodo": { unidade: "μg", "0-6m": 110, "7-11m": 130, "1-3a": 90, "4-8a": 90, "9-18a": 150, adultos: 150, gestantes: 220, lactantes: 290 },
+    "magnesio": { unidade: "mg", "0-6m": 30, "7-11m": 75, "1-3a": 80, "4-8a": 130, "9-18a": 410, adultos: 420, gestantes: 400, lactantes: 360 },
+    "manganes": { unidade: "mg", "0-6m": 0.003, "7-11m": 0.6, "1-3a": 1.2, "4-8a": 1.5, "9-18a": 2.2, adultos: 2.3, gestantes: 2.0, lactantes: 2.6 },
+    "molibdenio": { unidade: "μg", "7-11m": 2, "1-3a": 17, "4-8a": 22, "9-18a": 43, adultos: 45, gestantes: 50, lactantes: 50 },
+    "potassio": { unidade: "mg", "0-6m": 400, "7-11m": 700, "1-3a": 3000, "4-8a": 3500, "9-18a": 3500, adultos: 3500, gestantes: 2900, lactantes: 5100 },
+    "selenio": { unidade: "μg", "1-3a": 17, "4-8a": 23, "9-18a": 55, adultos: 55, gestantes: 60, lactantes: 70 },
+    "zinco": { unidade: "mg", "1-3a": 3, "4-8a": 4, "9-18a": 8, adultos: 11, gestantes: 12, lactantes: 12 },
+    "colina": { unidade: "mg", "0-6m": 125, "7-11m": 150, "1-3a": 200, "4-8a": 250, "9-18a": 550, adultos: 550, gestantes: 450, lactantes: 550 },
+  };
+
+  function normalizarNomeNutricional(s) {
+    return String(s || "")
+      .toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/\(.*?\)/g, "").replace(/[^a-z0-9\s-]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  // Mantém o conteúdo dos parênteses — usada pra desempate entre
+  // candidatos do catálogo com o mesmo nome-base (ex.: "Vitamina B12" vs
+  // "Vitamina B12 (Cobalamina)").
+  function normalizarNomeCompletoNutricional(s) {
+    return String(s || "")
+      .toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function buscarVDRefHardcodedNutricional(nomeLinha, grupoKey) {
+    const norm = normalizarNomeNutricional(nomeLinha);
+    for (const chave of Object.keys(VD_REF_NUTRICIONAL)) {
+      if (norm.includes(chave) || chave.includes(norm)) {
+        const val = VD_REF_NUTRICIONAL[chave][grupoKey];
+        return val !== undefined ? val : null;
+      }
+    }
+    return null;
+  }
+  // Catálogo é a fonte primária: vd_referencia=0 → "Sem VD" explícito;
+  // vd_referencia>0 → usa esse valor; null/ausente → cai na tabela
+  // interna. Entre vários candidatos que batem pelo nome-base, prefere o
+  // de forma mais específica (nome completo mais longo contido na linha).
+  function buscarVDRefComCatalogoNutricional(nomeLinha, grupoKey, nutrientes) {
+    const norm = normalizarNomeNutricional(nomeLinha);
+    const normFull = normalizarNomeCompletoNutricional(nomeLinha);
+    const candidatos = (nutrientes || []).filter((n) => {
+      const nNorm = normalizarNomeNutricional(n.nome);
+      return norm.includes(nNorm) || nNorm.includes(norm);
+    });
+    if (!candidatos.length) return { vd: buscarVDRefHardcodedNutricional(nomeLinha, grupoKey), semVD: false };
+    let encontrado = candidatos[0];
+    let melhorPontuacao = -1;
+    for (const n of candidatos) {
+      const nFull = normalizarNomeCompletoNutricional(n.nome);
+      const pontuacao = normFull.includes(nFull) ? nFull.length : 0;
+      if (pontuacao > melhorPontuacao) { melhorPontuacao = pontuacao; encontrado = n; }
+    }
+    const vdRef = encontrado.vd_referencia;
+    if (vdRef === 0) return { vd: null, semVD: true };
+    if (vdRef != null && vdRef > 0) return { vd: vdRef, semVD: false };
+    return { vd: buscarVDRefHardcodedNutricional(nomeLinha, grupoKey), semVD: false };
+  }
+  function calcularVDPctNutricional(nomeLinha, quantidadeStr, grupoKey, nutrientes) {
+    const numStr = String(quantidadeStr || "").replace(",", ".").replace(/[^0-9.]/g, "");
+    const num = parseFloat(numStr);
+    if (isNaN(num) || num === 0) return "**";
+    if (nutrientes && nutrientes.length > 0) {
+      const { vd, semVD } = buscarVDRefComCatalogoNutricional(nomeLinha, grupoKey, nutrientes);
+      if (semVD || vd === null) return "**";
+      return `${Math.round((num / vd) * 100)}%`;
+    }
+    const ref = buscarVDRefHardcodedNutricional(nomeLinha, grupoKey);
+    if (ref === null) return "**";
+    return `${Math.round((num / ref) * 100)}%`;
+  }
+
+  function uidNutricional() {
+    return Math.random().toString(36).slice(2, 8);
+  }
+
+  const DEFAULT_LINHAS_PADRAO_NUTRICIONAL = () => ([
+    { id: "ve", nome: "Valor energético", quantidade: "0 kcal", vd: "**", ativo: true },
+    { id: "carb", nome: "Carboidratos (g)", quantidade: "0", vd: "**", ativo: true },
+    { id: "acuc-tot", nome: "Açúcares totais (g)", quantidade: "0", vd: "", ativo: true },
+    { id: "acuc-adic", nome: " Açúcares adicionados (g)", quantidade: "0", vd: "**", ativo: true },
+    { id: "prot", nome: "Proteínas (g)", quantidade: "0", vd: "**", ativo: true },
+    { id: "gord-tot", nome: "Gorduras totais (g)", quantidade: "0", vd: "**", ativo: true },
+    { id: "gord-sat", nome: " Gorduras saturadas (g)", quantidade: "0", vd: "**", ativo: true },
+    { id: "gord-trans", nome: " Gorduras Trans (g)", quantidade: "0", vd: "", ativo: true },
+    { id: "fibra", nome: "Fibra alimentar (g)", quantidade: "0", vd: "**", ativo: true },
+    { id: "sodio", nome: "Sódio (mg)", quantidade: "0", vd: "**", ativo: true },
+  ]);
+  const DEFAULT_DADOS_PADRAO_NUTRICIONAL = () => ({
+    porcoesPorEmbalagem: "", porcaoGramas: "", descricaoPorcao: "",
+    linhas: DEFAULT_LINHAS_PADRAO_NUTRICIONAL(),
+    rodapeVD: "% de valores diários fornecidos pela porção.",
+    grupoEtario: "adultos",
+  });
+  const DEFAULT_LINHAS_ALIMENTO_NUTRICIONAL = () => ([
+    { id: "ve", nome: "Valor energético (kcal)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+    { id: "carb", nome: "Carboidratos (g)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+    { id: "acuc-tot", nome: "Açúcares totais (g)", por100g: "0", quantidade: "0", vd: "", ativo: true },
+    { id: "acuc-adic", nome: "Açúcares adicionados (g)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+    { id: "prot", nome: "Proteínas (g)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+    { id: "gord-tot", nome: "Gorduras totais (g)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+    { id: "gord-sat", nome: "Gorduras saturadas (g)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+    { id: "gord-trans", nome: "Gorduras trans (g)", por100g: "0", quantidade: "0", vd: "", ativo: true },
+    { id: "fibra", nome: "Fibras alimentares (g)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+    { id: "sodio", nome: "Sódio (mg)", por100g: "0", quantidade: "0", vd: "**", ativo: true },
+  ]);
+  const DEFAULT_DADOS_ALIMENTO_NUTRICIONAL = () => ({
+    porcoesPorEmbalagem: "", porcaoGramas: "", descricaoPorcao: "", referencia: "100g",
+    linhas: DEFAULT_LINHAS_ALIMENTO_NUTRICIONAL(),
+    rodapeVD: "% de valores diários fornecidos pela porção.",
+    grupoEtario: "adultos",
+  });
+
+  function parseSwitcherNutricional(valor) {
+    if (!valor) return { tipoTabela: "padrao", dadosPadrao: null, dadosAlimento: null };
+    try {
+      const parsed = JSON.parse(valor);
+      if (parsed && (parsed.tipoTabela === "padrao" || parsed.tipoTabela === "alimento")) {
+        return { tipoTabela: parsed.tipoTabela, dadosPadrao: parsed.dadosPadrao ?? null, dadosAlimento: parsed.dadosAlimento ?? null };
+      }
+      // Dado legado sem envelope (de antes do switcher existir) — trata
+      // como tabela padrão bruta, igual ao original.
+      return { tipoTabela: "padrao", dadosPadrao: valor, dadosAlimento: null };
+    } catch {
+      return { tipoTabela: "padrao", dadosPadrao: null, dadosAlimento: null };
+    }
+  }
+  function parseDadosPadraoNutricional(valor) {
+    if (valor) {
+      try {
+        const parsed = JSON.parse(valor);
+        if (parsed && typeof parsed === "object" && Array.isArray(parsed.linhas)) {
+          return { grupoEtario: "adultos", ...parsed };
+        }
+      } catch { /* cai no default abaixo */ }
+    }
+    return DEFAULT_DADOS_PADRAO_NUTRICIONAL();
+  }
+  function parseDadosAlimentoNutricional(valor) {
+    if (valor) {
+      try {
+        const parsed = JSON.parse(valor);
+        if (parsed && typeof parsed === "object" && Array.isArray(parsed.linhas)) {
+          return { grupoEtario: "adultos", referencia: "100g", ...parsed };
+        }
+      } catch { /* cai no default abaixo */ }
+    }
+    return DEFAULT_DADOS_ALIMENTO_NUTRICIONAL();
+  }
+
+  let composicaoNutricionalEstado = null; // { tipoTabela, dadosPadrao, dadosAlimento, catalogoNutrientes, podeEditar, mostrarCatalogo }
+
+  function sincronizarTextareaComposicaoNutricional() {
+    const textarea = document.querySelector("[data-composicao-nutricional-valor]");
+    if (!textarea) return;
+    const envelope = {
+      tipoTabela: composicaoNutricionalEstado.tipoTabela,
+      dadosPadrao: JSON.stringify(composicaoNutricionalEstado.dadosPadrao),
+      dadosAlimento: JSON.stringify(composicaoNutricionalEstado.dadosAlimento),
+    };
+    textarea.value = JSON.stringify(envelope);
+  }
+
+  function recalcularTodosVDsPadraoNutricional() {
+    const { dadosPadrao, catalogoNutrientes } = composicaoNutricionalEstado;
+    const grupo = dadosPadrao.grupoEtario || "adultos";
+    dadosPadrao.linhas.forEach((l) => {
+      l.vd = calcularVDPctNutricional(l.nome, l.quantidade, grupo, catalogoNutrientes);
+    });
+  }
+  function recalcularTodosVDsAlimentoNutricional() {
+    const { dadosAlimento, catalogoNutrientes } = composicaoNutricionalEstado;
+    const grupo = dadosAlimento.grupoEtario || "adultos";
+    dadosAlimento.linhas.forEach((l) => {
+      l.vd = calcularVDPctNutricional(l.nome, l.quantidade, grupo, catalogoNutrientes);
+    });
+  }
+
+  function renderizarTabelaLeituraNutricional(dados, variante) {
+    const linhas = dados.linhas.filter((l) => l && l.ativo !== false);
+    const colunaQtd = dados.porcaoGramas ? `${dados.porcaoGramas} g` : "Quantidade";
+    const linhasHtml = linhas.map((l) => `<tr>
+      <td>${escapeHtml(l.nome || "")}</td>
+      ${variante === "alimento" ? `<td>${escapeHtml(l.por100g === undefined || l.por100g === null || l.por100g === "" ? "0" : String(l.por100g))}</td>` : ""}
+      <td>${escapeHtml(l.quantidade === undefined || l.quantidade === null || l.quantidade === "" ? "0" : String(l.quantidade))}</td>
+      <td>${escapeHtml(l.vd || "**")}</td>
+    </tr>`).join("");
+    return `${dados.porcoesPorEmbalagem ? `<div>Porções por embalagem: ${escapeHtml(dados.porcoesPorEmbalagem)}</div>` : ""}
+      ${dados.porcaoGramas || dados.descricaoPorcao ? `<div>Porção: ${escapeHtml(dados.porcaoGramas || "")}${dados.porcaoGramas ? " g" : ""}${dados.descricaoPorcao ? ` (${escapeHtml(dados.descricaoPorcao)})` : ""}</div>` : ""}
+      <table class="tabela-nutricional-leitura">
+        <thead><tr><th></th>${variante === "alimento" ? `<th>${escapeHtml(dados.referencia || "100g")}</th>` : ""}<th>${escapeHtml(colunaQtd)}</th><th>%VD*</th></tr></thead>
+        <tbody>${linhasHtml}</tbody>
+      </table>
+      ${dados.rodapeVD ? `<div class="texto-suave" style="font-size:12px;margin-top:4px;">${escapeHtml(dados.rodapeVD)}</div>` : ""}`;
+  }
+
+  function renderizarLinhaEdicaoPadraoNutricional(l, idx, total) {
+    return `<tr>
+      <td style="text-align:center;"><input type="checkbox" data-nutri-campo="ativo" data-nutri-id="${l.id}" ${l.ativo !== false ? "checked" : ""}></td>
+      <td style="position:relative; min-width:200px;">
+        <input data-nutri-campo="nome" data-nutri-id="${l.id}" value="${escapeHtml(l.nome)}" autocomplete="off" style="width:100%;">
+        <div class="calc-sugestoes" data-nutri-sugestoes="${l.id}" hidden></div>
+      </td>
+      <td><input data-nutri-campo="quantidade" data-nutri-id="${l.id}" value="${escapeHtml(l.quantidade)}" style="width:90px;"></td>
+      <td class="calc-celula-destaque">${escapeHtml(l.vd || "**")}</td>
+      <td>
+        <button type="button" class="botao-icone" title="Mover para cima" data-nutri-acao="mover-cima" data-nutri-id="${l.id}" ${idx === 0 ? "disabled" : ""}>▲</button>
+        <button type="button" class="botao-icone" title="Mover para baixo" data-nutri-acao="mover-baixo" data-nutri-id="${l.id}" ${idx === total - 1 ? "disabled" : ""}>▼</button>
+      </td>
+      <td><button type="button" class="botao-icone" title="Remover" data-nutri-acao="remover" data-nutri-id="${l.id}">🗑</button></td>
+    </tr>`;
+  }
+  function renderizarLinhaEdicaoAlimentoNutricional(l, idx, total) {
+    return `<tr>
+      <td style="text-align:center;"><input type="checkbox" data-nutri-campo="ativo" data-nutri-id="${l.id}" ${l.ativo !== false ? "checked" : ""}></td>
+      <td style="position:relative; min-width:200px;">
+        <input data-nutri-campo="nome" data-nutri-id="${l.id}" value="${escapeHtml(l.nome)}" autocomplete="off" style="width:100%;">
+        <div class="calc-sugestoes" data-nutri-sugestoes="${l.id}" hidden></div>
+      </td>
+      <td><input data-nutri-campo="por100g" data-nutri-id="${l.id}" value="${escapeHtml(l.por100g)}" style="width:80px;"></td>
+      <td><input data-nutri-campo="quantidade" data-nutri-id="${l.id}" value="${escapeHtml(l.quantidade)}" style="width:80px;"></td>
+      <td class="calc-celula-destaque">${escapeHtml(l.vd || "**")}</td>
+      <td>
+        <button type="button" class="botao-icone" title="Mover para cima" data-nutri-acao="mover-cima" data-nutri-id="${l.id}" ${idx === 0 ? "disabled" : ""}>▲</button>
+        <button type="button" class="botao-icone" title="Mover para baixo" data-nutri-acao="mover-baixo" data-nutri-id="${l.id}" ${idx === total - 1 ? "disabled" : ""}>▼</button>
+      </td>
+      <td><button type="button" class="botao-icone" title="Remover" data-nutri-acao="remover" data-nutri-id="${l.id}">🗑</button></td>
+    </tr>`;
+  }
+
+  function renderizarCatalogoNutricionalHtml() {
+    const { catalogoNutrientes, dadosPadrao, tipoTabela, dadosAlimento } = composicaoNutricionalEstado;
+    const dados = tipoTabela === "alimento" ? dadosAlimento : dadosPadrao;
+    if (!catalogoNutrientes.length) return '<p class="texto-suave">Catálogo de nutrientes vazio ou não carregado.</p>';
+    const grupos = {};
+    for (const n of catalogoNutrientes) {
+      const cat = n.categoria || "Outros";
+      (grupos[cat] = grupos[cat] || []).push(n);
+    }
+    const chaves = Object.keys(grupos).sort((a, b) => a.localeCompare(b, "pt-BR"));
+    return chaves.map((cat) => {
+      const pills = grupos[cat].map((n) => {
+        const jaExiste = dados.linhas.some((l) => l.nome.toLowerCase().includes(n.nome.toLowerCase()));
+        return `<button type="button" class="botao secundario pequeno" data-nutri-acao="adicionar-catalogo" data-nutri-catalogo-id="${escapeHtml(String(n.id))}" ${jaExiste ? "disabled" : ""}>
+          ${jaExiste ? "✓ " : ""}${escapeHtml(n.nome)} (${escapeHtml(n.unidade || "")})
+        </button>`;
+      }).join(" ");
+      return `<div style="margin-bottom:8px;"><strong style="font-size:12px; color:var(--texto-suave); text-transform:uppercase;">${escapeHtml(cat)}</strong><div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:4px;">${pills}</div></div>`;
+    }).join("");
+  }
+
+  function renderizarComposicaoNutricionalWidget() {
+    const container = document.querySelector("[data-composicao-nutricional-widget]");
+    if (!container) return;
+    const { tipoTabela, dadosPadrao, dadosAlimento, podeEditar, mostrarCatalogo } = composicaoNutricionalEstado;
+
+    if (!podeEditar) {
+      const dados = tipoTabela === "alimento" ? dadosAlimento : dadosPadrao;
+      container.innerHTML = renderizarTabelaLeituraNutricional(dados, tipoTabela === "alimento" ? "alimento" : "padrao");
+      return;
+    }
+
+    const seletorTipo = `<div style="display:flex; gap:8px; margin-bottom:10px;">
+      <button type="button" class="botao ${tipoTabela === "padrao" ? "" : "secundario"} pequeno" data-nutri-acao="tipo-padrao">Tabela Padrão</button>
+      <button type="button" class="botao ${tipoTabela === "alimento" ? "" : "secundario"} pequeno" data-nutri-acao="tipo-alimento">Tabela por Alimento</button>
+    </div>`;
+
+    const dados = tipoTabela === "alimento" ? dadosAlimento : dadosPadrao;
+    const opcoesGrupo = GRUPOS_ETARIOS_NUTRICIONAL
+      .map((g) => `<option value="${g.key}" ${dados.grupoEtario === g.key ? "selected" : ""}>${escapeHtml(g.label)}</option>`)
+      .join("");
+    const camposTopo = tipoTabela === "alimento"
+      ? `<div class="linha-detalhe">
+          <div class="campo" style="flex:1;"><label>Porções por embalagem</label><input data-nutri-topo="porcoesPorEmbalagem" value="${escapeHtml(dados.porcoesPorEmbalagem)}" placeholder="ex: 20"></div>
+          <div class="campo" style="flex:1;"><label>Referência (coluna 1)</label><input data-nutri-topo="referencia" value="${escapeHtml(dados.referencia || "100g")}" placeholder="ex: 100g, 100mL"></div>
+          <div class="campo" style="flex:1;"><label>Porção (coluna 2)</label><input data-nutri-topo="porcaoGramas" value="${escapeHtml(dados.porcaoGramas)}" placeholder="ex: 5"></div>
+          <div class="campo" style="flex:1;"><label>Descrição da porção</label><input data-nutri-topo="descricaoPorcao" value="${escapeHtml(dados.descricaoPorcao)}" placeholder="ex: 1 dosador"></div>
+          <div class="campo" style="flex:1;"><label>Grupo etário</label><select data-nutri-topo="grupoEtario">${opcoesGrupo}</select></div>
+        </div>`
+      : `<div class="linha-detalhe">
+          <div class="campo" style="flex:1;"><label>Porções por embalagem</label><input data-nutri-topo="porcoesPorEmbalagem" value="${escapeHtml(dados.porcoesPorEmbalagem)}" placeholder="ex: 90"></div>
+          <div class="campo" style="flex:1;"><label>Porção (g)</label><input data-nutri-topo="porcaoGramas" value="${escapeHtml(dados.porcaoGramas)}" placeholder="ex: 0,750"></div>
+          <div class="campo" style="flex:1;"><label>Descrição da porção</label><input data-nutri-topo="descricaoPorcao" value="${escapeHtml(dados.descricaoPorcao)}" placeholder="ex: 1 dose, 1 cápsula"></div>
+          <div class="campo" style="flex:1;"><label>Grupo etário</label><select data-nutri-topo="grupoEtario">${opcoesGrupo}</select></div>
+        </div>`;
+
+    const cabecalhoTabela = tipoTabela === "alimento"
+      ? `<tr><th>Exibir</th><th>Nutriente</th><th>${escapeHtml(dados.referencia || "100g")}</th><th>Porção</th><th>%VD*</th><th></th><th></th></tr>`
+      : `<tr><th>Exibir</th><th>Nutriente</th><th>Qtd. por porção</th><th>%VD*</th><th></th><th></th></tr>`;
+    const linhasTabela = dados.linhas.map((l, idx) =>
+      tipoTabela === "alimento"
+        ? renderizarLinhaEdicaoAlimentoNutricional(l, idx, dados.linhas.length)
+        : renderizarLinhaEdicaoPadraoNutricional(l, idx, dados.linhas.length)
+    ).join("");
+    const ativos = dados.linhas.filter((l) => l.ativo !== false).length;
+
+    container.innerHTML = `${seletorTipo}${camposTopo}
+      <div style="display:flex; justify-content:space-between; align-items:center; margin:10px 0 4px;">
+        <span class="texto-suave">${ativos} de ${dados.linhas.length} nutrientes exibidos</span>
+        <div style="display:flex; gap:6px;">
+          <button type="button" class="botao secundario pequeno" data-nutri-acao="marcar-todos">Marcar todos</button>
+          <button type="button" class="botao secundario pequeno" data-nutri-acao="desmarcar-todos">Desmarcar todos</button>
+          ${tipoTabela === "alimento" ? '<button type="button" class="botao secundario pequeno" data-nutri-acao="recalcular-vds" style="background:#fef3c7;">⚡ Recalcular %VD</button>' : ""}
+        </div>
+      </div>
+      <div style="overflow-x:auto;"><table>${cabecalhoTabela}<tbody>${linhasTabela}</tbody></table></div>
+      <div style="display:flex; gap:8px; margin-top:8px; flex-wrap:wrap;">
+        <button type="button" class="botao secundario pequeno" data-nutri-acao="adicionar-linha">+ Adicionar nutriente manualmente</button>
+        <button type="button" class="botao secundario pequeno" data-nutri-acao="alternar-catalogo">${mostrarCatalogo ? "Ocultar" : "Mostrar"} catálogo de nutrientes</button>
+      </div>
+      ${mostrarCatalogo ? `<div class="cartao" style="margin-top:8px;">${renderizarCatalogoNutricionalHtml()}</div>` : ""}
+      <div class="campo" style="margin-top:10px;"><label>Rodapé (%VD)</label><input data-nutri-topo="rodapeVD" value="${escapeHtml(dados.rodapeVD)}"></div>`;
+  }
+
+  function iniciarWidgetComposicaoNutricional(valorInicial, podeEditar) {
+    const container = document.querySelector("[data-composicao-nutricional-widget]");
+    if (!container) return;
+    const envelope = parseSwitcherNutricional(valorInicial);
+    composicaoNutricionalEstado = {
+      tipoTabela: envelope.tipoTabela,
+      dadosPadrao: parseDadosPadraoNutricional(envelope.dadosPadrao),
+      dadosAlimento: parseDadosAlimentoNutricional(envelope.dadosAlimento),
+      catalogoNutrientes: [],
+      podeEditar,
+      mostrarCatalogo: false,
+    };
+    renderizarComposicaoNutricionalWidget();
+    if (!podeEditar) return;
+
+    chamarApi("/memorial/catalogos/nutrientes").then((itens) => {
+      composicaoNutricionalEstado.catalogoNutrientes = itens.filter((i) => i.ativo);
+      // Mesmo efeito do original: catálogo carregou -> recalcula %VD de
+      // todas as linhas (pode ter vd_referencia configurado que muda o
+      // resultado em relação à tabela interna).
+      recalcularTodosVDsPadraoNutricional();
+      recalcularTodosVDsAlimentoNutricional();
+      sincronizarTextareaComposicaoNutricional();
+      renderizarComposicaoNutricionalWidget();
+    }).catch(() => { /* catálogo é só um atalho — segue sem autocomplete/VD de catálogo se falhar */ });
+
+    function dadosAtivos() {
+      return composicaoNutricionalEstado.tipoTabela === "alimento"
+        ? composicaoNutricionalEstado.dadosAlimento
+        : composicaoNutricionalEstado.dadosPadrao;
+    }
+    function recalcularAtivos() {
+      if (composicaoNutricionalEstado.tipoTabela === "alimento") recalcularTodosVDsAlimentoNutricional();
+      else recalcularTodosVDsPadraoNutricional();
+    }
+
+    container.addEventListener("click", (e) => {
+      const alvo = e.target.closest("[data-nutri-acao]");
+      if (!alvo) return;
+      const acao = alvo.dataset.nutriAcao;
+      const id = alvo.dataset.nutriId;
+      const dados = dadosAtivos();
+      if (acao === "tipo-padrao" || acao === "tipo-alimento") {
+        composicaoNutricionalEstado.tipoTabela = acao === "tipo-padrao" ? "padrao" : "alimento";
+      } else if (acao === "adicionar-linha") {
+        dados.linhas.push(
+          composicaoNutricionalEstado.tipoTabela === "alimento"
+            ? { id: uidNutricional(), nome: "", por100g: "", quantidade: "", vd: "", ativo: true }
+            : { id: uidNutricional(), nome: "", quantidade: "", vd: "", ativo: true }
+        );
+      } else if (acao === "remover") {
+        dados.linhas = dados.linhas.filter((l) => l.id !== id);
+        if (composicaoNutricionalEstado.tipoTabela === "alimento") composicaoNutricionalEstado.dadosAlimento.linhas = dados.linhas;
+        else composicaoNutricionalEstado.dadosPadrao.linhas = dados.linhas;
+      } else if (acao === "mover-cima" || acao === "mover-baixo") {
+        const idx = dados.linhas.findIndex((l) => l.id === id);
+        const novoIdx = acao === "mover-cima" ? idx - 1 : idx + 1;
+        if (novoIdx < 0 || novoIdx >= dados.linhas.length) return;
+        const [linha] = dados.linhas.splice(idx, 1);
+        dados.linhas.splice(novoIdx, 0, linha);
+      } else if (acao === "marcar-todos") {
+        dados.linhas.forEach((l) => { l.ativo = true; });
+      } else if (acao === "desmarcar-todos") {
+        dados.linhas.forEach((l) => { l.ativo = false; });
+      } else if (acao === "alternar-catalogo") {
+        composicaoNutricionalEstado.mostrarCatalogo = !composicaoNutricionalEstado.mostrarCatalogo;
+      } else if (acao === "recalcular-vds") {
+        recalcularAtivos();
+      } else if (acao === "adicionar-catalogo") {
+        const n = composicaoNutricionalEstado.catalogoNutrientes.find((x) => String(x.id) === alvo.dataset.nutriCatalogoId);
+        if (!n) return;
+        const jaExiste = dados.linhas.some((l) => l.nome.toLowerCase().includes(n.nome.toLowerCase()));
+        if (jaExiste) return;
+        // Replica o prefixo de um espaço em branco pros 3 "sub-itens" do
+        // original (visualmente indenta como subitem da linha anterior).
+        const normalizado = normalizarNomeNutricional(n.nome);
+        const SUB_ITENS_NUTRICIONAL = new Set(["acucares adicionados", "gorduras saturadas", "gorduras trans"]);
+        const prefixo = SUB_ITENS_NUTRICIONAL.has(normalizado) ? " " : "";
+        const nomeCompleto = `${prefixo}${n.nome} (${n.unidade || ""})`;
+        const grupo = dados.grupoEtario || "adultos";
+        const novaLinha = composicaoNutricionalEstado.tipoTabela === "alimento"
+          ? { id: uidNutricional(), nome: nomeCompleto, por100g: "0", quantidade: "0", vd: calcularVDPctNutricional(nomeCompleto, "0", grupo, composicaoNutricionalEstado.catalogoNutrientes), ativo: true }
+          : { id: uidNutricional(), nome: nomeCompleto, quantidade: "0", vd: calcularVDPctNutricional(nomeCompleto, "0", grupo, composicaoNutricionalEstado.catalogoNutrientes), ativo: true };
+        dados.linhas.push(novaLinha);
+      } else {
+        return;
+      }
+      sincronizarTextareaComposicaoNutricional();
+      renderizarComposicaoNutricionalWidget();
+    });
+
+    container.addEventListener("change", (e) => {
+      const campoTopo = e.target.closest("[data-nutri-topo]");
+      if (campoTopo) {
+        const dados = dadosAtivos();
+        const campo = campoTopo.dataset.nutriTopo;
+        dados[campo] = campoTopo.value;
+        if (campo === "grupoEtario") recalcularAtivos();
+        sincronizarTextareaComposicaoNutricional();
+        if (campo === "grupoEtario") renderizarComposicaoNutricionalWidget();
+        return;
+      }
+      const checkboxAtivo = e.target.closest('[data-nutri-campo="ativo"]');
+      if (checkboxAtivo) {
+        const dados = dadosAtivos();
+        const linha = dados.linhas.find((l) => l.id === checkboxAtivo.dataset.nutriId);
+        if (linha) linha.ativo = checkboxAtivo.checked;
+        sincronizarTextareaComposicaoNutricional();
+        renderizarComposicaoNutricionalWidget();
+      }
+    });
+
+    // Input local — reage a cada tecla (recalcula %VD ao vivo, igual ao
+    // original), sem re-renderizar a tabela inteira (perderia o foco do
+    // campo sendo digitado): atualiza só a célula de %VD da própria linha
+    // via DOM direto, e sincroniza o textarea escondido a cada tecla.
+    container.addEventListener("input", (e) => {
+      const alvoTopo = e.target.closest("[data-nutri-topo]");
+      if (alvoTopo && alvoTopo.tagName !== "SELECT") {
+        const dados = dadosAtivos();
+        dados[alvoTopo.dataset.nutriTopo] = alvoTopo.value;
+        sincronizarTextareaComposicaoNutricional();
+        return;
+      }
+      const alvo = e.target.closest("[data-nutri-campo]");
+      if (!alvo) return;
+      const campo = alvo.dataset.nutriCampo;
+      const id = alvo.dataset.nutriId;
+      const dados = dadosAtivos();
+      const linha = dados.linhas.find((l) => l.id === id);
+      if (!linha) return;
+      if (campo === "nome") {
+        linha.nome = alvo.value;
+        // Autocomplete simples: filtra por substring, mostra até 10.
+        const sugestoesEl = container.querySelector(`[data-nutri-sugestoes="${id}"]`);
+        const termo = alvo.value.trim().toLowerCase();
+        const candidatos = composicaoNutricionalEstado.catalogoNutrientes
+          .filter((n) => !termo || n.nome.toLowerCase().includes(termo))
+          .slice(0, 10);
+        if (sugestoesEl && candidatos.length) {
+          sugestoesEl.hidden = false;
+          sugestoesEl.innerHTML = candidatos.map((n) => `<div class="calc-sugestao" data-nutri-sugestao-id="${escapeHtml(String(n.id))}" data-nutri-sugestao-alvo="${id}">${escapeHtml(n.nome)} (${escapeHtml(n.unidade || "")})</div>`).join("");
+        } else if (sugestoesEl) {
+          sugestoesEl.hidden = true;
+        }
+      } else if (campo === "quantidade" || campo === "por100g") {
+        linha[campo] = alvo.value;
+      }
+      // %VD é sempre recalculado ao vivo a partir de nome+quantidade —
+      // nunca é um valor digitado manualmente (igual ao original: a
+      // célula de %VD nem é um <input>).
+      if (campo === "nome" || campo === "quantidade") {
+        const grupo = dados.grupoEtario || "adultos";
+        linha.vd = calcularVDPctNutricional(linha.nome, linha.quantidade, grupo, composicaoNutricionalEstado.catalogoNutrientes);
+        const linhaTr = alvo.closest("tr");
+        if (linhaTr) {
+          const celulaVd = linhaTr.querySelector(".calc-celula-destaque");
+          if (celulaVd) celulaVd.textContent = linha.vd || "**";
+        }
+      }
+      sincronizarTextareaComposicaoNutricional();
+    });
+
+    // Clique numa sugestão de autocomplete — mousedown (não click) pra
+    // disparar ANTES do blur do input fechar a lista.
+    container.addEventListener("mousedown", (e) => {
+      const sugestao = e.target.closest("[data-nutri-sugestao-id]");
+      if (!sugestao) return;
+      e.preventDefault();
+      const n = composicaoNutricionalEstado.catalogoNutrientes.find((x) => String(x.id) === sugestao.dataset.nutriSugestaoId);
+      const id = sugestao.dataset.nutriSugestaoAlvo;
+      if (!n) return;
+      const dados = dadosAtivos();
+      const linha = dados.linhas.find((l) => l.id === id);
+      if (!linha) return;
+      linha.nome = `${n.nome} (${n.unidade || ""})`;
+      const grupo = dados.grupoEtario || "adultos";
+      linha.vd = calcularVDPctNutricional(linha.nome, "0", grupo, composicaoNutricionalEstado.catalogoNutrientes);
+      linha.fonteMateriaprima = n.fonte_materia_prima || null;
+      sincronizarTextareaComposicaoNutricional();
+      renderizarComposicaoNutricionalWidget();
+    });
+
+    container.addEventListener("focusout", (e) => {
+      if (e.target.closest("[data-nutri-campo=\"nome\"]")) {
+        const id = e.target.dataset.nutriId;
+        setTimeout(() => {
+          const sugestoesEl = container.querySelector(`[data-nutri-sugestoes="${id}"]`);
+          if (sugestoesEl) sugestoesEl.hidden = true;
+        }, 150);
+      }
+    });
+  }
+
   function iniciarWidgetCalcNutricionais(valorInicial, podeEditar) {
     const container = document.querySelector("[data-calc-nutricionais-widget]");
     if (!container) return; // aba "Cálculos" pode não ter sido a inicial — widget só existe se o campo foi renderizado
@@ -7071,7 +7677,20 @@
         if (parsed && Array.isArray(parsed.linhas)) {
           return {
             descricaoMassa: parsed.descricaoMassa || "",
-            linhas: parsed.linhas.map((l) => ({ ...LINHA_CENTESIMAL_DEFAULT, ...l })),
+            // Fase 122 — dado importado do sistema original guarda
+            // aceitacaoMin/aceitacaoMax como STRING em vírgula decimal
+            // (ex.: "94,00"), não como number — `Number("94,00")` do
+            // JS puro dá NaN (não entende vírgula), então a leitura
+            // mostrava "NaN% a NaN%" nessas linhas importadas (relatado
+            // pelo usuário com print). Normaliza os dois campos aqui, na
+            // entrada, pra virarem sempre number de verdade — dado
+            // criado direto pelo widget (que já salva number) passa
+            // por essa mesma função sem mudar de valor.
+            linhas: parsed.linhas.map((l) => ({
+              ...LINHA_CENTESIMAL_DEFAULT, ...l,
+              aceitacaoMin: parseFaixaCentesimalStr(l.aceitacaoMin),
+              aceitacaoMax: parseFaixaCentesimalStr(l.aceitacaoMax),
+            })),
           };
         }
       } catch { /* segue pro default abaixo */ }
@@ -8187,6 +8806,7 @@
        </div>`,
       "memorial"
     );
+    iniciarWidgetComposicaoNutricional(memorial.composicao_nutricional, emModoEdicao);
     iniciarWidgetCalcNutricionais(memorial.calculos_nutricionais, emModoEdicao);
     iniciarWidgetComposicaoCentesimal(memorial.composicao_centesimal, emModoEdicao);
     iniciarWidgetEnsaiosMicrobiologicos(memorial.ensaios_microbiologicos, emModoEdicao);

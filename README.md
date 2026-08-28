@@ -5220,6 +5220,80 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 122) Memorial Técnico — correção completa do "PDF
+  Completo" (Fase 43) e da tela, mais o editor estruturado de Composição
+  Nutricional (a última peça que ainda faltava desde a Fase 116).
+  Relato do usuário, com PDF de referência gerado pelo sistema original:
+  o PDF do AlphafitusOS saía com JSON cru em vários campos, valores
+  errados na Composição Centesimal, e a tela mostrava "NaN% a NaN%" na
+  Faixa de Aceitação.
+  - **Causa raiz do PDF**: o gerador (`memorial_anexos.py`, Fase 43) foi
+    escrito antes dos editores estruturados da Fase 116 — continuava
+    jogando o valor bruto do banco direto num `Paragraph()`. Criado
+    `app/routes/memorial_pdf_campos.py`, um "espelho em Python" de cada
+    parser JS (`parseCalcNutricionais`, `parseComposicaoCentesimal`,
+    `CONFIG_SELETORES_CATALOGO` etc.), com formatadores dedicados por
+    campo. Cabeçalho/rodapé do PDF também refeitos (empresa+CNPJ+
+    "Documento Controlado"+código no topo, caixa de título azul,
+    período/status, rodapé com "Página X de Y" via canvas customizado,
+    bloco de assinaturas reais no fim) pra bater com o PDF do sistema
+    original.
+  - **Bugs reais encontrados e corrigidos durante os testes** (comparando
+    número por número contra o PDF de referência do mesmo memorial):
+    Composição Centesimal usava separador de milhar onde o original não
+    usa (`3.092,78` em vez de `3092,78`); o resumo "Cálculo por
+    Cápsula/Porção" somava a quantidade ELEMENTAR em vez da quantidade de
+    INGREDIENTE (mostrava 3.000 em vez dos 3.092,78 corretos); faltava a
+    linha "Unidade: DOSE".
+  - **"NaN% a NaN%" na tela**: dado importado guarda a faixa de aceitação
+    como texto em vírgula (`"94,00"`), e `Number("94,00")` do JavaScript
+    puro não entende vírgula decimal — virava `NaN`. Corrigido
+    normalizando na entrada do parser (`parseComposicaoCentesimal`).
+  - **"Cálculo de Quantidade" com JSON cru**: nunca teve tela própria (só
+    um textarea que virava JSON cru) — o campo saiu de aparecer como
+    campo solto (nem na tela nem no PDF); o conteúdo dele agora só
+    alimenta os rótulos do resumo de Composição Centesimal.
+  - **Editor de Composição Nutricional** — construído do zero, extraído
+    com fidelidade do código-fonte original (`composicao-nutricional-editor.tsx`,
+    `composicao-nutricional-alimento-editor.tsx`,
+    `composicao-nutricional-switcher.tsx`): os 2 formatos (tabela
+    "padrão" e tabela "por alimento", com troca 100% não-destrutiva entre
+    os dois — cada um mantém seu próprio conteúdo salvo, trocar não
+    apaga o outro), grupo etário (8 opções), cálculo automático de %VD
+    contra o catálogo de nutrientes com fallback pra uma tabela de
+    referência ANVISA/DRI embutida (cópia literal da constante `VD_REF`
+    do original — mesma lógica de correspondência por nome, incluindo o
+    caso de "vd_referencia = 0" significar "Sem VD" explícito), catálogo
+    de nutrientes com busca/adição por categoria, adicionar/remover/
+    reordenar linha. Adaptações deliberadas: reordenar com botões ▲▼ em
+    vez de arrastar (mesmo padrão dos outros editores desta sessão); sem
+    painel de "Templates salvos" nem importação de CSV; layout
+    "horizontal" (frase corrida) da tabela padrão ainda não tem editor
+    visual (só o layout "vertical"/tabela).
+  - **Auditoria dos catálogos**: comparados os 13 catálogos direto contra
+    a API ao vivo do sistema original (só leitura, nunca escrita lá — ver
+    regra do usuário). Achado: 12 dos 13 já estavam 100% importados
+    desde a Fase 115/116; faltavam só 2 itens — "Licopeno" (Nutrientes) e
+    "Procianidina" (Referências) — já importados, com backup antes.
+  - **Sincronização com backup PostgreSQL mais atual**: usuário enviou um
+    novo `.dump` (formato nativo do `pg_dump`, lido via a biblioteca
+    `pgdumplib` — sem precisar instalar PostgreSQL). Comparado linha a
+    linha (não só contagem) contra o que já estava importado: achado 1
+    memorial novo (CERT-AF-20240610/011, com produto/assinatura/anexos/
+    histórico próprios) e 17 linhas de histórico que faltavam em 3
+    memoriais já importados (edições que aconteceram depois da primeira
+    importação). Script novo, `scripts/sincronizar_backup_postgres_28_08.py`,
+    ADITIVO por natural-key (nunca sobrescreve o que já existe) — dois
+    bugs de comparação encontrados e corrigidos durante o teste em cópia
+    descartável antes de aplicar em produção (tipo de dado `tamanho` do
+    anexo vindo como texto do dump vs inteiro no SQLite; formato de data
+    com espaço vs "T" causando falso "tudo é novo" — o dry-run pegou os
+    dois antes de gravar qualquer coisa).
+  Testado ao vivo: os 85 PDFs completos de produção gerados sem erro e
+  sem vazamento de JSON; editor de Composição Nutricional testado nos
+  dois formatos reais (padrão e "por alimento") com dado real, incluindo
+  troca de tipo, adicionar nutriente do catálogo, %VD recalculando ao
+  vivo, salvar e recarregar a página inteira confirmando persistência.
 - (Entregue na Fase 116, parte 5) Memorial Técnico — cabeçalho da tela de
   detalhe refeito para bater 100% com o sistema original, e a tela passou a
   abrir em modo LEITURA por padrão em vez de sempre editável. Pedido do
