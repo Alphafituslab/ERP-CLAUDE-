@@ -475,6 +475,11 @@
             if (sub === "administracao" && subId === "backups") return renderMemorialBackups();
             // Fase 49 — #/memorial/administracao/configuracao.
             if (sub === "administracao" && subId === "configuracao") return renderMemorialConfiguracoes();
+            // Fase 122 — #/memorial/portfolio (item de menu confirmado
+            // contra o original; a tela de verdade — biblioteca de
+            // Tabelas Nutricionais/PDFs de Padronização reutilizáveis —
+            // é a Fase 117-120, ainda não construída).
+            if (sub === "portfolio") return renderMemorialPortfolioPendente();
             return renderMemorialDashboard();
           }
           default: return renderDashboard();
@@ -5289,6 +5294,8 @@
     backup: '<path d="M12 2v14"/><path d="m7 12 5 5 5-5"/><path d="M5 21h14"/>',
     // Fase 49 — "Configurações" (item de Administração, último pedaço).
     configuracao: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>',
+    // Fase 122 — "Portfólio" (item de menu novo, ver navMemorial).
+    portfolio: '<rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>',
   };
   function iconeMemorial(nome, tamanho) {
     tamanho = tamanho || 16;
@@ -5316,6 +5323,16 @@
   // campos de cada um dos 10, e uma única tela genérica
   // (renderMemorialCatalogo) é reaproveitada para todos — em vez de 10
   // telas quase idênticas copiadas e coladas.
+  // Fase 122 — ordem confirmada ao vivo contra o menu do sistema original
+  // (10 catálogos, nessa ordem exata: Metodologias, Nutrientes,
+  // Legislações, Alegações, Tipos de Produto, Advertências,
+  // Armazenamento, Modo de Uso, Justificativas, Referências). Os 3
+  // catálogos extras que o AlphafitusOS ganhou na Fase 115 (Componentes,
+  // Opções de Cápsula, Tipos de Pote — que espelham tabelas que o
+  // sistema original TEM no banco mas não expõe como catálogo próprio no
+  // menu) ficam APENDADOS no fim da lista, não removidos nem
+  // intercalados — continuam funcionando normalmente, só não fazem parte
+  // dos 10 "oficiais" do original.
   const CATALOGOS_MEMORIAL = [
     ["metodologias", "Metodologias", [
       { nome: "categoria", rotulo: "Categoria", tipo: "input", obrigatorio: true },
@@ -5344,15 +5361,6 @@
       { nome: "tipo_composicao", rotulo: "Tipo de Composição", tipo: "input" },
       { nome: "fonte_materia_prima", rotulo: "Fonte da Matéria-Prima", tipo: "input" },
     ]],
-    ["componentes", "Componentes", [
-      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
-      { nome: "pureza_padrao", rotulo: "Pureza Padrão (%)", tipo: "input" },
-      { nome: "unidade", rotulo: "Unidade", tipo: "input" },
-      { nome: "categoria", rotulo: "Categoria", tipo: "input" },
-      { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
-      { nome: "aceitacao_min", rotulo: "Aceitação Mínima (%)", tipo: "input" },
-      { nome: "aceitacao_max", rotulo: "Aceitação Máxima (%)", tipo: "input" },
-    ]],
     ["legislacoes", "Legislações", [
       { nome: "codigo", rotulo: "Código", tipo: "input", obrigatorio: true },
       { nome: "titulo", rotulo: "Título", tipo: "input", obrigatorio: true },
@@ -5369,14 +5377,6 @@
     ["tipos_produto", "Tipos de Produto", [
       { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
       { nome: "tem_capsula", rotulo: "Tem Cápsula", tipo: "checkbox" },
-    ]],
-    ["opcoes_capsula", "Opções de Cápsula", [
-      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
-    ]],
-    ["tipos_pote", "Tipos de Pote", [
-      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
-      { nome: "largura_rotulo", rotulo: "Largura do Rótulo", tipo: "input" },
-      { nome: "comprimento_rotulo", rotulo: "Comprimento do Rótulo", tipo: "input" },
     ]],
     ["advertencias", "Advertências", [
       { nome: "texto", rotulo: "Texto", tipo: "textarea", obrigatorio: true },
@@ -5401,6 +5401,24 @@
       // Fase 115 — paridade com catalogoReferenciasTable do sistema original.
       { nome: "grupo", rotulo: "Grupo", tipo: "input" },
       { nome: "doi", rotulo: "DOI", tipo: "input" },
+    ]],
+    // ---- Extras do AlphafitusOS (Fase 115), apendados — ver comentário acima ----
+    ["componentes", "Componentes", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+      { nome: "pureza_padrao", rotulo: "Pureza Padrão (%)", tipo: "input" },
+      { nome: "unidade", rotulo: "Unidade", tipo: "input" },
+      { nome: "categoria", rotulo: "Categoria", tipo: "input" },
+      { nome: "descricao", rotulo: "Descrição", tipo: "textarea" },
+      { nome: "aceitacao_min", rotulo: "Aceitação Mínima (%)", tipo: "input" },
+      { nome: "aceitacao_max", rotulo: "Aceitação Máxima (%)", tipo: "input" },
+    ]],
+    ["opcoes_capsula", "Opções de Cápsula", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+    ]],
+    ["tipos_pote", "Tipos de Pote", [
+      { nome: "nome", rotulo: "Nome", tipo: "input", obrigatorio: true },
+      { nome: "largura_rotulo", rotulo: "Largura do Rótulo", tipo: "input" },
+      { nome: "comprimento_rotulo", rotulo: "Comprimento do Rótulo", tipo: "input" },
     ]],
   ];
 
@@ -5530,6 +5548,14 @@
       ["empresas", "#/memorial/empresas", "Empresas", "empresa"],
       ["produtos", "#/memorial/produtos", "Produtos", "produto"],
       ["memoriais", "#/memorial/memoriais", "Memoriais Técnicos", "arquivo"],
+      // Fase 122 — item de menu confirmado ao vivo contra o sistema
+      // original (aparece logo depois de "Memoriais Técnicos", antes do
+      // grupo "Catálogos"). A tela em si (biblioteca de Tabelas
+      // Nutricionais/PDFs de Padronização reutilizáveis) é a Fase 117-120,
+      // ainda não construída — por enquanto abre uma página avisando isso,
+      // em vez de deixar o item fora do menu (que ficaria diferente do
+      // original) ou fingir uma funcionalidade que não existe ainda.
+      ["portfolio", "#/memorial/portfolio", "Portfólio", "portfolio"],
     ];
     // "ativa" vem como "catalogo:<chave>" quando dentro de uma tela de
     // catálogo, e como "administracao:<pagina>" dentro de uma tela de
@@ -5582,6 +5608,10 @@
             `<a class="${chave === ativa ? "ativo" : ""}" href="${rota}">${iconeMemorial(icone)}<span>${label}</span></a>`
         )
         .join("")}
+      <details class="memorial-nav-grupo"${catalogoAtiva ? " open" : ""}>
+        <summary>${iconeMemorial("catalogo")}<span>Catálogos</span></summary>
+        <div class="memorial-nav-subitens">${catalogosHtml}</div>
+      </details>
       ${
         itensAdministracao.length
           ? `<details class="memorial-nav-grupo"${administracaoAtiva ? " open" : ""}>
@@ -5590,10 +5620,6 @@
              </details>`
           : ""
       }
-      <details class="memorial-nav-grupo"${catalogoAtiva ? " open" : ""}>
-        <summary>${iconeMemorial("catalogo")}<span>Catálogos</span></summary>
-        <div class="memorial-nav-subitens">${catalogosHtml}</div>
-      </details>
     </nav>`;
   }
 
@@ -5937,6 +5963,30 @@
       <div><p class="stat-rotulo">${escapeHtml(rotulo)}</p><h2 class="stat-valor">${valor}</h2></div>
       <div class="stat-icone">${iconeMemorial(icone, 22)}</div>
     </a>`;
+  }
+
+  // Fase 122 — placeholder honesto de "Portfólio": o item de menu já bate
+  // com o original (aparece na mesma posição), mas a tela de verdade
+  // (biblioteca de Tabelas Nutricionais/PDFs de Padronização
+  // reutilizáveis entre produtos) é a Fase 117-120, ainda não construída
+  // — melhor um aviso claro do que fingir uma funcionalidade que não
+  // existe ainda, ou deixar o item fora do menu (o que ficaria diferente
+  // do original).
+  function renderMemorialPortfolioPendente() {
+    renderShell(
+      `<div class="memorial-shell">
+         ${navMemorial("portfolio")}
+         <div class="memorial-content">
+           <h2>Portfólio</h2>
+           <div class="cartao">
+             <p>Esta tela ainda não foi construída — vai reunir uma biblioteca de Tabelas Nutricionais e PDFs
+             de Padronização reutilizáveis entre produtos, junto com os itens já usados nos memoriais.</p>
+             <p class="texto-suave">Fica na fila de entrega junto com o restante do módulo Memorial Técnico.</p>
+           </div>
+         </div>
+       </div>`,
+      "memorial"
+    );
   }
 
   // ---- Visão Geral (painel — igual ao "/" do sistema original) ----

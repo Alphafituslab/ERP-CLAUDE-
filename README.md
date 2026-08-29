@@ -5289,11 +5289,27 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
     anexo vindo como texto do dump vs inteiro no SQLite; formato de data
     com espaço vs "T" causando falso "tudo é novo" — o dry-run pegou os
     dois antes de gravar qualquer coisa).
+  - **Fidelidade de fonte no PDF**: o sistema original imprime em fonte
+    serifada (`'Lora', Georgia, 'Times New Roman', serif` — CSS de
+    impressão original), enquanto o PDF do AlphafitusOS usava Helvetica
+    (sem serifa) em tudo. Registrado `Georgia`/`Georgia-Bold` a partir da
+    própria pasta `C:\Windows\Fonts` do Windows em tempo de execução (não
+    redistribuímos o arquivo da fonte dentro do instalador — é uma fonte
+    padrão de fábrica do Windows), com fallback automático para
+    `Times-Roman`/`Times-Bold` (fonte embutida do próprio reportlab, sem
+    nenhum arquivo externo — e é literalmente o 3º nível de fallback que
+    o CSS original já usa) caso a Georgia não seja encontrada em alguma
+    máquina. Aplicado em todos os estilos de parágrafo do PDF do Memorial
+    (`memorial_pdf_campos.py` e `memorial_anexos.py`): corpo de texto,
+    rótulos, tabelas, cabeçalho, bloco de assinaturas e rodapé
+    "Página X de Y" — o código de identificação continua em fonte
+    monoespaçada (`Courier-Bold`), igual ao original.
   Testado ao vivo: os 85 PDFs completos de produção gerados sem erro e
-  sem vazamento de JSON; editor de Composição Nutricional testado nos
-  dois formatos reais (padrão e "por alimento") com dado real, incluindo
-  troca de tipo, adicionar nutriente do catálogo, %VD recalculando ao
-  vivo, salvar e recarregar a página inteira confirmando persistência.
+  sem vazamento de JSON (rodado de novo depois da troca de fonte, mesmo
+  resultado); editor de Composição Nutricional testado nos dois formatos
+  reais (padrão e "por alimento") com dado real, incluindo troca de tipo,
+  adicionar nutriente do catálogo, %VD recalculando ao vivo, salvar e
+  recarregar a página inteira confirmando persistência.
 - (Entregue na Fase 116, parte 5) Memorial Técnico — cabeçalho da tela de
   detalhe refeito para bater 100% com o sistema original, e a tela passou a
   abrir em modo LEITURA por padrão em vez de sempre editável. Pedido do

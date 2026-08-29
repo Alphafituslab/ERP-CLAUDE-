@@ -31,13 +31,38 @@ errado nunca derruba a geração do PDF.
 """
 import json
 import math
+import os
 
 from reportlab.lib import colors
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 
 _ESTILOS = getSampleStyleSheet()
+
+# Fase 122 — o sistema original imprime em serifada ('Lora', Georgia,
+# 'Times New Roman', serif — nessa ordem de fallback, ver a folha de
+# estilo de impressão original). Não redistribuímos nenhuma fonte dentro
+# do instalador — em vez disso, lê a Georgia que o PRÓPRIO Windows já traz
+# de fábrica (`C:\Windows\Fonts`), a mesma máquina onde o AlphafitusOS
+# roda; se não achar (ex.: uma instalação Windows sem essa fonte), cai
+# pra "Times-Roman"/"Times-Bold" — fonte padrão embutida no próprio
+# reportlab/PDF, sem precisar de arquivo nenhum, e que é literalmente o
+# 3º nível de fallback que o CSS original já usa. Nunca falha, nunca
+# baixa nada da internet.
+def _registrar_fonte_serifada():
+    pasta_fontes = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+    try:
+        pdfmetrics.registerFont(TTFont("Georgia", os.path.join(pasta_fontes, "georgia.ttf")))
+        pdfmetrics.registerFont(TTFont("Georgia-Bold", os.path.join(pasta_fontes, "georgiab.ttf")))
+        return "Georgia", "Georgia-Bold"
+    except Exception:
+        return "Times-Roman", "Times-Bold"
+
+
+FONTE_CORPO, FONTE_CORPO_NEGRITO = _registrar_fonte_serifada()
 
 # Mesma paleta já usada nos outros PDFs do sistema (Painel Gerencial, CoA)
 # — ver `relatorios.py`/`memorial_anexos.py` — para o Memorial não
@@ -47,15 +72,15 @@ _COR_SUAVE = colors.HexColor("#5a6472")
 _COR_BORDA = colors.HexColor("#dbe1e8")
 _COR_CABECALHO_TABELA = colors.HexColor("#eef2f7")
 
-_ESTILO_CORPO = ParagraphStyle("CorpoCampoMemorialPdf", parent=_ESTILOS["Normal"], fontSize=10, leading=13.5, spaceAfter=3)
-_ESTILO_CORPO_NEGRITO = ParagraphStyle("CorpoNegritoMemorialPdf", parent=_ESTILO_CORPO, fontName="Helvetica-Bold")
+_ESTILO_CORPO = ParagraphStyle("CorpoCampoMemorialPdf", parent=_ESTILOS["Normal"], fontName=FONTE_CORPO, fontSize=10, leading=13.5, spaceAfter=3)
+_ESTILO_CORPO_NEGRITO = ParagraphStyle("CorpoNegritoMemorialPdf", parent=_ESTILO_CORPO, fontName=FONTE_CORPO_NEGRITO)
 _ESTILO_SUBSECAO = ParagraphStyle(
-    "SubsecaoMemorialPdf", parent=_ESTILOS["Normal"], fontSize=10.5, fontName="Helvetica-Bold",
+    "SubsecaoMemorialPdf", parent=_ESTILOS["Normal"], fontName=FONTE_CORPO_NEGRITO, fontSize=10.5,
     textColor=_COR_SECAO, spaceBefore=8, spaceAfter=3,
 )
 _ESTILO_SUAVE_PEQUENO = ParagraphStyle("SuavePequenoMemorialPdf", parent=_ESTILO_CORPO, fontSize=8, textColor=_COR_SUAVE)
 _ESTILO_TABELA_CEL = ParagraphStyle("CelulaTabelaMemorialPdf", parent=_ESTILO_CORPO, fontSize=8.6, leading=11, spaceAfter=0)
-_ESTILO_TABELA_CEL_NEGRITO = ParagraphStyle("CelulaTabelaMemorialPdfNegrito", parent=_ESTILO_TABELA_CEL, fontName="Helvetica-Bold")
+_ESTILO_TABELA_CEL_NEGRITO = ParagraphStyle("CelulaTabelaMemorialPdfNegrito", parent=_ESTILO_TABELA_CEL, fontName=FONTE_CORPO_NEGRITO)
 
 _ESTILO_TABELA_BASE = [
     ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -609,7 +634,7 @@ def formatar_composicao_centesimal(valor_bruto, valor_calculo_quantidade):
     # sempre mostrado junto da Composição Centesimal.
     elementos.append(Spacer(1, 0.2 * cm))
     elementos.append(_p("Nota Técnica", ParagraphStyle(
-        "RotuloNotaTecnicaPdf", parent=_ESTILO_SUAVE_PEQUENO, fontName="Helvetica-Bold", textColor=_COR_SECAO,
+        "RotuloNotaTecnicaPdf", parent=_ESTILO_SUAVE_PEQUENO, fontName=FONTE_CORPO_NEGRITO, textColor=_COR_SECAO,
     )))
     elementos.append(Paragraph(
         "Os ativos de interesse, utilizados como substância bioativa principal. Adicionalmente, a correta "

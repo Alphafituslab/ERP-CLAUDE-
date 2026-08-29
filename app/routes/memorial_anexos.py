@@ -379,13 +379,13 @@ class _CanvasComRodapeMemorial(reportlab_canvas.Canvas):
         largura_pagina = self._pagesize[0]
         y = 1.1 * cm
         self.saveState()
-        self.setFont("Helvetica", 6.5)
+        self.setFont(campos_pdf.FONTE_CORPO, 6.5)
         self.setFillColor(colors.HexColor("#9aa4b2"))
         self.drawString(2 * cm, y, self._empresa_rodape_memorial)
-        self.setFont("Helvetica-Bold", 8)
+        self.setFont(campos_pdf.FONTE_CORPO_NEGRITO, 8)
         self.setFillColor(colors.HexColor("#5a6472"))
         self.drawCentredString(largura_pagina / 2, y, f"Página {self.getPageNumber()} de {total_paginas}")
-        self.setFont("Helvetica", 6.5)
+        self.setFont(campos_pdf.FONTE_CORPO, 6.5)
         self.setFillColor(colors.HexColor("#9aa4b2"))
         self.drawRightString(largura_pagina - 2 * cm, y, "Documento Controlado — Confidencial")
         self.restoreState()
@@ -398,14 +398,14 @@ def _construir_cabecalho_memorial_pdf(memorial):
     flowables do reportlab em vez de HTML/CSS de impressão."""
     estilos = getSampleStyleSheet()
     cor_secao = colors.HexColor("#1a3c5e")
-    estilo_empresa = ParagraphStyle("EmpresaCabecalhoPdf", parent=estilos["Normal"], fontSize=13, fontName="Helvetica-Bold", textColor=cor_secao)
-    estilo_empresa_sub = ParagraphStyle("EmpresaSubCabecalhoPdf", parent=estilos["Normal"], fontSize=8, textColor=colors.HexColor("#666666"))
-    estilo_doc_controlado = ParagraphStyle("DocControladoPdf", parent=estilos["Normal"], fontSize=7.5, alignment=2, textColor=colors.HexColor("#888888"))
+    estilo_empresa = ParagraphStyle("EmpresaCabecalhoPdf", parent=estilos["Normal"], fontSize=13, fontName=campos_pdf.FONTE_CORPO_NEGRITO, textColor=cor_secao)
+    estilo_empresa_sub = ParagraphStyle("EmpresaSubCabecalhoPdf", parent=estilos["Normal"], fontSize=8, fontName=campos_pdf.FONTE_CORPO, textColor=colors.HexColor("#666666"))
+    estilo_doc_controlado = ParagraphStyle("DocControladoPdf", parent=estilos["Normal"], fontSize=7.5, alignment=2, fontName=campos_pdf.FONTE_CORPO, textColor=colors.HexColor("#888888"))
     estilo_codigo_pdf = ParagraphStyle("CodigoCabecalhoPdf", parent=estilos["Normal"], fontSize=9, alignment=2, fontName="Courier-Bold", textColor=colors.HexColor("#333333"))
-    estilo_titulo_caixa = ParagraphStyle("TituloCaixaPdf", parent=estilos["Normal"], fontSize=13, alignment=TA_CENTER, textColor=colors.white, fontName="Helvetica-Bold")
-    estilo_produto_caixa = ParagraphStyle("ProdutoCaixaPdf", parent=estilos["Normal"], fontSize=10.5, alignment=TA_CENTER, textColor=colors.white)
-    estilo_meta_rotulo = ParagraphStyle("MetaRotuloPdf", parent=estilos["Normal"], fontSize=7, alignment=TA_CENTER, textColor=colors.HexColor("#888888"))
-    estilo_meta_valor = ParagraphStyle("MetaValorPdf", parent=estilos["Normal"], fontSize=9, alignment=TA_CENTER, fontName="Helvetica-Bold")
+    estilo_titulo_caixa = ParagraphStyle("TituloCaixaPdf", parent=estilos["Normal"], fontSize=13, alignment=TA_CENTER, textColor=colors.white, fontName=campos_pdf.FONTE_CORPO_NEGRITO)
+    estilo_produto_caixa = ParagraphStyle("ProdutoCaixaPdf", parent=estilos["Normal"], fontSize=10.5, alignment=TA_CENTER, fontName=campos_pdf.FONTE_CORPO, textColor=colors.white)
+    estilo_meta_rotulo = ParagraphStyle("MetaRotuloPdf", parent=estilos["Normal"], fontSize=7, alignment=TA_CENTER, fontName=campos_pdf.FONTE_CORPO, textColor=colors.HexColor("#888888"))
+    estilo_meta_valor = ParagraphStyle("MetaValorPdf", parent=estilos["Normal"], fontSize=9, alignment=TA_CENTER, fontName=campos_pdf.FONTE_CORPO_NEGRITO)
 
     cnpj_txt = memorial.get("empresa_cnpj")
     linha_topo = Table(
@@ -475,19 +475,20 @@ def _construir_assinaturas_pdf(assinaturas):
     todas, como vieram, é mais simples e nunca omite uma assinatura de
     verdade — adaptação deliberada, documentada no README."""
     estilos = getSampleStyleSheet()
-    estilo_titulo_secao = ParagraphStyle("TituloAssinaturasPdf", parent=estilos["Heading2"], fontSize=12, textColor=colors.HexColor("#1a3c5e"), spaceAfter=8)
+    estilo_titulo_secao = ParagraphStyle("TituloAssinaturasPdf", parent=estilos["Heading2"], fontName=campos_pdf.FONTE_CORPO_NEGRITO, fontSize=12, textColor=colors.HexColor("#1a3c5e"), spaceAfter=8)
+    estilo_normal_assin = ParagraphStyle("NormalAssinPdf", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO)
     if not assinaturas:
         return [
             Spacer(1, 1 * cm), Paragraph("Assinaturas", estilo_titulo_secao),
-            Paragraph("Nenhuma assinatura registrada até a geração deste PDF.", estilos["Italic"]),
+            Paragraph("Nenhuma assinatura registrada até a geração deste PDF.", ParagraphStyle("ItalicAssinPdf", parent=estilos["Italic"], fontName=campos_pdf.FONTE_CORPO)),
         ]
-    cabecalho = [Paragraph(t, ParagraphStyle("CabAssinPdf", parent=estilos["Normal"], fontSize=9, fontName="Helvetica-Bold")) for t in ("Nome", "Cargo", "Assinado em")]
+    cabecalho = [Paragraph(t, ParagraphStyle("CabAssinPdf", parent=estilos["Normal"], fontSize=9, fontName=campos_pdf.FONTE_CORPO_NEGRITO)) for t in ("Nome", "Cargo", "Assinado em")]
     linhas = [cabecalho]
     for a in assinaturas:
         linhas.append([
-            Paragraph(_texto_xml_seguro(a.get("nome")), estilos["Normal"]),
-            Paragraph(_texto_xml_seguro(a.get("cargo")), estilos["Normal"]),
-            Paragraph(f"✓ {_fmt_data_br_pdf(a.get('assinado_em'))}", ParagraphStyle("DataAssinPdf", parent=estilos["Normal"], textColor=colors.HexColor("#166534"))),
+            Paragraph(_texto_xml_seguro(a.get("nome")), estilo_normal_assin),
+            Paragraph(_texto_xml_seguro(a.get("cargo")), estilo_normal_assin),
+            Paragraph(f"✓ {_fmt_data_br_pdf(a.get('assinado_em'))}", ParagraphStyle("DataAssinPdf", parent=estilo_normal_assin, textColor=colors.HexColor("#166534"))),
         ])
     tabela = Table(linhas, colWidths=[6.5 * cm, 6.5 * cm, 4 * cm])
     tabela.setStyle(TableStyle([
@@ -507,11 +508,11 @@ def _gerar_pdf_conteudo_memorial(conn, memorial):
     )
     estilos = getSampleStyleSheet()
     estilo_secao = ParagraphStyle(
-        "SecaoMemorial", parent=estilos["Heading2"], fontSize=12, spaceBefore=14, spaceAfter=6,
+        "SecaoMemorial", parent=estilos["Heading2"], fontName=campos_pdf.FONTE_CORPO_NEGRITO, fontSize=12, spaceBefore=14, spaceAfter=6,
         textColor=colors.HexColor("#1a3c5e"),
     )
-    estilo_rotulo_campo = ParagraphStyle("RotuloCampoMemorial", parent=estilos["Normal"], fontSize=9.5, spaceBefore=8, spaceAfter=2, textColor=colors.HexColor("#5a6472"))
-    estilo_valor_campo = ParagraphStyle("ValorCampoMemorial", parent=estilos["Normal"], fontSize=10.5, spaceAfter=2, leading=14)
+    estilo_rotulo_campo = ParagraphStyle("RotuloCampoMemorial", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO, fontSize=9.5, spaceBefore=8, spaceAfter=2, textColor=colors.HexColor("#5a6472"))
+    estilo_valor_campo = ParagraphStyle("ValorCampoMemorial", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO, fontSize=10.5, spaceAfter=2, leading=14)
 
     elementos = _construir_cabecalho_memorial_pdf(memorial)
 
@@ -557,8 +558,8 @@ def _gerar_pdf_pagina_separadora(titulo, subtitulo):
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=4 * cm)
     estilos = getSampleStyleSheet()
-    estilo_titulo = ParagraphStyle("TituloSeparador", parent=estilos["Title"], fontSize=16, alignment=TA_CENTER)
-    estilo_subtitulo = ParagraphStyle("SubtituloSeparador", parent=estilos["Normal"], fontSize=10, alignment=TA_CENTER, textColor=colors.HexColor("#5a6472"), spaceBefore=8)
+    estilo_titulo = ParagraphStyle("TituloSeparador", parent=estilos["Title"], fontName=campos_pdf.FONTE_CORPO_NEGRITO, fontSize=16, alignment=TA_CENTER)
+    estilo_subtitulo = ParagraphStyle("SubtituloSeparador", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO, fontSize=10, alignment=TA_CENTER, textColor=colors.HexColor("#5a6472"), spaceBefore=8)
     elementos = [Paragraph(_texto_xml_seguro(titulo), estilo_titulo)]
     if subtitulo:
         elementos.append(Spacer(1, 0.3 * cm))
