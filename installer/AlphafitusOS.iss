@@ -20,6 +20,18 @@ AppId={{D9D53BD0-E5E4-4360-9A9D-CFA3CC57E5E7}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+; Fase 123 — o RestartManager do Windows (usado pelo Inno Setup para
+; tentar fechar sozinho qualquer app "usando um dos nossos arquivos"
+; antes de sobrescrevê-los) já foi visto travando a instalação por causa
+; de um FALSO POSITIVO: apontou "chrome-native-host" — um processo do
+; Claude Desktop (nada a ver com o AlphafitusOS; confirmado que a pasta
+; de instalação do AlphafitusOS não tem nenhum arquivo chrome* — é
+; correspondência genérica do RestartManager contra alguma DLL
+; compartilhada, não um conflito de verdade). Desligar essa checagem
+; automática evita esse falso positivo; o processo real que precisa estar
+; fechado (AlphafitusOS.exe/_Servico.exe) continua sendo tratado à parte
+; pelo próprio fluxo de deploy (kill explícito antes de instalar).
+CloseApplications=no
 DefaultDirName={autopf}\AlphafitusOS
 DefaultGroupName=Alphafitus OS
 DisableProgramGroupPage=yes
@@ -52,7 +64,20 @@ Name: "desktopicon"; Description: "Criar um atalho na Área de Trabalho"; GroupD
 ; Windows (não tem banco de dados próprio, não faz sentido ter nenhum dos dois), só o
 ; instalador de atalho (instalar_terminal.ps1/.bat) + o ícone.
 [Files]
-Source: "dist\AlphafitusOS\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Check: EhServidor
+; Fase 123 — VCRUNTIME140*.dll são runtimes padrão do Visual C++
+; (redistribuídos pelo próprio PyInstaller, idênticos entre builds
+; enquanto a versão do Python/toolchain não mudar) — nomes tão genéricos
+; que QUALQUER outro processo no Windows pode ter uma cópia carregada na
+; hora do deploy (já visto travando a instalação por um processo do
+; Claude Desktop, sem nenhuma relação com o AlphafitusOS — confirmado por
+; hash idêntico ao arquivo já instalado). Excluídos do wildcard geral e
+; tratados à parte com "onlyifdoesntexist": só copiados na primeira
+; instalação; numa atualização, se o arquivo já existe (99,9% das vezes,
+; byte a byte igual), não tenta sobrescrever — elimina esse falso
+; positivo sem nunca deixar de instalar numa máquina nova.
+Source: "dist\AlphafitusOS\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Check: EhServidor; Excludes: "_internal\VCRUNTIME140.dll,_internal\VCRUNTIME140_1.dll"
+Source: "dist\AlphafitusOS\_internal\VCRUNTIME140.dll"; DestDir: "{app}\_internal"; Flags: onlyifdoesntexist; Check: EhServidor
+Source: "dist\AlphafitusOS\_internal\VCRUNTIME140_1.dll"; DestDir: "{app}\_internal"; Flags: onlyifdoesntexist; Check: EhServidor
 Source: "payload\instalar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
 Source: "payload\iniciar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
 Source: "payload\parar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor

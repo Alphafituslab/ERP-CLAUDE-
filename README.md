@@ -5283,6 +5283,26 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   reais do XML, bloqueio de reimportação) e no navegador (upload real de
   arquivo, vínculo de produto, conferência ao vivo, importação, lote
   aparecendo em Qualidade, nota aparecendo em Fiscal &gt; Notas de Entrada).
+  - **Achado de infraestrutura de deploy, durante a instalação desta
+    fase**: o instalador silencioso falhou (`DeleteFile` código 5, acesso
+    negado) tentando sobrescrever `_internal\VCRUNTIME140.dll` — não por
+    causa do AlphafitusOS, e sim porque um processo completamente
+    alheio (`chrome-native-host`, do Claude Desktop rodando na mesma
+    máquina de desenvolvimento) tinha essa DLL genérica do runtime do
+    Visual C++ carregada a partir do próprio diretório de instalação do
+    AlphafitusOS (confirmado via inspeção dos módulos carregados de cada
+    processo). Como o conteúdo do arquivo já instalado era byte-a-byte
+    idêntico ao novo (mesmo hash SHA-256 — o runtime não muda entre
+    builds), a correção foi excluir essas duas DLLs (`VCRUNTIME140.dll`,
+    `VCRUNTIME140_1.dll`) do wildcard geral do instalador e tratá-las à
+    parte com `Flags: onlyifdoesntexist` (`installer/AlphafitusOS.iss`) —
+    só copiadas na primeira instalação; numa atualização, se o arquivo já
+    existe, nunca tenta sobrescrever. Elimina esse falso positivo (contra
+    qualquer processo de terceiros que porventura tenha a mesma DLL
+    genérica carregada) sem deixar de instalar numa máquina nova. Também
+    ligado `CloseApplications=no` no `[Setup]` pelo mesmo motivo (o
+    RestartManager do Windows também apontava esse mesmo processo alheio
+    como "usando um arquivo nosso").
 - (Entregue na Fase 122) Memorial Técnico — correção completa do "PDF
   Completo" (Fase 43) e da tela, mais o editor estruturado de Composição
   Nutricional (a última peça que ainda faltava desde a Fase 116).
