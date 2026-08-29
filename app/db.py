@@ -140,6 +140,7 @@ SCHEMA_FILES = [
     "schema_fase113.sql",  # Fase 113 — Foto de perfil do operador (usuarios.foto_perfil)
     "schema_fase114.sql",  # Fase 114 — Portfólio com fotos (itens.imagem) + forma_pagamento no App de Vendas
     "schema_fase115.sql",  # Fase 115 — Memorial Técnico: campos/catálogos faltando (paridade com sistema antigo)
+    "schema_fase123.sql",  # Fase 123 — Recebimento e Importação de NF-e: unidades/conversão, vínculo fornecedor-produto, notas_fiscais_entrada
 ]
 
 

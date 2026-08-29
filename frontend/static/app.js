@@ -424,6 +424,7 @@
           case "aps-sugestoes-compra": return renderApsSugestoesCompra();
           case "compras-pedidos": return param ? renderPedidoCompraDetalhe(Number(param)) : renderPedidosCompra();
           case "compras-cotacoes": return param ? renderCotacaoDetalhe(Number(param)) : renderCotacoes();
+          case "nfe-entrada": return param ? renderNfeEntradaDetalhe(Number(param)) : renderNfeEntradaLista();
           case "estoque": return renderEstoque();
           case "solicitacoes-material": return param ? renderSolicitacaoMaterialDetalhe(Number(param)) : renderSolicitacoesMateriais();
           case "materiais-catalogo": return renderCatalogoMateriaisEpi();
@@ -540,6 +541,9 @@
         { rota: "#/catalogo-fluxo", chave: "catalogo-fluxo", label: "Catálogo de Fluxo", permissao: ["fluxo", "apontar"] },
         { rota: "#/compras-pedidos", chave: "compras-pedidos", label: "Pedidos de Compra", permissao: ["compras", "visualizar"] },
         { rota: "#/compras-cotacoes", chave: "compras-cotacoes", label: "Cotações de Fornecedores (RFQ)", permissao: ["compras", "visualizar"] },
+        // Fase 123 — Recebimento e Importação de NF-e: fecha o ciclo
+        // Cotação -> Pedido de Compra -> chegada da nota de verdade.
+        { rota: "#/nfe-entrada", chave: "nfe-entrada", label: "NF-e Recebidas", permissao: ["nfe_entrada", "visualizar"] },
       ],
     },
     // Fase 105 — pedido do usuário: "tudo que for relacionado ao APS
@@ -783,6 +787,21 @@
     e.preventDefault();
     try {
       await tratarFormulario(form.dataset.form, form, e);
+    } catch (erro) {
+      definirFlash("erro", erro.message || "Ocorreu um erro.");
+      montarRota();
+    }
+  });
+
+  // Fase 123 — mesmo princípio de delegação de `data-acao`/`data-form`
+  // acima, para um `<select>` que dispara uma ação sozinho ao mudar
+  // (ex.: escolher o pedido de compra a vincular numa NF-e), sem precisar
+  // de um formulário/botão "Salvar" à parte.
+  document.addEventListener("change", async (e) => {
+    const alvo = e.target.closest("[data-acao-select]");
+    if (!alvo) return;
+    try {
+      await tratarAcaoSelect(alvo.dataset.acaoSelect, alvo);
     } catch (erro) {
       definirFlash("erro", erro.message || "Ocorreu um erro.");
       montarRota();
@@ -4699,6 +4718,285 @@
        </div>`,
       "compras-pedidos"
     );
+  }
+
+  // =======================================================================
+  // FASE 123 — Recebimento e Importação de NF-e
+  // =======================================================================
+  // Fecha o ciclo Cotação -> Pedido de Compra -> chegada da nota de
+  // verdade: a NF-e chega (upload manual do XML nesta fase — a consulta
+  // automática à SEFAZ é uma fase futura, alimentando a mesma tela),
+  // confere sozinha contra o que foi pedido/cotado (preço/quantidade,
+  // convertendo unidade quando a nota vem numa diferente da cadastrada),
+  // e só depois de conferida é importada (gera lote — com lote/validade
+  // obrigatórios — e o lançamento fiscal correspondente).
+  const ROTULOS_SITUACAO_NFE_ENTRADA = {
+    aguardando_analise: "Aguardando análise", em_conferencia: "Em conferência", aprovada: "Aprovada",
+    rejeitada_internamente: "Rejeitada internamente", importada: "Importada", divergencia_encontrada: "Divergência encontrada",
+  };
+  const SELO_SITUACAO_NFE_ENTRADA = {
+    aguardando_analise: "inativo", em_conferencia: "azul", aprovada: "ativo",
+    rejeitada_internamente: "bloqueado", importada: "ativo", divergencia_encontrada: "amarelo",
+  };
+  const ROTULOS_MANIFESTACAO_SEFAZ = {
+    pendente: "Pendente", ciencia_operacao: "Ciência da Operação", confirmacao_operacao: "Confirmação da Operação",
+    desconhecimento_operacao: "Desconhecimento da Operação", operacao_nao_realizada: "Operação não Realizada",
+  };
+  const SELO_MANIFESTACAO_SEFAZ = {
+    pendente: "inativo", ciencia_operacao: "azul", confirmacao_operacao: "ativo",
+    desconhecimento_operacao: "bloqueado", operacao_nao_realizada: "bloqueado",
+  };
+  const SELO_STATUS_CONFERENCIA = { correto: "ativo", atencao: "amarelo", divergente: "bloqueado" };
+  const ICONE_STATUS_CONFERENCIA = { correto: "🟢", atencao: "🟡", divergente: "🔴" };
+
+  function _fmtQtdNfe(v) {
+    if (v === null || v === undefined) return "—";
+    return Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 4 });
+  }
+
+  async function renderNfeEntradaLista(situacaoFiltro) {
+    app.innerHTML = '<div class="carregando">Carregando NF-e recebidas…</div>';
+    const caminho = situacaoFiltro ? `/nfe-entrada?situacao_interna=${encodeURIComponent(situacaoFiltro)}` : "/nfe-entrada";
+    const notas = await chamarApi(caminho);
+    const podeConferir = temPermissao("nfe_entrada", "conferir");
+
+    const abaBotao = (valor, rotulo) =>
+      `<button class="botao ${situacaoFiltro === valor ? "" : "secundario"} pequeno" data-acao="filtrar-nfe-entrada" data-situacao="${valor}">${rotulo}</button>`;
+
+    const linhas = notas.map((n) => `<tr>
+      <td><a href="#/nfe-entrada/${n.id}">${escapeHtml(n.numero || "—")}${n.serie ? `/${escapeHtml(n.serie)}` : ""}</a>
+        <div class="texto-suave mono" style="font-size:11px;">${escapeHtml(n.chave_acesso)}</div></td>
+      <td>${escapeHtml(n.fornecedor_nome || n.razao_social_emitente || "—")}${!n.fornecedor_id ? ' <span class="selo amarelo">fornecedor não vinculado</span>' : ""}</td>
+      <td>${n.quantidade_itens}</td>
+      <td>${fmtMoeda(n.valor_total)}</td>
+      <td>${n.data_emissao ? fmtData(n.data_emissao) : "—"}</td>
+      <td><span class="selo ${SELO_MANIFESTACAO_SEFAZ[n.manifestacao_sefaz]}">${ROTULOS_MANIFESTACAO_SEFAZ[n.manifestacao_sefaz]}</span></td>
+      <td><span class="selo ${SELO_SITUACAO_NFE_ENTRADA[n.situacao_interna]}">${ROTULOS_SITUACAO_NFE_ENTRADA[n.situacao_interna]}</span></td>
+      <td>${n.pedido_compra_id ? `<a href="#/compras-pedidos/${n.pedido_compra_id}">ver pedido</a>` : '<span class="texto-suave">—</span>'}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>NF-e Recebidas</h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             ${abaBotao("", "Todas")}${abaBotao("aguardando_analise", "Aguardando análise")}${abaBotao("em_conferencia", "Em conferência")}
+             ${abaBotao("divergencia_encontrada", "Divergência")}${abaBotao("aprovada", "Aprovada")}${abaBotao("importada", "Importada")}
+           </div>
+           ${podeConferir ? `<button class="botao" data-acao="abrir-upload-xml-nfe">+ Enviar XML de NF-e</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Número/Série</th><th>Fornecedor</th><th>Itens</th><th>Valor</th><th>Emissão</th><th>Manifestação SEFAZ</th><th>Situação interna</th><th>Pedido</th></tr></thead>
+           <tbody>${linhas || `<tr><td colspan="8" class="texto-suave">Nenhuma NF-e ${situacaoFiltro ? "nesta situação" : "recebida ainda"}.</td></tr>`}</tbody>
+         </table>
+       </div>`,
+      "nfe-entrada"
+    );
+  }
+
+  function modalUploadXmlNfe() {
+    abrirModal(`
+      <h3>Enviar XML de NF-e</h3>
+      <p class="texto-suave">Envie o arquivo XML autorizado da nota (não o DANFE em PDF) — o sistema lê os dados,
+      tenta identificar o fornecedor e o pedido de compra automaticamente, e abre a tela de conferência.</p>
+      <form data-form="upload-xml-nfe">
+        <div class="campo"><label>Arquivo XML</label><input type="file" name="arquivo" accept=".xml,text/xml" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Enviar</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderNfeEntradaDetalhe(notaId, notaPreCarregada) {
+    // `notaPreCarregada` evita um refetch redundante logo depois de
+    // `POST .../importar` — é a única chamada que devolve `resumo_importacao`
+    // (o GET normal desta tela não inclui esse resumo, que é só do momento
+    // da importação em si).
+    const nota = notaPreCarregada || await (async () => {
+      app.innerHTML = '<div class="carregando">Carregando NF-e…</div>';
+      return chamarApi(`/nfe-entrada/${notaId}`);
+    })();
+    const podeConferir = temPermissao("nfe_entrada", "conferir");
+    const podeImportar = temPermissao("nfe_entrada", "importar");
+    const jaImportada = nota.situacao_interna === "importada";
+
+    // Mesmo padrão já usado em renderPedidosCompra/modalNovoPedidoCompra:
+    // os modais de vincular produto/fornecedor leem de `state.cache`, então
+    // esta tela garante que ela esteja preenchida ANTES de qualquer modal
+    // poder ser aberto (não dá pra confiar que o usuário já visitou as
+    // telas de Itens/Fornecedores antes de chegar aqui).
+    const [itensCache, fornecedoresCache, unidadesCache] = await Promise.all([
+      state.cache.itens ? Promise.resolve(state.cache.itens) : chamarApi("/itens"),
+      state.cache.fornecedores ? Promise.resolve(state.cache.fornecedores) : chamarApi("/fornecedores"),
+      state.cache.unidadesMedidaNfe ? Promise.resolve(state.cache.unidadesMedidaNfe) : chamarApi("/nfe-entrada/unidades"),
+    ]);
+    state.cache.itens = itensCache;
+    state.cache.fornecedores = fornecedoresCache;
+    state.cache.unidadesMedidaNfe = unidadesCache;
+
+    const opcoesUnidade = (state.cache.unidadesMedidaNfe || []).map((u) => `<option value="${u.codigo}">${escapeHtml(u.codigo)} — ${escapeHtml(u.nome)}</option>`).join("");
+
+    const linhasItens = nota.itens.map((it) => {
+      const conf = it.conferencia;
+      const linhaPreco = conf
+        ? `${conf.preco_cotado != null ? `<div>Cotado: ${fmtMoeda(conf.preco_cotado)}</div>` : ""}
+           ${conf.preco_pedido != null ? `<div>Pedido: ${fmtMoeda(conf.preco_pedido)}</div>` : ""}
+           <div>NF-e: ${fmtMoeda(conf.preco_nfe_convertido)}${conf.diferenca_preco_percentual != null ? ` <span class="texto-suave">(${conf.diferenca_preco_percentual > 0 ? "+" : ""}${conf.diferenca_preco_percentual.toFixed(1)}%)</span>` : ""}</div>`
+        : `<div class="texto-suave">Vincule o produto para conferir.</div>`;
+      const linhaQtd = conf && conf.quantidade_pedida != null
+        ? `<div>Pedido: ${_fmtQtdNfe(conf.quantidade_pedida)} ${escapeHtml(it.unidade_interna_selecionada)}</div>
+           <div>NF-e: ${_fmtQtdNfe(conf.quantidade_convertida)} ${escapeHtml(it.unidade_interna_selecionada)}${conf.diferenca_quantidade_percentual != null ? ` <span class="texto-suave">(${conf.diferenca_quantidade_percentual > 0 ? "+" : ""}${conf.diferenca_quantidade_percentual.toFixed(1)}%)</span>` : ""}</div>`
+        : `<div>${_fmtQtdNfe(it.quantidade_xml)} ${escapeHtml(it.unidade_xml)}${it.unidade_interna_selecionada && it.unidade_interna_selecionada !== it.unidade_xml ? ` → ${_fmtQtdNfe(conf ? conf.quantidade_convertida : null)} ${escapeHtml(it.unidade_interna_selecionada)}` : ""}</div>`;
+
+      return `<tr>
+        <td>${escapeHtml(it.descricao_xml)}<div class="texto-suave" style="font-size:11px;">cód. fornecedor: ${escapeHtml(it.codigo_produto_fornecedor || "—")}</div></td>
+        <td>${it.item_id
+          ? `${escapeHtml(it.item_descricao)}`
+          : (podeConferir && !jaImportada
+              ? `<button class="botao secundario pequeno" data-acao="abrir-vincular-produto-nfe" data-nota-id="${nota.id}" data-item-id="${it.id}" data-descricao="${escapeHtml(it.descricao_xml)}">Vincular produto</button>`
+              : '<span class="selo amarelo">não identificado</span>')}</td>
+        <td>${!jaImportada && podeConferir && it.item_id
+          ? `<select data-acao-select="alterar-unidade-interna-nfe" data-nota-id="${nota.id}" data-item-id="${it.id}">${opcoesUnidade.replace(`value="${it.unidade_interna_selecionada}"`, `value="${it.unidade_interna_selecionada}" selected`)}</select>`
+          : escapeHtml(it.unidade_interna_selecionada || it.unidade_xml)}</td>
+        <td>${linhaQtd}</td>
+        <td>${linhaPreco}</td>
+        <td>${it.erro_conferencia
+          ? `<span class="selo bloqueado" title="${escapeHtml(it.erro_conferencia)}">sem conversão</span>`
+          : (conf ? `${ICONE_STATUS_CONFERENCIA[conf.status_preco] || ""} preço <span class="selo ${SELO_STATUS_CONFERENCIA[conf.status_preco]}">${conf.status_preco || "—"}</span><br>${conf.status_quantidade ? `${ICONE_STATUS_CONFERENCIA[conf.status_quantidade]} qtd. <span class="selo ${SELO_STATUS_CONFERENCIA[conf.status_quantidade]}">${conf.status_quantidade}</span>` : ""}` : "—")}
+        </td>
+        ${!jaImportada ? `<td>${it.item_id ? `<input type="date" data-validade-item="${it.id}" title="Validade do lote (obrigatório)">
+             <input type="text" data-lote-fornecedor-item="${it.id}" placeholder="Lote do fornecedor" style="margin-top:4px;width:100%;">` : ""}</td>` : `<td>${it.lote_gerado_id ? `<a href="#/lotes/${it.lote_gerado_id}">ver lote</a>` : ""}</td>`}
+      </tr>`;
+    }).join("");
+
+    const eventosHtml = nota.eventos.map((e) =>
+      `<div class="linha-evento"><span class="texto-suave">${fmtData(e.criado_em)}</span> — ${escapeHtml(e.tipo_evento)}${e.detalhe ? `: ${escapeHtml(e.detalhe)}` : ""}</div>`
+    ).join("");
+
+    renderShell(
+      `<a class="link-voltar" href="#/nfe-entrada">&larr; Voltar para NF-e Recebidas</a>
+       <h2>NF-e ${escapeHtml(nota.numero || "")}${nota.serie ? `/${escapeHtml(nota.serie)}` : ""}</h2>
+       <div class="cartao">
+         <div class="linha-detalhe">
+           <div><div class="rotulo">Chave de acesso</div><span class="mono" style="font-size:12px;">${escapeHtml(nota.chave_acesso)}</span>
+             <a href="${API}/nfe-entrada/${nota.id}/xml" target="_blank">(baixar XML)</a></div>
+           <div><div class="rotulo">Fornecedor</div>${nota.fornecedor_nome
+             ? escapeHtml(nota.fornecedor_nome)
+             : (podeConferir ? `<button class="botao secundario pequeno" data-acao="abrir-vincular-fornecedor-nfe" data-nota-id="${nota.id}" data-cnpj="${escapeHtml(nota.cnpj_emitente)}" data-razao="${escapeHtml(nota.razao_social_emitente || "")}">Vincular fornecedor</button>` : '<span class="selo amarelo">não vinculado</span>')}</div>
+           <div><div class="rotulo">Valor total</div>${fmtMoeda(nota.valor_total)}</div>
+           <div><div class="rotulo">Emissão</div>${nota.data_emissao ? fmtData(nota.data_emissao) : "—"}</div>
+           <div><div class="rotulo">Pedido de Compra</div>${nota.pedido_compra_numero
+             ? `<a href="#/compras-pedidos/${nota.pedido_compra_id}">${escapeHtml(nota.pedido_compra_numero)}</a>`
+             : (podeConferir && !jaImportada
+                 ? (nota.pedidos_compra_candidatos.length
+                     ? `<select data-acao-select="vincular-pedido-nfe" data-nota-id="${nota.id}"><option value="">— selecionar —</option>${nota.pedidos_compra_candidatos.map((p) => `<option value="${p.id}">${escapeHtml(p.numero)}</option>`).join("")}</select>`
+                     : '<span class="texto-suave">sem pedido em aberto deste fornecedor</span>')
+                 : '<span class="texto-suave">—</span>')}</div>
+           <div><div class="rotulo">Manifestação SEFAZ</div><span class="selo ${SELO_MANIFESTACAO_SEFAZ[nota.manifestacao_sefaz]}">${ROTULOS_MANIFESTACAO_SEFAZ[nota.manifestacao_sefaz]}</span></div>
+           <div><div class="rotulo">Situação interna</div><span class="selo ${SELO_SITUACAO_NFE_ENTRADA[nota.situacao_interna]}">${ROTULOS_SITUACAO_NFE_ENTRADA[nota.situacao_interna]}</span></div>
+         </div>
+         ${podeConferir && !jaImportada ? `
+         <div class="barra-acoes">
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             <span class="texto-suave" style="align-self:center;">Manifestar:</span>
+             <button class="botao secundario pequeno" data-acao="manifestar-nfe" data-id="${nota.id}" data-manifestacao="ciencia_operacao">Ciência da Operação</button>
+             <button class="botao secundario pequeno" data-acao="manifestar-nfe" data-id="${nota.id}" data-manifestacao="confirmacao_operacao">Confirmação</button>
+             <button class="botao secundario pequeno" data-acao="manifestar-nfe" data-id="${nota.id}" data-manifestacao="desconhecimento_operacao">Desconhecimento</button>
+             <button class="botao perigo pequeno" data-acao="manifestar-nfe" data-id="${nota.id}" data-manifestacao="operacao_nao_realizada">Operação não Realizada</button>
+           </div>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             <button class="botao secundario pequeno" data-acao="alterar-situacao-nfe" data-id="${nota.id}" data-situacao="em_conferencia">Em conferência</button>
+             <button class="botao secundario pequeno" data-acao="alterar-situacao-nfe" data-id="${nota.id}" data-situacao="aprovada">Aprovar</button>
+             <button class="botao perigo pequeno" data-acao="alterar-situacao-nfe" data-id="${nota.id}" data-situacao="rejeitada_internamente">Rejeitar</button>
+           </div>
+         </div>` : ""}
+         <table>
+           <thead><tr><th>Item (NF-e)</th><th>Produto interno</th><th>Unidade interna</th><th>Quantidade</th><th>Preço</th><th>Conferência</th><th>${jaImportada ? "Lote gerado" : "Lote / Validade"}</th></tr></thead>
+           <tbody>${linhasItens}</tbody>
+         </table>
+         ${podeImportar && !jaImportada ? `<div class="barra-acoes"><span></span><button class="botao" data-acao="abrir-importar-nfe" data-id="${nota.id}">Importar NF-e</button></div>` : ""}
+         ${nota.resumo_importacao ? `<div class="subcartao">${nota.resumo_importacao.map((r) => r.aviso || r.aviso_fiscal ? `<p class="mensagem-erro">${escapeHtml(r.aviso || r.aviso_fiscal)}</p>` : `<p>✅ ${escapeHtml(r.item)} — lote ${escapeHtml(r.lote_gerado)} (${_fmtQtdNfe(r.quantidade)} ${escapeHtml(r.unidade)})</p>`).join("")}</div>` : ""}
+         <h3 style="margin-top:24px;">Histórico</h3>
+         ${eventosHtml || '<p class="texto-suave">Nenhum evento registrado.</p>'}
+       </div>`,
+      "nfe-entrada"
+    );
+  }
+
+  function modalVincularProdutoNfe(notaId, itemId, descricaoXml) {
+    const itens = state.cache.itens || [];
+    const opcoes = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+    abrirModal(`
+      <h3>Vincular produto interno</h3>
+      <p class="texto-suave">Item na NF-e: "${escapeHtml(descricaoXml)}". O vínculo pelo código do fornecedor é salvo e reaproveitado automaticamente nas próximas notas dele.</p>
+      <form data-form="vincular-produto-nfe" data-nota-id="${notaId}" data-item-id="${itemId}">
+        <div class="campo"><label>Produto interno</label><select name="item_id" required><option value="">— selecionar —</option>${opcoes}</select></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Vincular</button>
+        </div>
+      </form>`);
+  }
+
+  function modalVincularFornecedorNfe(notaId, cnpj, razaoSocial) {
+    const fornecedores = state.cache.fornecedores || [];
+    const opcoes = fornecedores.map((f) => `<option value="${f.id}">${escapeHtml(f.nome)}</option>`).join("");
+    abrirModal(`
+      <h3>Vincular fornecedor</h3>
+      <p class="texto-suave">Emitente da NF-e: ${escapeHtml(razaoSocial || "—")} (CNPJ ${escapeHtml(cnpj)}) — não bateu com nenhum fornecedor cadastrado.</p>
+      <form data-form="vincular-fornecedor-nfe" data-nota-id="${notaId}">
+        <div class="campo"><label>Fornecedor cadastrado</label><select name="fornecedor_id" required><option value="">— selecionar —</option>${opcoes}</select></div>
+        <div class="dica">Se ainda não existe, cadastre em Qualidade &gt; Fornecedores e volte aqui.</div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Vincular</button>
+        </div>
+      </form>`);
+  }
+
+  async function modalImportarNfe(notaId) {
+    const linhasFaltando = [...document.querySelectorAll("[data-validade-item]")]
+      .filter((el) => !el.value)
+      .map((el) => el.dataset.validadeItem);
+    if (linhasFaltando.length) {
+      definirFlash("erro", "Informe a validade do lote de cada item vinculado antes de importar.");
+      return montarRota();
+    }
+    const itens = [...document.querySelectorAll("[data-validade-item]")].map((el) => {
+      const itemNfeId = Number(el.dataset.validadeItem);
+      const loteFornecedorEl = document.querySelector(`[data-lote-fornecedor-item="${itemNfeId}"]`);
+      return { nfe_recebimento_item_id: itemNfeId, validade: el.value, lote_fornecedor: loteFornecedorEl ? loteFornecedorEl.value || null : null };
+    });
+    if (!itens.length) {
+      definirFlash("erro", "Nenhum item vinculado a um produto interno ainda — vincule antes de importar.");
+      return montarRota();
+    }
+    // Seção 11 da especificação — mostra de propósito o aviso ANTES de
+    // tentar enviar (o backend também bloqueia sozinho, mas avisar aqui
+    // evita a pessoa preencher tudo e só descobrir a exigência no erro).
+    const notaAtual = await chamarApi(`/nfe-entrada/${notaId}`);
+    const itensDivergentes = notaAtual.itens.filter((it) =>
+      it.conferencia && (it.conferencia.status_preco === "divergente" || it.conferencia.status_quantidade === "divergente")
+    );
+    const resumo = itens.map((i) => `• item #${i.nfe_recebimento_item_id} — validade ${i.validade}`).join("<br>");
+    abrirModal(`
+      <h3>Confirmar importação da NF-e</h3>
+      <p class="texto-suave">Vai gerar ${itens.length} lote(s) em Qualidade/Estoque (status quarentena) e abater o(s) Pedido(s) de Compra vinculado(s). Esta ação não pode ser desfeita.</p>
+      <p>${resumo}</p>
+      ${itensDivergentes.length ? `
+      <p class="mensagem-erro">🔴 Divergência de preço/quantidade fora da tolerância em:
+        ${itensDivergentes.map((it) => escapeHtml(it.descricao_xml)).join(", ")}.
+        Importar mesmo assim exige a permissão "nfe_entrada.importar_com_divergencia" e uma justificativa.</p>` : ""}
+      <form data-form="importar-nfe" data-nota-id="${notaId}" data-itens='${JSON.stringify(itens)}'>
+        ${itensDivergentes.length ? `<div class="campo"><label>Justificativa da divergência</label>
+          <textarea name="justificativa_divergencia" required placeholder="Ex.: aumento de preço combinado por telefone com o fornecedor em 20/08, ainda sem cotação formal atualizada."></textarea>
+        </div>` : ""}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Confirmar importação</button>
+        </div>
+      </form>`);
   }
 
   // ---- Fase 61: Alçada por Valor no Envio do Pedido de Compra ----
@@ -13122,6 +13420,29 @@
   // =======================================================================
   // Dispatcher de AÇÕES (cliques em botões com data-acao)
   // =======================================================================
+  // Fase 123 — dispatcher irmão de tratarAcao()/tratarFormulario(), para
+  // `<select data-acao-select="...">` que age sozinho ao mudar (ver
+  // listener "change" registrado acima).
+  async function tratarAcaoSelect(acao, alvo) {
+    switch (acao) {
+      case "vincular-pedido-nfe": {
+        const notaIdVincular = Number(alvo.dataset.notaId);
+        await chamarApi(`/nfe-entrada/${notaIdVincular}/vincular-pedido`, {
+          method: "PATCH", body: { pedido_compra_id: alvo.value ? Number(alvo.value) : null },
+        });
+        definirFlash("ok", "Pedido de compra vinculado.");
+        return renderNfeEntradaDetalhe(notaIdVincular);
+      }
+      case "alterar-unidade-interna-nfe": {
+        const notaIdUnidade = Number(alvo.dataset.notaId);
+        await chamarApi(`/nfe-entrada/${notaIdUnidade}/itens/${alvo.dataset.itemId}`, {
+          method: "PATCH", body: { unidade_interna_selecionada: alvo.value },
+        });
+        return renderNfeEntradaDetalhe(notaIdUnidade);
+      }
+    }
+  }
+
   async function tratarAcao(acao, alvo) {
     switch (acao) {
       case "alternar-visibilidade-senha": {
@@ -13835,6 +14156,37 @@
       case "gerar-conta-pagar-de-pedido":
         await modalGerarContaPagarDePedido(Number(alvo.dataset.id), alvo.dataset.numero);
         return;
+
+      // ---- Fase 123: Recebimento e Importação de NF-e ----
+      case "filtrar-nfe-entrada":
+        return renderNfeEntradaLista(alvo.dataset.situacao);
+      case "abrir-upload-xml-nfe":
+        modalUploadXmlNfe();
+        return;
+      case "abrir-vincular-produto-nfe":
+        modalVincularProdutoNfe(Number(alvo.dataset.notaId), Number(alvo.dataset.itemId), alvo.dataset.descricao);
+        return;
+      case "abrir-vincular-fornecedor-nfe":
+        modalVincularFornecedorNfe(Number(alvo.dataset.notaId), alvo.dataset.cnpj, alvo.dataset.razao);
+        return;
+      case "abrir-importar-nfe":
+        modalImportarNfe(Number(alvo.dataset.id));
+        return;
+      case "manifestar-nfe": {
+        const notaIdManifestar = Number(alvo.dataset.id);
+        if (alvo.dataset.manifestacao === "operacao_nao_realizada" && !confirm("Manifestar 'Operação não Realizada'? Use só quando a operação descrita na nota realmente não ocorreu.")) return;
+        await chamarApi(`/nfe-entrada/${notaIdManifestar}/manifestacao`, { method: "PATCH", body: { manifestacao_sefaz: alvo.dataset.manifestacao } });
+        definirFlash("ok", "Manifestação registrada.");
+        return renderNfeEntradaDetalhe(notaIdManifestar);
+      }
+      case "alterar-situacao-nfe": {
+        const notaIdSituacao = Number(alvo.dataset.id);
+        if (alvo.dataset.situacao === "rejeitada_internamente" && !confirm("Rejeitar esta NF-e internamente? Isso não afeta a manifestação fiscal na SEFAZ.")) return;
+        await chamarApi(`/nfe-entrada/${notaIdSituacao}/situacao`, { method: "PATCH", body: { situacao_interna: alvo.dataset.situacao } });
+        definirFlash("ok", "Situação interna atualizada.");
+        return renderNfeEntradaDetalhe(notaIdSituacao);
+      }
+
       // ---- Fase 66: Cotação Comparativa de Fornecedores (RFQ) ----
       case "nova-cotacao":
         modalNovaCotacao();
@@ -15442,6 +15794,45 @@
         fecharModais();
         definirFlash("ok", `Conta a pagar ${pedidoComContaPagar.conta_pagar_numero} gerada a partir deste pedido.`);
         return renderPedidoCompraDetalhe(pedidoIdContaPagar);
+      }
+
+      // ---- Fase 123: Recebimento e Importação de NF-e ----
+      case "upload-xml-nfe": {
+        const arquivoXml = form.querySelector('input[type="file"]').files[0];
+        if (!arquivoXml) throw new Error("Selecione o arquivo XML.");
+        const conteudoXml = await lerArquivoComoBase64(arquivoXml);
+        const notaEnviada = await chamarApi("/nfe-entrada/upload-xml", { method: "POST", body: { xml_base64: conteudoXml } });
+        fecharModais();
+        definirFlash("ok", "NF-e recebida — confira os itens abaixo.");
+        return renderNfeEntradaDetalhe(notaEnviada.id);
+      }
+      case "vincular-produto-nfe": {
+        const notaIdProduto = Number(form.dataset.notaId);
+        await chamarApi(`/nfe-entrada/${notaIdProduto}/itens/${form.dataset.itemId}`, {
+          method: "PATCH", body: { item_id: Number(dados.get("item_id")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Produto vinculado — vínculo salvo para as próximas notas deste fornecedor.");
+        return renderNfeEntradaDetalhe(notaIdProduto);
+      }
+      case "vincular-fornecedor-nfe": {
+        const notaIdFornecedor = Number(form.dataset.notaId);
+        await chamarApi(`/nfe-entrada/${notaIdFornecedor}/vincular-fornecedor`, {
+          method: "PATCH", body: { fornecedor_id: Number(dados.get("fornecedor_id")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Fornecedor vinculado.");
+        return renderNfeEntradaDetalhe(notaIdFornecedor);
+      }
+      case "importar-nfe": {
+        const notaIdImportar = Number(form.dataset.notaId);
+        const resultadoImportacao = await chamarApi(`/nfe-entrada/${notaIdImportar}/importar`, {
+          method: "POST",
+          body: { itens: JSON.parse(form.dataset.itens), justificativa_divergencia: dados.get("justificativa_divergencia") || null },
+        });
+        fecharModais();
+        definirFlash("ok", "NF-e importada — lote(s) gerado(s) em Qualidade/Estoque.");
+        return renderNfeEntradaDetalhe(notaIdImportar, resultadoImportacao);
       }
 
       // ---- Fase 66: Cotação Comparativa de Fornecedores (RFQ) ----

@@ -494,6 +494,30 @@ PERMISSOES_PADRAO = [
     # lista e bloquear/liberar um terminal são ações administrativas).
     ("terminais", "visualizar", "Ver a lista de terminais que já se conectaram ao servidor", 0),
     ("terminais", "bloquear", "Bloquear ou liberar o acesso de um terminal específico ao servidor", 0),
+
+    # Fase 123 — Recebimento e Importação de NF-e. Módulo próprio (em vez
+    # de encaixar em "compras" ou "fiscal") porque tem seu próprio ciclo de
+    # vida (recebida -> conferida -> importada) e ações com risco bem
+    # diferente entre si: "conferir" é o dia a dia (vincular item/pedido,
+    # aplicar conversão de unidade, registrar manifestação/situação
+    # interna); "importar" é o que efetivamente mexe em estoque
+    # (`lotes`)/financeiro/fiscal (`notas_fiscais_entrada`, Fase 78) — só
+    # quem já confere pode também importar, mas nem todo perfil que
+    # confere precisa poder finalizar sozinho; "configurar" (tolerâncias,
+    # certificado A1 da Fase B) fica reservado, mesma régua de
+    # "compras.configurar_alcada_pedido"/"fiscal.configurar".
+    ("nfe_entrada", "visualizar", "Ver a fila de NF-e recebidas e o detalhe de conferência de cada uma", 0),
+    ("nfe_entrada", "conferir", "Vincular fornecedor/pedido/produto, cadastrar conversão de unidade e registrar manifestação/situação interna de uma NF-e recebida", 0),
+    ("nfe_entrada", "importar", "Importar uma NF-e conferida para o estoque (gera lote por item, com lote/validade, e o lançamento fiscal correspondente)", 0),
+    # Separada de "importar" de propósito (seção 11 da especificação:
+    # "caso existam divergências críticas, exigir autorização de usuário
+    # com permissão apropriada") — importar um item que bateu 🟢 na
+    # conferência é o caminho normal; importar um item que ficou 🔴
+    # (preço ou quantidade fora da tolerância configurada) exige essa
+    # permissão adicional MAIS uma justificativa por escrito (ver
+    # validação em app/routes/nfe_entrada.py), nunca passa batido.
+    ("nfe_entrada", "importar_com_divergencia", "Importar uma NF-e mesmo com item(ns) em divergência de preço/quantidade fora da tolerância (exige justificativa)", 1),
+    ("nfe_entrada", "configurar", "Alterar as tolerâncias de divergência de preço/quantidade e configurar o certificado digital A1 para consulta automática à SEFAZ", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
@@ -648,6 +672,14 @@ PERFIS_PADRAO = [
         # Administrador).
         "fiscal.visualizar", "fiscal.registrar_entrada",
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
+        # Fase 123 — mesmo perfil que já lança a NF de compra manualmente
+        # (fiscal.registrar_entrada, acima) ganha também o recebimento
+        # automatizado via XML: conferir e importar. "lotes.receber" já
+        # concedido em outro lugar deste mesmo perfil? Não é necessário —
+        # a importação de NF-e gera o lote por dentro (nfe_entrada.importar),
+        # sem precisar da permissão separada de recebimento manual de lote.
+        "nfe_entrada.visualizar", "nfe_entrada.conferir", "nfe_entrada.importar",
+        "nfe_entrada.importar_com_divergencia",
     ]),
     ("Comercial", "CRM e força de vendas interna", 1, [
         "itens.visualizar", "estoque.visualizar", "comercial.visualizar", "comercial.cadastrar_cliente",

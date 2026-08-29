@@ -5220,6 +5220,69 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 123, parte 1) Recebimento e Importação de NF-e —
+  fecha o ciclo Cotação (Fase 66) → Pedido de Compra (Fase 58) → Lote
+  (Fase 2) com a etapa que faltava: a nota fiscal do fornecedor chegando
+  de verdade. Pedido do usuário, com especificação de 25 seções baseada em
+  como o Ema ERP (sistema usado hoje pela empresa) trata "Notas
+  destinadas"/Manifesto NF-e.
+  - **Upload manual do XML** (Fase A desta entrega — a consulta automática
+    à SEFAZ via certificado A1 próprio fica para uma Fase B futura,
+    alimentando a mesma tabela, só mudando a coluna `fonte`): parser do
+    XML padrão nacional (`app/nfe_entrada_service.py`), resolução
+    automática de fornecedor (por CNPJ) e do Pedido de Compra em aberto
+    daquele fornecedor.
+  - **Vínculo produto ↔ código do fornecedor** (`fornecedor_produto_vinculo`,
+    tabela nova): reaproveitado automaticamente nas próximas notas do
+    mesmo fornecedor, nunca por comparação textual de descrição.
+  - **Unidades de medida e conversão** (`unidades_medida`,
+    `item_conversoes_unidade`, tabelas novas): massa/volume convertem
+    matematicamente (kg↔g↔mg↔mcg, L↔mL); contagem (caixa↔frasco↔pacote...)
+    usa um fator cadastrado por item, já que não existe relação universal
+    entre essas unidades. Preço é sempre normalizado pela mesma unidade
+    ANTES de comparar (nunca compara R$/kg direto com R$/mg).
+  - **Conferência automática** contra o Pedido de Compra e, quando existir,
+    a Cotação que o originou (`cotacao_respostas`) — classifica cada item
+    em 🟢 correto / 🟡 atenção / 🔴 divergente, com tolerância de
+    preço/quantidade parametrizável (`configuracoes_nfe_entrada`). Nunca
+    bloqueia a nota inteira por uma diferença — só o item afetado.
+  - **Divergência crítica exige autorização**: importar um item 🔴 exige a
+    permissão separada `nfe_entrada.importar_com_divergencia` MAIS uma
+    justificativa por escrito, registrada no histórico da nota — nunca
+    passa batido.
+  - **Duplicidade travada pela chave de acesso** (`UNIQUE`) — reimportar a
+    mesma NF-e é bloqueado (409) mostrando quando/por quem já foi
+    importada.
+  - **Lote e validade obrigatórios na importação** — fecha também um
+    pedido antigo do usuário sobre exigir lote/validade ao importar NF-e
+    de matéria-prima.
+  - **Achado importante durante a investigação** (antes de escrever
+    qualquer tabela nova): já existia, desde a Fase 78 (SPED Fiscal),
+    uma tabela `notas_fiscais_entrada` — de captura MANUAL, com ICMS/
+    ICMS-ST/IPI por item, usada pelo motor de apuração fiscal e pelo
+    bloqueio de aprovação de lote em Qualidade (Fase 85). Em vez de
+    duplicar esse conceito, o módulo novo (tabelas `nfe_recebimento`/
+    `nfe_recebimento_itens` — a FILA de recebimento/conferência) alimenta
+    automaticamente aquela tabela já existente na importação
+    (`criar_nota_entrada_interna`, extraída de `app/routes/fiscal.py`
+    para ser reaproveitada), extraindo CST/CSOSN e os valores de ICMS/
+    ICMS-ST/IPI direto do XML — o mesmo lançamento que antes exigia
+    digitação manual agora acontece sozinho, com o lote já vinculado
+    (`lotes.nota_fiscal_entrada_id`), satisfazendo o gate de Qualidade
+    sem nenhum passo extra.
+  - Telas (`#/nfe-entrada`): grade de NF-e recebidas com filtro por
+    situação, e tela de detalhe com conferência item a item, seletor de
+    unidade interna com conversão ao vivo, vínculo de fornecedor/pedido/
+    produto, manifestação SEFAZ separada da situação interna (nunca
+    confundidas), e histórico completo de eventos.
+  Testado ponta-a-ponta: script automatizado via `test_client` do Flask
+  simulando uma NF-e real (fornecedor/pedido resolvidos automaticamente,
+  conferência de preço/quantidade correta, bloqueio de duplicidade,
+  bloqueio de divergência sem justificativa, importação gerando lote +
+  abatendo o pedido + criando o lançamento fiscal automático com ICMS/IPI
+  reais do XML, bloqueio de reimportação) e no navegador (upload real de
+  arquivo, vínculo de produto, conferência ao vivo, importação, lote
+  aparecendo em Qualidade, nota aparecendo em Fiscal &gt; Notas de Entrada).
 - (Entregue na Fase 122) Memorial Técnico — correção completa do "PDF
   Completo" (Fase 43) e da tela, mais o editor estruturado de Composição
   Nutricional (a última peça que ainda faltava desde a Fase 116).

@@ -408,7 +408,17 @@ def criar_nota_entrada():
     usuario_atual = g.usuario_atual
     dados = request.get_json(silent=True) or {}
     conn = get_db()
+    nota_id = criar_nota_entrada_interna(conn, usuario_atual, dados)
+    return jsonify(_nota_entrada_detalhada(conn, nota_id)), 201
 
+
+def criar_nota_entrada_interna(conn, usuario_atual, dados):
+    """Núcleo de `POST /fiscal/notas-entrada` — extraído para ser
+    reaproveitado por quem mais precisar lançar uma Nota Fiscal de Entrada
+    a partir de dados já estruturados, sem duplicar validação (Fase 123 —
+    `app/routes/nfe_entrada.py` chama isto na importação automática de
+    XML, preenchendo os mesmos campos que alguém digitaria manualmente
+    aqui). Devolve o `nota_id` criado; quem chama decide a resposta HTTP."""
     fornecedor_id = dados.get("fornecedor_id")
     serie = (dados.get("serie") or "").strip()
     numero = (dados.get("numero") or "").strip()
@@ -542,7 +552,7 @@ def criar_nota_entrada():
         valor_novo={"fornecedor_id": fornecedor_id, "serie": serie, "numero": numero, "valor_total_nota": valor_total_nota},
         ip=client_ip(), dispositivo=client_device(),
     )
-    return jsonify(_nota_entrada_detalhada(conn, nota_id)), 201
+    return nota_id
 
 
 @bp.post("/notas-entrada/<int:nota_id>/cancelar")
