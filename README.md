@@ -5353,6 +5353,70 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
     ligado `CloseApplications=no` no `[Setup]` pelo mesmo motivo (o
     RestartManager do Windows também apontava esse mesmo processo alheio
     como "usando um arquivo nosso").
+- (Entregue na Fase 123.1) Fidelidade estrutural do PDF do Memorial +
+  correção de um incidente real de login em produção causado por um
+  arquivo de configuração errado deixado por engano num teste local.
+  - **PDF do Memorial comparado número-a-número e seção-a-seção contra
+    dois PDFs de referência reais** (dois memoriais diferentes, enviados
+    pelo usuário) — indo além da Fase 122 (que já tinha corrigido valores
+    errados e JSON cru): a seção "0. Identificação" (21 campos) não existe
+    no PDF de referência — removida do PDF gerado (os campos continuam no
+    banco/editáveis na tela, só pararam de ser impressos); Modo de Uso,
+    Armazenamento e Advertências, que apareciam soltos no fim, foram
+    reposicionados para dentro da seção "2. Composição Nutricional",
+    junto da Lista de Ingredientes, como no original. Bloco de
+    assinaturas redesenhado de uma tabela de 3 colunas (Nome/Cargo/Data)
+    para o layout real do original: dois assinantes lado a lado por
+    linha, cada um com nome+data acima de uma linha horizontal e
+    cargo abaixo — usando `HRFlowable` (ReportLab) para o traço.
+  - **Achado durante a comparação, não um bug de código**: o nome da
+    empresa estava gravado no banco como "ALPAHFITUS" (letras trocadas)
+    em vez de "ALPHAFITUS" — dado real digitado errado uma vez,
+    reproduzido em todos os 85 memoriais desde então. Confirmado que é a
+    única empresa cadastrada (id 1) antes de corrigir via
+    `UPDATE memorial_empresas ...` — não é uma mudança de código, por
+    isso não aparece em nenhum diff.
+  - **Incidente real de produção, achado enquanto o usuário tentava
+    logar**: `admin@alphafitus.com.br` parou de conseguir entrar
+    ("Email ou senha inválidos") mesmo com a senha certa. Causa raiz:
+    durante um teste desta mesma fase, `AlphafitusOS_Console.exe` foi
+    executado diretamente de dentro de `installer\dist\AlphafitusOS\`
+    (antes de compilar o instalador) — o app, sem saber que estava sendo
+    testado, gerou ALI MESMO seu próprio `config_ambiente.bat` (apontando
+    para um `data\alphafitus.db` de teste, quase vazio) e uma pasta
+    `data\` própria. Esses arquivos ficaram esquecidos na pasta, e o
+    wildcard `Source: "dist\AlphafitusOS\*"` do instalador (`.iss`) os
+    copiou JUNTO na hora de compilar o pacote — sobrescrevendo, na
+    instalação real do usuário, o `config_ambiente.bat` correto por um
+    apontando para o banco de teste (0 memoriais, 1 usuário) em vez do
+    banco de produção real (85 memoriais, 4 usuários). A senha em si
+    nunca esteve errada — resetada mesmo assim (`Alpha107588Ok`,
+    `senha_deve_trocar=1`) como segunda camada de segurança, já que
+    trocar a senha depois de qualquer suspeita de acesso indevido nunca
+    é custo perdido. **Correção definitiva**: `config_ambiente.bat`,
+    `config_whatts.bat` e `data\*` agora entram no `Excludes` do wildcard
+    principal do `.iss` — arquivos gerados em tempo de execução (por
+    definição específicos de CADA máquina) nunca mais podem ser
+    empacotados dentro do instalador, não importa o que sobre na pasta
+    `dist\` na hora de compilar. Verificado o login de verdade
+    (`POST /api/v1/auth/login`) contra o banco de produção correto antes
+    de considerar resolvido — a lição do próprio incidente é nunca
+    confiar só num teste isolado.
+  - Pedido do usuário: pasta padrão sugerida na instalação passou de uma
+    pasta escondida (`AppData\Local\Programs`) para `{userdesktop}\AlphafitusOS`
+    — mais fácil de achar. A página de "Selecionar Local de Destino" do
+    próprio Inno Setup já existia habilitada por padrão (só não aparecia
+    nas instalações silenciosas usadas para testes internos), então
+    escolher outro lugar na hora de instalar já era possível sem editar
+    nada. Numa ATUALIZAÇÃO de uma instalação já existente, o Inno Setup
+    usa sozinho o caminho já escolhido da vez anterior — mudar o padrão
+    só afeta instalações NOVAS.
+  Testado: comparação campo a campo do PDF gerado contra os dois PDFs de
+  referência; reinstalação completa (build limpo do zero) confirmando que
+  nenhum `config_ambiente.bat`/`config_whatts.bat`/`data\*` de teste entra
+  mais no instalador; upgrade de uma instalação existente preservando o
+  diretório e o `config_ambiente.bat` corretos sem tocar neles; login real
+  bem-sucedido contra o banco de 85 memoriais depois do upgrade.
 - (Entregue na Fase 122) Memorial Técnico — correção completa do "PDF
   Completo" (Fase 43) e da tela, mais o editor estruturado de Composição
   Nutricional (a última peça que ainda faltava desde a Fase 116).

@@ -30,7 +30,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas as reportlab_canvas
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from .. import audit
 from ..context import ApiError, client_device, client_ip, get_db
@@ -210,33 +210,28 @@ def excluir_anexo(memorial_id, anexo_id):
 # (mesmo cuidado de sincronização documentado noutros pontos do sistema,
 # ex. `_ROTULOS_TIPO_ITEM` em `relatorios.py`).
 SECOES_MEMORIAL_PDF = (
-    ("0. Identificação", (
-        ("numero_certificado", "Número do Certificado"),
-        ("data_emissao", "Data de Emissão"),
-        ("tipo_produto", "Tipo de Produto"),
-        ("tipo_pote", "Tipo de Pote"),
-        ("ingredientes_ativos", "Ingredientes Ativos"),
-        ("excipientes", "Excipientes"),
-        ("composicao_capsula", "Composição da Cápsula"),
-        ("advertencias", "Advertências"),
-        ("armazenamento", "Armazenamento"),
-        ("modo_uso", "Modo de Uso"),
-        ("temperatura", "Temperatura do Estudo"),
-        ("umidade_relativa", "Umidade Relativa do Estudo"),
-        ("periodo_estudo", "Período do Estudo"),
-        ("intervalos_teste", "Intervalos de Teste"),
-        ("elaborado_por", "Elaborado por"),
-        ("aprovado_por", "Aprovado por"),
-        ("laudo_emitido_por", "Laudo emitido por"),
-        ("analista_senior", "Analista Sênior"),
-        ("email_rt", "Email do Responsável Técnico"),
-        ("email_analista_senior", "Email do Analista Sênior"),
-        ("observacao_analista", "Observação do Analista"),
-    )),
     ("1. Objetivo", (("objetivo", "Objetivo"),)),
+    # Fase 123 — "Advertências"/"Armazenamento"/"Modo de Uso" saíram de
+    # uma seção "0. Identificação" própria (que nunca existiu no sistema
+    # original — comparado campo a campo contra um PDF de referência
+    # gerado por ele) e entraram aqui, na posição exata em que aparecem
+    # nesse PDF: logo depois da Lista de Ingredientes, antes da
+    # Composição Centesimal. Os demais campos que viviam em "0.
+    # Identificação" (tipo_produto, tipo_pote, temperatura,
+    # umidade_relativa, periodo_estudo, intervalos_teste, elaborado_por,
+    # aprovado_por, laudo_emitido_por, analista_senior, email_rt,
+    # email_analista_senior, observacao_analista, ingredientes_ativos,
+    # excipientes, composicao_capsula) também não aparecem impressos no
+    # PDF de referência — são só apoio interno (a própria narrativa do
+    # campo "objetivo" já cita temperatura/UR/intervalos por extenso) e
+    # continuam existindo/editáveis na tela do memorial, só não são mais
+    # impressos soltos aqui.
     ("2. Composição Nutricional", (
         ("composicao_nutricional", "Composição Nutricional"),
         ("lista_ingredientes", "Lista de Ingredientes"),
+        ("modo_uso", "Modo de Uso"),
+        ("armazenamento", "Armazenamento"),
+        ("advertencias", "Advertências"),
     )),
     # Fase 122 — "calculo_quantidade" saiu da lista de campos impressos
     # aqui: não é mais um campo próprio com rótulo/valor solto — vira
@@ -473,29 +468,52 @@ def _construir_assinaturas_pdf(assinaturas):
     então tentar encaixar num dos dois slots fixos arriscaria esconder
     uma assinatura real por não bater a palavra exata do cargo. Mostrar
     todas, como vieram, é mais simples e nunca omite uma assinatura de
-    verdade — adaptação deliberada, documentada no README."""
+    verdade.
+
+    Layout comparado direto contra um PDF de referência gerado pelo
+    sistema original: lá cada assinatura é uma "coluna" — nome em itálico
+    (como se fosse a assinatura escrita à mão) + "✓ data" por cima de uma
+    linha, e o nome em negrito + o cargo por baixo dela — duas colunas
+    lado a lado por linha. Reproduzido aqui do mesmo jeito (Fase 123),
+    trocando só a tabela genérica de "Nome/Cargo/Assinado em" que não
+    tinha equivalente no original."""
     estilos = getSampleStyleSheet()
     estilo_titulo_secao = ParagraphStyle("TituloAssinaturasPdf", parent=estilos["Heading2"], fontName=campos_pdf.FONTE_CORPO_NEGRITO, fontSize=12, textColor=colors.HexColor("#1a3c5e"), spaceAfter=8)
-    estilo_normal_assin = ParagraphStyle("NormalAssinPdf", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO)
     if not assinaturas:
         return [
             Spacer(1, 1 * cm), Paragraph("Assinaturas", estilo_titulo_secao),
             Paragraph("Nenhuma assinatura registrada até a geração deste PDF.", ParagraphStyle("ItalicAssinPdf", parent=estilos["Italic"], fontName=campos_pdf.FONTE_CORPO)),
         ]
-    cabecalho = [Paragraph(t, ParagraphStyle("CabAssinPdf", parent=estilos["Normal"], fontSize=9, fontName=campos_pdf.FONTE_CORPO_NEGRITO)) for t in ("Nome", "Cargo", "Assinado em")]
-    linhas = [cabecalho]
-    for a in assinaturas:
-        linhas.append([
-            Paragraph(_texto_xml_seguro(a.get("nome")), estilo_normal_assin),
-            Paragraph(_texto_xml_seguro(a.get("cargo")), estilo_normal_assin),
-            Paragraph(f"✓ {_fmt_data_br_pdf(a.get('assinado_em'))}", ParagraphStyle("DataAssinPdf", parent=estilo_normal_assin, textColor=colors.HexColor("#166534"))),
-        ])
-    tabela = Table(linhas, colWidths=[6.5 * cm, 6.5 * cm, 4 * cm])
+
+    estilo_nome_assinado = ParagraphStyle("NomeAssinadoPdf", parent=estilos["Italic"], fontName=campos_pdf.FONTE_CORPO, fontSize=10.5, alignment=TA_CENTER)
+    estilo_data_assinada = ParagraphStyle("DataAssinadaPdf", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO, fontSize=8.5, alignment=TA_CENTER, textColor=colors.HexColor("#166534"))
+    estilo_nome_impresso = ParagraphStyle("NomeImpressoPdf", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO_NEGRITO, fontSize=9.5, alignment=TA_CENTER, spaceBefore=4)
+    estilo_cargo_impresso = ParagraphStyle("CargoImpressoPdf", parent=estilos["Normal"], fontName=campos_pdf.FONTE_CORPO, fontSize=8.5, alignment=TA_CENTER, textColor=campos_pdf._COR_SUAVE)
+
+    def _bloco_assinatura(a):
+        return [
+            Paragraph(_texto_xml_seguro(a.get("nome")), estilo_nome_assinado),
+            Paragraph(f"✓ {_fmt_data_br_pdf(a.get('assinado_em'))}", estilo_data_assinada),
+            HRFlowable(width="90%", thickness=0.75, color=colors.HexColor("#9aa4b2"), spaceBefore=2, spaceAfter=2),
+            Paragraph(_texto_xml_seguro(a.get("nome")), estilo_nome_impresso),
+            Paragraph(_texto_xml_seguro(a.get("cargo")), estilo_cargo_impresso),
+        ]
+
+    # Duas colunas por linha (mesmo layout do original) — última linha com
+    # só uma assinatura fica sozinha na coluna esquerda, célula direita em
+    # branco, em vez de esticar pra ocupar a largura toda.
+    linhas_tabela = []
+    for i in range(0, len(assinaturas), 2):
+        par = assinaturas[i:i + 2]
+        linha = [_bloco_assinatura(par[0])]
+        linha.append(_bloco_assinatura(par[1]) if len(par) > 1 else "")
+        linhas_tabela.append(linha)
+
+    tabela = Table(linhas_tabela, colWidths=[8 * cm, 8 * cm])
     tabela.setStyle(TableStyle([
-        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#dbe1e8")),
-        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#eef2f7")),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
-        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 10), ("BOTTOMPADDING", (0, 0), (-1, -1), 10),
+        ("LEFTPADDING", (0, 0), (-1, -1), 12), ("RIGHTPADDING", (0, 0), (-1, -1), 12),
     ]))
     return [Spacer(1, 1 * cm), Paragraph("Assinaturas", estilo_titulo_secao), tabela]
 

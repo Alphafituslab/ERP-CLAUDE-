@@ -11,7 +11,7 @@
 ; diferenca entre instalacao "de verdade" (Arquivos de Programas, pode
 ; virar Servico do Windows) e a instalacao simples.
 #define MyAppName "Alphafitus OS"
-#define MyAppVersion "123.0"
+#define MyAppVersion "123.1"
 #define MyAppPublisher "Alphafitus"
 #define MyAppExeName "AlphafitusOS.exe"
 
@@ -32,7 +32,15 @@ AppPublisher={#MyAppPublisher}
 ; fechado (AlphafitusOS.exe/_Servico.exe) continua sendo tratado à parte
 ; pelo próprio fluxo de deploy (kill explícito antes de instalar).
 CloseApplications=no
-DefaultDirName={autopf}\AlphafitusOS
+; Fase 123 — pedido do usuário: pasta padrão sugerida agora é o Desktop
+; (mais fácil de achar do que a pasta escondida de Programas), e a
+; página de "Selecionar Local de Destino" do próprio Inno Setup (que já
+; vem habilitada por padrão — DisableDirPage nunca foi ligado aqui)
+; deixa escolher outro lugar na hora de instalar, sem precisar editar
+; nada. Numa ATUALIZAÇÃO (mesmo AppId já instalado antes), o Inno Setup
+; usa sozinho o caminho já escolhido da vez anterior — mudar o padrão
+; aqui só afeta instalações NOVAS, nunca move uma instalação existente.
+DefaultDirName={userdesktop}\AlphafitusOS
 DefaultGroupName=Alphafitus OS
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
@@ -75,7 +83,20 @@ Name: "desktopicon"; Description: "Criar um atalho na Área de Trabalho"; GroupD
 ; instalação; numa atualização, se o arquivo já existe (99,9% das vezes,
 ; byte a byte igual), não tenta sobrescrever — elimina esse falso
 ; positivo sem nunca deixar de instalar numa máquina nova.
-Source: "dist\AlphafitusOS\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Check: EhServidor; Excludes: "_internal\VCRUNTIME140.dll,_internal\VCRUNTIME140_1.dll"
+; Fase 123 — achado real: rodar o .exe direto de dentro de
+; installer\dist\AlphafitusOS\ (comum ao testar antes de compilar o
+; instalador) gera, NAQUELA MESMA pasta, um config_ambiente.bat/
+; config_whatts.bat e uma pasta data\ próprios (o app não sabe que está
+; sendo testado, então trata aquele diretório como se fosse a instalação
+; de verdade). Se esses arquivos ficarem esquecidos ali na hora de
+; compilar o instalador, o wildcard abaixo os copiava JUNTO para a
+; instalação real — sobrescrevendo o config_ambiente.bat de um usuário
+; já instalado com um apontando pro banco de dados ERRADO (o de teste,
+; quase vazio). Foi exatamente isso que aconteceu numa entrega desta
+; fase. Excluídos explicitamente — estes três só devem existir
+; gerados pelo próprio app, na pasta de instalação de verdade, nunca
+; vindos do pacote.
+Source: "dist\AlphafitusOS\*"; DestDir: "{app}"; Flags: recursesubdirs ignoreversion; Check: EhServidor; Excludes: "_internal\VCRUNTIME140.dll,_internal\VCRUNTIME140_1.dll,config_ambiente.bat,config_whatts.bat,data\*,data"
 Source: "dist\AlphafitusOS\_internal\VCRUNTIME140.dll"; DestDir: "{app}\_internal"; Flags: onlyifdoesntexist; Check: EhServidor
 Source: "dist\AlphafitusOS\_internal\VCRUNTIME140_1.dll"; DestDir: "{app}\_internal"; Flags: onlyifdoesntexist; Check: EhServidor
 Source: "payload\instalar_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor

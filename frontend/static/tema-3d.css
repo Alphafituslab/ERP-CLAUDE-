@@ -445,6 +445,28 @@ body {
 .link-nav[href="#/memorial/visao-geral"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5Z'/><path d='M14 3v5h5'/><path d='M9 13h6M9 17h6'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5Z'/><path d='M14 3v5h5'/><path d='M9 13h6M9 17h6'/></svg>"); }
 .link-nav[href="#/conta"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='3.4'/><path d='M5 20c1-4 4-6 7-6s6 2 7 6'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='8' r='3.4'/><path d='M5 20c1-4 4-6 7-6s6 2 7 6'/></svg>"); }
 .link-nav[href="#/notificacoes"]::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 16v-5a6 6 0 10-12 0v5l-2 3h16l-2-3Z'/><path d='M10 21a2 2 0 004 0'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M18 16v-5a6 6 0 10-12 0v5l-2 3h16l-2-3Z'/><path d='M10 21a2 2 0 004 0'/></svg>"); }
+/* Fase 123 (Parte 2) — pedido do usuário: "colocar a logo que te mandei
+   ali onde está escrito WhatsApp". Diferente dos outros itens acima (uma
+   silhueta em traço, mascarada com `currentColor`), aqui é a logo REAL
+   do Whatts Inbox ("Seja Alpha" — mesmo ícone do atalho na área de
+   trabalho, `whatts_bundled/frontend/static/img/icone-64.png`, copiado
+   para `frontend/static/img/whatsapp-logo.png` pois o frontend principal
+   é servido pelo próprio Flask do AlphafitusOS, separado do pacote do
+   Whatts). Por isso este seletor desliga a técnica de máscara/currentColor
+   da regra genérica logo acima e usa a imagem colorida direto — senão a
+   logo apareceria toda branca (silhueta), perdendo as cores da marca. */
+.link-nav[href="http://localhost:5050"]::before {
+  /* !important necessário: a regra genérica logo acima usa
+     `.link-nav[href]:not(.barra-lateral-subitem)::before`, que tem
+     especificidade MAIOR que este seletor (o :not() carrega a
+     especificidade do próprio .barra-lateral-subitem) — sem isso, o
+     `background: currentColor` dela venceria e a logo continuaria
+     aparecendo como um quadrado branco liso. */
+  background: transparent url("img/whatsapp-logo.png") center / contain no-repeat !important;
+  -webkit-mask-image: none !important;
+  mask-image: none !important;
+  border-radius: 4px;
+}
 [data-grupo="grupo-qualidade"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6l7-3Z'/><path d='M9 12l2 2 4-4'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M12 3l7 3v6c0 4.5-3 8-7 9-4-1-7-4.5-7-9V6l7-3Z'/><path d='M9 12l2 2 4-4'/></svg>"); }
 [data-grupo="grupo-producao"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 21V11l4 3v-3l4 3v-3l4 3V7l4 3v11H3Z'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M3 21V11l4 3v-3l4 3v-3l4 3V7l4 3v11H3Z'/></svg>"); }
 [data-grupo="grupo-aps"] > summary::before { -webkit-mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='8.5'/><path d='M12 7v5l3.5 2'/></svg>"); mask-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='8.5'/><path d='M12 7v5l3.5 2'/></svg>"); }
