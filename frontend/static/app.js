@@ -629,6 +629,12 @@
         { rota: "#/terminais", chave: "terminais", label: "Terminais", permissao: ["terminais", "visualizar"] },
       ],
     },
+    // Fase 123 (Parte 2) — Whatts Inbox incluso, rodando localmente (porta
+    // 5050) como um módulo nativo do AlphafitusOS. Abre numa aba nova de
+    // propósito (login e tela de conversa continuam exatamente como no
+    // Whatts Inbox original — sem SSO, sem embutir em iframe) — ver
+    // README, "Fase 123, parte 2".
+    { rota: "http://localhost:5050", chave: "whatsapp-bundled", label: "WhatsApp", abrirNovaAba: true },
     { rota: "#/conta", chave: "conta", label: "Minha Conta" },
     { rota: "#/notificacoes", chave: "notificacoes", label: "Notificações" },
   ];
@@ -693,7 +699,10 @@
         </details>`;
       }
       if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return "";
-      return `<a class="link-nav ${it.chave === paginaAtiva ? "ativo" : ""}" href="${it.rota}">${it.label}</a>`;
+      // Fase 123 (Parte 2) — "abrirNovaAba" é opt-in (só o item do
+      // WhatsApp usa até agora): os demais itens continuam navegando
+      // dentro da própria SPA por hash, sem abrir aba nova.
+      return `<a class="link-nav ${it.chave === paginaAtiva ? "ativo" : ""}" href="${it.rota}"${it.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>${it.label}</a>`;
     }).join("");
 
     const flashHtml = state.flash

@@ -28,6 +28,25 @@ def pasta_instalacao():
     return os.path.dirname(os.path.abspath(__file__))
 
 
+def pasta_whatts_bundled_pai():
+    """Fase 123 (Parte 2) — pasta-mãe de `whatts_bundled/`. NÃO é a mesma
+    coisa que `pasta_instalacao()`: aquela aponta pra pasta do PRÓPRIO
+    .exe (onde `config_ambiente.bat`/`data/` — arquivos do USUÁRIO —
+    devem viver, ao lado do executável, editáveis/visíveis). Os módulos
+    Python empacotados (como `whatts_bundled/`, via `datas` no .spec) vão
+    parar dentro de `sys._MEIPASS` quando congelado pelo PyInstaller —
+    que, com `contents_directory='.'` no .spec, ainda assim resolveu para
+    uma subpasta `_internal/` nesta versão do PyInstaller (6.x), diferente
+    da pasta do .exe. Rodando direto (sem empacotar, ex.: testes deste
+    projeto), `sys._MEIPASS` não existe — cai para a pasta deste arquivo,
+    onde `whatts_bundled/` já é vizinha de verdade."""
+    if getattr(sys, "frozen", False):
+        return getattr(sys, "_MEIPASS", pasta_instalacao())
+    # Não empacotado: este arquivo vive em installer/, whatts_bundled/ é
+    # irmã da RAIZ do projeto (um nível acima de installer/).
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
 def gerar_config_ambiente_se_necessario(pasta):
     caminho = os.path.join(pasta, "config_ambiente.bat")
     if os.path.isfile(caminho):
@@ -130,6 +149,19 @@ def main():
     print("  fechar esta janela desliga o servidor para todo mundo.")
     print("=" * 64)
     print()
+
+    # Fase 123 (Parte 2) — módulo WhatsApp (Whatts Inbox) incluso, num
+    # segundo servidor (porta 5050) dentro deste mesmo processo — ver
+    # comentário completo em app_launcher_tray.py. Isolado em try/except:
+    # uma falha aqui nunca impede o AlphafitusOS de subir normalmente.
+    try:
+        sys.path.insert(0, os.path.join(pasta_whatts_bundled_pai(), "whatts_bundled"))
+        import iniciar_whatts_bundled
+
+        if iniciar_whatts_bundled.iniciar_em_thread(pasta):
+            print("  Módulo WhatsApp (Whatts Inbox) também disponível em: http://localhost:5050")
+    except Exception as erro_whatts:
+        print(f"  Aviso: módulo WhatsApp (Whatts Inbox) não pôde ser iniciado ({erro_whatts}) — AlphafitusOS continua normalmente.")
 
     import waitress
 

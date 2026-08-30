@@ -32,12 +32,39 @@ datas_comuns = [
     # bandeja) a partir da pasta de instalação — não basta ser só o ícone
     # EMBUTIDO no .exe (esse é só o ícone do ARQUIVO .exe no Explorer).
     (os.path.join(RAIZ_PROJETO, "installer", "icone.ico"), "."),
+    # Fase 123 (Parte 2) — módulo WhatsApp incluso (Whatts Inbox,
+    # vendorizado em whatts_bundled/): precisa ficar como pasta de
+    # arquivos REAIS no disco de saída (mesmo motivo de
+    # noarchive=True/contents_directory='.' no topo deste arquivo — o
+    # próprio whatts_app/db.py e whatts_app/__init__.py calculam caminhos
+    # a partir de `__file__`), por isso datas (não passa pelo PYZ
+    # comprimido) para as três pastas relevantes.
+    (os.path.join(RAIZ_PROJETO, "whatts_bundled", "whatts_app"), os.path.join("whatts_bundled", "whatts_app")),
+    (os.path.join(RAIZ_PROJETO, "whatts_bundled", "frontend"), os.path.join("whatts_bundled", "frontend")),
+    (os.path.join(RAIZ_PROJETO, "whatts_bundled", "migrations"), os.path.join("whatts_bundled", "migrations")),
+    (os.path.join(RAIZ_PROJETO, "whatts_bundled", "whatts_seed.py"), "whatts_bundled"),
+    (os.path.join(RAIZ_PROJETO, "whatts_bundled", "iniciar_whatts_bundled.py"), "whatts_bundled"),
 ]
 
 hiddenimports_comuns = [
     "waitress",
     "app", "app.routes",
     "win32timezone",  # dependência oculta clássica do pywin32 em serviços
+    # Fase 123 (Parte 2) — dependências de terceiros do módulo WhatsApp
+    # incluso (Whatts Inbox, vendorizado em whatts_bundled/ — ver `datas`
+    # acima). De propósito NÃO colocamos "whatts_app" aqui: como um
+    # hiddenimport é resolvido pelo nome do pacote via `pathex` (sem
+    # nenhum prefixo de pasta customizado), ele iria parar solto na RAIZ
+    # da saída (dist/AlphafitusOS/whatts_app/), não dentro de
+    # whatts_bundled/ como o código deste módulo espera — por isso
+    # whatts_app inteiro já vai via `datas` (arquivo real, no lugar
+    # certo) e só as bibliotecas de TERCEIROS que ele importa (não
+    # descobertas automaticamente porque whatts_app nunca entra no grafo
+    # de import estático de app_launcher_tray.py/app_launcher.py) entram
+    # aqui, resolvidas normalmente a partir do site-packages do venv de
+    # build — "requests"/"PyJWT" o AlphafitusOS já usa por conta própria,
+    # só "pyotp" é exclusivo do Whatts.
+    "pyotp", "requests",
 ]
 
 hiddenimports_tray = hiddenimports_comuns + ["pystray._win32", "PIL.Image"]

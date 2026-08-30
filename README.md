@@ -5220,6 +5220,56 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 123, parte 2) Módulo WhatsApp incluso no AlphafitusOS
+  — o Whatts Inbox (caixa de entrada compartilhada de WhatsApp,
+  `github.com/Alphafituslab/whatts-interativo-claude`, hoje também em
+  produção separada em `whatts.alphafitus.com.br`) passa a vir *dentro*
+  de toda instalação nova do AlphafitusOS. Pedido do usuário: "se uma
+  empresa comprar o ERP já tem a ferramenta WhatsApp inclusa", sem tocar
+  em nada do que já roda hoje (nem o repositório original, nem o site em
+  produção).
+  - **Vendoring, não integração de banco**: cópia congelada do
+    backend+frontend do Whatts Inbox em `whatts_bundled/` (pacote Python
+    renomeado para `whatts_app` — o original se chama só `app`, igual ao
+    do próprio AlphafitusOS; manter os dois com o mesmo nome quebraria o
+    import de um dos dois). Banco próprio (`data/whatts.db`, separado de
+    `data/alphafitus.db`) — a tabela `usuarios` do Whatts não tem
+    nenhuma relação com a do AlphafitusOS, então unir os bancos criaria
+    uma colisão real; rodando como processo/thread separado com banco
+    próprio, o risco é zero.
+  - **Sobe junto, nunca derruba o principal**: `whatts_bundled/iniciar_whatts_bundled.py`
+    roda o Whatts (porta 5050) numa thread daemon própria, chamada pelos
+    dois launchers (`app_launcher.py`/`app_launcher_tray.py`) DEPOIS do
+    servidor principal já estar de pé — qualquer falha ali (dependência
+    faltando, porta ocupada) fica só no log; o AlphafitusOS continua
+    funcionando normalmente sem o módulo WhatsApp.
+  - **Login e tela de conversa continuam exatamente como hoje** — sem
+    SSO, sem embutir em iframe (testado: o próprio Whatts Inbox em
+    produção já manda `X-Frame-Options: SAMEORIGIN`, então um iframe
+    cross-origin seria bloqueado pelo navegador mesmo se tentássemos).
+    Item de menu novo "WhatsApp" abre `http://localhost:5050` numa aba
+    nova — clicar é literalmente acessar o mesmo Whatts Inbox de sempre,
+    só que rodando localmente também.
+  - **Achado real durante o empacotamento**: o PyInstaller (mesmo com
+    `contents_directory='.'` no `.spec`) ainda coloca os módulos dentro
+    de uma subpasta `_internal/` nesta versão — diferente da pasta do
+    próprio `.exe`. O primeiro teste do módulo empacotado falhou
+    (`No module named 'iniciar_whatts_bundled'`) porque o código
+    localizava a pasta usando `sys.executable` (certo para
+    `config_ambiente.bat`/`data/`, arquivos do usuário, ao lado do
+    `.exe`) em vez de `sys._MEIPASS` (o jeito correto/oficial do
+    PyInstaller de achar dados empacotados, que aponta pra dentro de
+    `_internal/`) — corrigido com uma função própria
+    (`pasta_whatts_bundled_pai()`, `installer/app_launcher.py`) que
+    distingue os dois casos.
+  - Dependência nova: `pyotp` (2FA do Whatts, independente do 2FA do
+    AlphafitusOS) — `PyJWT`/`requests` o AlphafitusOS já trazia por
+    conta própria.
+  Testado ponta-a-ponta: módulo rodando sozinho via Python puro (antes de
+  empacotar), depois dentro do `.exe` congelado de verdade (os dois
+  servidores respondendo ao mesmo tempo, porta 5000 e 5050), e no
+  navegador clicando no item de menu "WhatsApp" e confirmando que abre a
+  tela de login real do Whatts Inbox ("Seja Alpha").
 - (Entregue na Fase 123, parte 1) Recebimento e Importação de NF-e —
   fecha o ciclo Cotação (Fase 66) → Pedido de Compra (Fase 58) → Lote
   (Fase 2) com a etapa que faltava: a nota fiscal do fornecedor chegando

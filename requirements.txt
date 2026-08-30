@@ -46,3 +46,8 @@ pywin32>=306 ; sys_platform == "win32"
 # dentro de app/nfe_service.py (mesmo padrão de boto3 acima), então uma
 # instalação que nunca emitir uma NF-e não é afetada mesmo sem esta biblioteca.
 requests>=2.31
+# pyotp, PyJWT: dependências do módulo WhatsApp incluso (Whatts Inbox,
+# cópia vendorizada em whatts_bundled/ — Fase 123, parte 2). PyJWT já
+# vem por outro motivo (autenticação do próprio AlphafitusOS); pyotp é
+# só do Whatts (2FA dele, independente do 2FA do AlphafitusOS).
+pyotp>=2.9

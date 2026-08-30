@@ -27,6 +27,7 @@ from app_launcher import (
     detectar_ip_local,
     gerar_config_ambiente_se_necessario,
     pasta_instalacao,
+    pasta_whatts_bundled_pai,
 )
 
 MB_ICONERROR = 0x10
@@ -110,6 +111,19 @@ def main():
         )
         thread_servidor.start()
 
+        # Fase 123 (Parte 2) — módulo WhatsApp (Whatts Inbox) incluso,
+        # rodando como um segundo servidor (porta 5050) dentro do mesmo
+        # processo. Sempre DEPOIS do servidor principal já ter começado a
+        # subir, e isolado em try/except: uma falha aqui nunca impede o
+        # AlphafitusOS de funcionar normalmente.
+        try:
+            sys.path.insert(0, os.path.join(pasta_whatts_bundled_pai(), "whatts_bundled"))
+            import iniciar_whatts_bundled
+
+            iniciar_whatts_bundled.iniciar_em_thread(pasta)
+        except Exception:
+            logging.exception("Módulo WhatsApp (Whatts Inbox) não pôde ser iniciado — AlphafitusOS continua normalmente")
+
         # Abre o navegador sozinho no primeiro início — sem isso, clicar o
         # atalho não parece fazer nada visível (o servidor sobe em
         # segundo plano, só o ícone aparece na bandeja), o que já
@@ -159,12 +173,18 @@ def _rodar_icone_bandeja(pasta, ip_local):
     def abrir_navegador(icon=None, item=None):
         webbrowser.open("http://localhost:5000")
 
+    def abrir_whatsapp(icon=None, item=None):
+        webbrowser.open("http://localhost:5050")
+
     def sair(icon, item):
         logging.info("Encerrando por pedido do usuário (menu da bandeja).")
         icon.stop()
         os._exit(0)
 
-    itens_menu = [pystray.MenuItem("Abrir Alphafitus OS", abrir_navegador, default=True)]
+    itens_menu = [
+        pystray.MenuItem("Abrir Alphafitus OS", abrir_navegador, default=True),
+        pystray.MenuItem("Abrir WhatsApp (Whatts Inbox)", abrir_whatsapp),
+    ]
     if ip_local:
         itens_menu.append(
             pystray.MenuItem(f"Endereço na rede: {ip_local}:5000", None, enabled=False)
