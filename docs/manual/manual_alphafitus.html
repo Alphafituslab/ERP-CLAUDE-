@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<title>Manual Alphafitus OS</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --marca-teal: #00b4a3;
+  --marca-verde: #00af6b;
+  --dourado: #34d399;
+  --fundo: #f4f6f8;
+  --superficie: #ffffff;
+  --texto: #17212b;
+  --texto-suave: #5a6472;
+  --borda: #e2e6ea;
+  --sombra: 0 1px 3px rgba(0,0,0,0.08), 0 4px 16px rgba(0,0,0,0.04);
+  --radius: 12px;
+  --font-titulo: "Outfit", -apple-system, "Segoe UI", sans-serif;
+  --font-corpo: "Inter", -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --fundo: #0e1520;
+    --superficie: #161f2c;
+    --texto: #e8ecf1;
+    --texto-suave: #9aa5b3;
+    --borda: #26313f;
+    --sombra: 0 1px 3px rgba(0,0,0,0.3), 0 4px 20px rgba(0,0,0,0.25);
+  }
+}
+:root[data-theme="dark"] {
+  --fundo: #0e1520;
+  --superficie: #161f2c;
+  --texto: #e8ecf1;
+  --texto-suave: #9aa5b3;
+  --borda: #26313f;
+  --sombra: 0 1px 3px rgba(0,0,0,0.3), 0 4px 20px rgba(0,0,0,0.25);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--fundo); color: var(--texto);
+  font-family: var(--font-corpo); font-size: 15px; line-height: 1.6;
+}
+.layout { display: flex; max-width: 1320px; margin: 0 auto; min-height: 100vh; }
+.toc {
+  width: 260px; flex-shrink: 0; padding: 28px 18px; position: sticky; top: 0;
+  align-self: flex-start; max-height: 100vh; overflow-y: auto;
+}
+.toc-marca { display: flex; align-items: center; gap: 10px; margin-bottom: 22px; padding: 0 6px; }
+.toc-marca-selo {
+  width: 34px; height: 34px; border-radius: 9px;
+  background: linear-gradient(135deg, var(--marca-teal), var(--marca-verde));
+  display: flex; align-items: center; justify-content: center; color: #fff; font-family: var(--font-titulo);
+  font-weight: 800; font-size: 15px; flex-shrink: 0;
+}
+.toc-marca-texto { font-family: var(--font-titulo); font-weight: 700; font-size: 14px; line-height: 1.15; }
+.toc-marca-texto small { display: block; font-weight: 500; font-size: 10px; color: var(--texto-suave); letter-spacing: .02em; }
+.toc a {
+  display: block; padding: 7px 10px; border-radius: 8px; color: var(--texto-suave);
+  text-decoration: none; font-size: 12.5px; font-weight: 500;
+}
+.toc a:hover { background: var(--superficie); color: var(--texto); }
+.toc .toc-secao { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--texto-suave); opacity: .7; padding: 14px 10px 4px; font-weight: 600; }
+.conteudo { flex: 1; padding: 40px 48px 100px; min-width: 0; }
+.cabecalho {
+  background: linear-gradient(120deg, #063d33, #0a5c48 55%, #0d7a5a);
+  color: #fff; border-radius: 18px; padding: 38px 40px; margin-bottom: 36px;
+  position: relative; overflow: hidden;
+}
+.cabecalho::after {
+  content: ""; position: absolute; right: -60px; top: -60px; width: 260px; height: 260px;
+  border-radius: 50%; background: radial-gradient(circle, rgba(255,255,255,.08), transparent 70%);
+}
+.cabecalho-eyebrow { font-size: 11.5px; text-transform: uppercase; letter-spacing: .12em; opacity: .75; font-weight: 600; }
+.cabecalho h1 { font-family: var(--font-titulo); font-size: 32px; margin: 8px 0 10px; font-weight: 800; text-wrap: balance; }
+.cabecalho p { max-width: 600px; opacity: .88; margin: 0; font-size: 14.5px; }
+.cabecalho-meta { display: flex; gap: 18px; margin-top: 22px; flex-wrap: wrap; }
+.cabecalho-meta span {
+  font-size: 12px; background: rgba(255,255,255,.12); padding: 6px 12px; border-radius: 999px;
+  font-weight: 600; letter-spacing: .01em;
+}
+h2 {
+  font-family: var(--font-titulo); font-size: 23px; font-weight: 700; margin: 52px 0 6px;
+  scroll-margin-top: 20px; display: flex; align-items: center; gap: 10px;
+}
+h2 .num { color: var(--marca-verde); font-variant-numeric: tabular-nums; }
+h2 + .subtitulo { color: var(--texto-suave); font-size: 13.5px; margin: 0 0 20px; max-width: 640px; }
+h3 { font-family: var(--font-titulo); font-size: 16px; font-weight: 700; margin: 28px 0 8px; scroll-margin-top: 20px; }
+p { margin: 0 0 12px; }
+.cartao {
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--radius);
+  padding: 20px 22px; margin-bottom: 16px; box-shadow: var(--sombra);
+}
+.grade-modulos { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 18px 0 30px; }
+.mod-card {
+  background: var(--superficie); border: 1px solid var(--borda); border-radius: 10px; padding: 14px 16px;
+  text-decoration: none; color: var(--texto); display: flex; flex-direction: column; gap: 4px;
+}
+.mod-card .mod-num { font-family: var(--font-titulo); font-size: 11px; font-weight: 700; color: var(--marca-verde); }
+.mod-card .mod-nome { font-weight: 600; font-size: 13.5px; }
+.sequencia { counter-reset: seq; list-style: none; margin: 20px 0; padding: 0; }
+.sequencia li {
+  counter-increment: seq; position: relative; padding: 4px 0 22px 40px; border-left: 2px solid var(--borda); margin-left: 15px;
+}
+.sequencia li:last-child { border-left-color: transparent; padding-bottom: 0; }
+.sequencia li::before {
+  content: counter(seq); position: absolute; left: -15px; top: 0; width: 28px; height: 28px; border-radius: 50%;
+  background: var(--marca-verde); color: #fff; font-family: var(--font-titulo); font-weight: 700; font-size: 12.5px;
+  display: flex; align-items: center; justify-content: center;
+}
+.sequencia strong { display: block; font-size: 14.5px; margin-bottom: 2px; }
+.exemplo {
+  background: color-mix(in srgb, var(--marca-teal) 7%, var(--superficie));
+  border-left: 3px solid var(--marca-teal); border-radius: 0 10px 10px 0; padding: 14px 18px; margin: 14px 0;
+  font-size: 13.5px;
+}
+.exemplo strong { color: var(--marca-verde); }
+.aviso-real {
+  background: color-mix(in srgb, #d97706 10%, var(--superficie));
+  border-left: 3px solid #d97706; border-radius: 0 10px 10px 0; padding: 12px 18px; margin: 14px 0; font-size: 13px;
+}
+table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+th { text-align: left; padding: 8px 10px; color: var(--texto-suave); text-transform: uppercase; font-size: 10.5px; letter-spacing: .04em; border-bottom: 1px solid var(--borda); }
+td { padding: 9px 10px; border-bottom: 1px solid var(--borda); }
+code { background: var(--fundo); border: 1px solid var(--borda); border-radius: 4px; padding: 1px 6px; font-size: 12.5px; }
+.selo { display: inline-block; font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em; }
+.selo-verde { background: color-mix(in srgb, var(--marca-verde) 15%, transparent); color: var(--marca-verde); }
+.selo-cinza { background: color-mix(in srgb, var(--texto-suave) 15%, transparent); color: var(--texto-suave); }
+.rodape { margin-top: 60px; padding-top: 20px; border-top: 1px solid var(--borda); color: var(--texto-suave); font-size: 12px; }
+ul.lista-simples { padding-left: 20px; margin: 10px 0; }
+ul.lista-simples li { margin-bottom: 6px; }
+@media (max-width: 900px) {
+  .layout { flex-direction: column; }
+  .toc { width: 100%; position: static; max-height: none; }
+  .conteudo { padding: 24px 20px 80px; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav class="toc">
+    <div class="toc-marca">
+      <span class="toc-marca-selo">A</span>
+      <span class="toc-marca-texto">ALPHAFITUS<small>Manual do Sistema</small></span>
+    </div>
+    <a href="#inicio">Visão geral</a>
+    <a href="#sequencia">Ordem recomendada</a>
+    <div class="toc-secao">Cadastros base</div>
+    <a href="#itens">Itens</a>
+    <a href="#empresas">Empresas</a>
+    <div class="toc-secao">Qualidade</div>
+    <a href="#qualidade">Fornecedores, Lotes, Desvios</a>
+    <a href="#shelf-life">Shelf Life</a>
+    <div class="toc-secao">Cadeia de suprimentos</div>
+    <a href="#producao">Produção &amp; PCP</a>
+    <a href="#aps">APS (Sequenciamento)</a>
+    <a href="#estoque">Estoque</a>
+    <a href="#materiais">Materiais &amp; EPI</a>
+    <div class="toc-secao">Vendas e dinheiro</div>
+    <a href="#comercial">Comercial &amp; Vendas</a>
+    <a href="#financeiro">Financeiro</a>
+    <div class="toc-secao">Visão e controle</div>
+    <a href="#relatorios">Relatórios &amp; Custos</a>
+    <a href="#administracao">Administração</a>
+    <a href="#whatsapp">WhatsApp</a>
+    <a href="#paineis">Painéis (Tempo Real / Executivo)</a>
+  </nav>
+  <main class="conteudo">
+    <header class="cabecalho" id="inicio">
+      <div class="cabecalho-eyebrow">Manual do sistema</div>
+      <h1>Alphafitus OS</h1>
+      <p>Guia completo de todos os módulos do sistema: para que cada um serve, quando usar, e a ordem recomendada de operação — do primeiro cadastro até o produto faturado e entregue.</p>
+      <div class="cabecalho-meta">
+        <span>Manual v1.1</span>
+        <span>Sistema v123.5</span>
+        <span>Atualizado em 31/08/2026</span>
+      </div>
+    </header>
+
+    <p>Este manual acompanha a versão do sistema mostrada acima — sempre que o Alphafitus OS ganha uma tela ou funcionalidade nova, esta página é atualizada junto e republicada no mesmo endereço, na <a href="https://whatts.alphafitus.com.br/downloads/">página de downloads</a>. Não é preciso guardar cópia: o link de sempre já vai levar à versão mais recente.</p>
+
+    <div class="exemplo"><strong>Atalho útil:</strong> a barra superior do sistema tem uma lupa de pesquisa ("Pesquisar módulo ou tela..."). Digite o nome de um módulo inteiro (ex.: "financeiro") pra ver tudo que existe dentro dele, ou o nome de uma tela específica (ex.: "memorial") pra ir direto — ela busca em qualquer nível do menu, incluindo pastas aninhadas como Shelf Life.</div>
+
+    <h2 id="sequencia"><span class="num">§</span> Ordem recomendada de uso</h2>
+    <p class="subtitulo">O sistema foi desenhado como uma cadeia — cada etapa consome o que a anterior produziu. Esta é a ordem que faz sentido seguir, principalmente na primeira vez que a empresa está estruturando os dados.</p>
+    <ol class="sequencia">
+      <li><strong>1. Cadastros base — Itens e Empresas</strong>Antes de qualquer coisa, cadastre os produtos/matérias-primas (Itens) e os dados fiscais da própria empresa (Empresas). Sem isso, nenhum outro módulo tem o que referenciar.</li>
+      <li><strong>2. Qualidade — Fornecedores e homologação</strong>Cadastre fornecedores e aprove quais itens cada um pode fornecer (homologação). Só fornecedor homologado consegue ter lote recebido para itens marcados como "exige homologação".</li>
+      <li><strong>3. Compras — Cotação → Pedido</strong>Dentro de Produção &amp; PCP: peça cotação a fornecedores (RFQ), converta a resposta vencedora em Pedido de Compra.</li>
+      <li><strong>4. Recebimento — Lote em quarentena</strong>Ao chegar a mercadoria, registra-se o lote (Qualidade → Lotes), que nasce automaticamente em quarentena até a análise de laboratório aprovar.</li>
+      <li><strong>5. Produção — Fórmula → Ordem</strong>Com a matéria-prima aprovada em estoque, monta-se a Fórmula (BOM) do produto e abre-se a Ordem de Produção, que consome os insumos e gera um lote de produto acabado.</li>
+      <li><strong>6. Estoque</strong>Todo lote aprovado (matéria-prima ou produto acabado) fica visível e rastreável no Estoque (WMS), com posição, quantidade e validade.</li>
+      <li><strong>7. Comercial — Pedido de venda</strong>Cliente cadastrado, pedido lançado, produto separado a partir do estoque disponível.</li>
+      <li><strong>8. Financeiro e Fiscal</strong>Faturamento gera a Nota Fiscal (NF-e); o recebimento do cliente é baixado no Financeiro, fechando o ciclo.</li>
+      <li><strong>9. Relatórios e Auditoria</strong>A qualquer momento — custo do produto, rastreabilidade completa de um lote (recall), trilha de auditoria de quem fez o quê.</li>
+    </ol>
+    <div class="aviso-real">
+      <strong>Estado real do seu sistema hoje:</strong> a maior parte dessa cadeia operacional (Itens, Fornecedores, Lotes, Estoque, Produção) ainda está vazia — o uso até agora se concentrou no <strong>Memorial Técnico</strong> (85 memoriais reais cadastrados) e no início do <strong>Comercial</strong> (1 cliente, 2 pedidos). As seções abaixo explicam cada módulo mesmo assim, com exemplos de como usar quando chegar a hora.
+    </div>
+
+    <h2 id="itens"><span class="num">1</span> Itens</h2>
+    <p class="subtitulo">Menu raiz · Cadastro base · <span class="selo selo-cinza">0 itens cadastrados hoje</span></p>
+    <p>É o catálogo de matérias-primas, embalagens e produtos acabados — a base de tudo que o sistema movimenta. Cada item tem unidade de medida, tipo, e pode ser marcado como <strong>"exige fornecedor homologado"</strong> (só recebe lote de fornecedor aprovado pela Qualidade) e ter um <strong>estoque mínimo</strong> configurado (dispara aviso quando o saldo real cai abaixo dele).</p>
+    <div class="exemplo"><strong>Exemplo real:</strong> pra cadastrar "Creatina Monohidratada" como matéria-prima, você define a unidade (kg), marca "exige fornecedor homologado" (já que é um ativo crítico de fórmula) e define estoque mínimo de 50kg — abaixo disso, o item aparece automaticamente no Painel Tempo Real, na coluna "Abaixo do Estoque Mínimo".</div>
+
+    <h2 id="empresas"><span class="num">2</span> Empresas <small style="font-weight:400;color:var(--texto-suave);font-size:13px;">(Administração)</small></h2>
+    <p class="subtitulo">Dados fiscais da própria empresa — usados na emissão de NF-e.</p>
+    <p>Cadastro da(s) razão social, CNPJ, unidades/depósitos/laboratórios e configuração fiscal (certificado, série de nota) usada por todo o módulo de Faturamento/Fiscal. Uma empresa com múltiplas unidades pode ter mais de um depósito de estoque físico separado aqui.</p>
+
+    <h2 id="qualidade"><span class="num">3</span> Qualidade</h2>
+    <p class="subtitulo">Fornecedores, Lotes, Desvios e a configuração de tolerâncias — o controle que garante que nada chega ao cliente sem ser aprovado.</p>
+    <h3>Fornecedores</h3>
+    <p>Cadastro de fornecedores com CNPJ, lead time (prazo de entrega em dias — usado pelo MRP para calcular até quando comprar) e a lista de itens homologados para cada um. Um fornecedor só aparece como opção de recebimento para um item marcado "exige homologação" depois de homologado aqui.</p>
+    <h3>Lotes / Qualidade</h3>
+    <p>Todo lote — de matéria-prima recebida ou de produto acabado produzido — nasce em <strong>quarentena</strong>. Só é liberado para uso/venda depois que o laboratório registra a análise e a Qualidade aprova — por desenho, a mesma pessoa nunca faz as duas coisas (segregação de função).</p>
+    <div class="exemplo"><strong>Fluxo real:</strong> chega uma entrega de embalagens → "Registrar recebimento" cria o lote em quarentena → alguém do Laboratório lança o resultado da análise → alguém da Qualidade aprova (ou reprova, abrindo automaticamente um Desvio) → só então o lote fica disponível no Estoque para consumo.</div>
+    <h3>Desvios</h3>
+    <p>Registro formal de qualquer não-conformidade — um lote reprovado na análise, uma etapa de produção fora do padrão, uma reclamação de cliente. Tem criticidade e status, e fica no histórico permanente do item/lote afetado (rastreabilidade).</p>
+    <h3>Configuração de Qualidade</h3>
+    <p>Parâmetros globais: por exemplo, se a aprovação de um lote exige obrigatoriamente uma nota fiscal de entrada já lançada no Fiscal antes de liberar (evita lote "fantasma" sem documento fiscal correspondente).</p>
+
+    <h2 id="shelf-life"><span class="num">4</span> Shelf Life <small style="font-weight:400;color:var(--texto-suave);font-size:13px;">(dentro de Qualidade)</small></h2>
+    <p class="subtitulo">Os dois sistemas de estabilidade/validade de produto — cópias reais dos sistemas originais, abrem em aba própria.</p>
+    <h3>Memorial Técnico</h3>
+    <p>Sistema completo de documentação regulatória ANVISA — memoriais de cálculo, composição nutricional, rotulagem, portfólio de produtos. <strong>85 memoriais já cadastrados</strong> — é hoje o módulo mais usado do sistema. Login próprio (Clayton / mesma senha do ERP, sincronizada automaticamente).</p>
+    <h3>Protocolo de Estabilidade</h3>
+    <p>Sistema de estudos de estabilidade (define o shelf life real do produto: quanto tempo ele se mantém dentro da especificação, em cada condição de armazenamento). Calcula cinética de degradação e, quando aplicável, Arrhenius (relação entre temperatura acelerada e vida útil real). Ainda sem protocolos reais cadastrados neste ambiente.</p>
+    <div class="aviso-real">Os dois abrem em <strong>aba nova do navegador</strong> de propósito — são cópias reais dos sistemas originais rodando no seu próprio servidor, não uma reimplementação, então o login/telas são idênticos ao que já existia.</div>
+
+    <h2 id="producao"><span class="num">5</span> Produção &amp; PCP</h2>
+    <p class="subtitulo">Fórmulas, ordens de produção e todo o ciclo de compras (cotação → pedido → nota de entrada).</p>
+    <table>
+      <thead><tr><th>Tela</th><th>Para que serve</th></tr></thead>
+      <tbody>
+        <tr><td>Fórmulas (BOM)</td><td>Receita do produto: quais itens (e quantidades) compõem um lote de produção.</td></tr>
+        <tr><td>Ordens de Produção</td><td>Abre uma ordem a partir de uma fórmula; consome os insumos do estoque e gera o lote de produto acabado ao concluir.</td></tr>
+        <tr><td>Tipos de Etapa</td><td>Cadastro de etapas do processo fabril (Pesagem, Granulação, Compressão, Embalagem...) — usadas pra apontar onde a produção está e ratear perda por etapa.</td></tr>
+        <tr><td>Catálogo de Fluxo</td><td>Sequência padrão de etapas por tipo de produto.</td></tr>
+        <tr><td>Pedidos de Compra</td><td>Pedido formal enviado a um fornecedor — pode nascer direto ou a partir de uma Cotação vencedora.</td></tr>
+        <tr><td>Cotações (RFQ)</td><td>Solicita preço a vários fornecedores para o mesmo item; a resposta escolhida vira Pedido de Compra automaticamente.</td></tr>
+        <tr><td>NF-e Recebidas</td><td>Notas fiscais de fornecedor — conferência automática contra o Pedido/Cotação (preço e quantidade), importação gera o lote em quarentena já com dados fiscais reais.</td></tr>
+      </tbody>
+    </table>
+    <div class="exemplo"><strong>Exemplo real:</strong> precisa de 200kg de Creatina → abre uma Cotação pedindo preço a 3 fornecedores homologados → a resposta mais barata vira Pedido de Compra automaticamente → ao chegar, sobe-se o XML da nota (NF-e Recebidas) → o sistema confere sozinho se o preço/quantidade batem com o que foi cotado (🟢 correto / 🟡 atenção / 🔴 divergente) → importar gera o lote em quarentena.</div>
+
+    <h2 id="aps"><span class="num">6</span> APS (Sequenciamento)</h2>
+    <p class="subtitulo">Planejamento: centros de trabalho, agenda de produção e cálculo de necessidade de materiais (MRP).</p>
+    <ul class="lista-simples">
+      <li><strong>Centros de Trabalho</strong> — máquinas/linhas de produção, com capacidade e taxa de mão de obra/overhead (usada no custeio real).</li>
+      <li><strong>Agenda</strong> — calendário de quando cada ordem está programada em cada centro de trabalho.</li>
+      <li><strong>MRP</strong> — calcula, a partir da demanda (pedidos + ordens planejadas), o que falta comprar e até quando, considerando o lead time de cada fornecedor.</li>
+      <li><strong>Sugestões de Compra (MRP)</strong> — lista pronta pra virar Pedido de Compra com um clique, gerada pelo cálculo acima.</li>
+    </ul>
+
+    <h2 id="estoque"><span class="num">7</span> Estoque</h2>
+    <p class="subtitulo">Posição em tempo real de tudo que está fisicamente disponível — WMS (Warehouse Management).</p>
+    <p>Mostra saldo por item, lote e localização, sempre refletindo o que já passou pela aprovação de Qualidade (nada em quarentena aparece como disponível aqui). É a partir daqui que a Separação de um pedido de venda busca o produto.</p>
+
+    <h2 id="materiais"><span class="num">8</span> Materiais &amp; EPI</h2>
+    <p class="subtitulo">Solicitações internas de materiais e equipamentos de proteção — um fluxo separado do estoque de venda.</p>
+    <p>Um colaborador solicita (ex.: luvas, máscaras, material de limpeza da linha), alguém aprova, e a saída é registrada — com catálogo próprio de materiais/EPI, separado dos itens de produção/venda.</p>
+
+    <h2 id="comercial"><span class="num">9</span> Comercial &amp; Vendas</h2>
+    <p class="subtitulo">Do primeiro contato com o cliente até a nota fiscal emitida. <span class="selo selo-verde">1 cliente, 2 pedidos já reais</span></p>
+    <table>
+      <thead><tr><th>Tela</th><th>Para que serve</th></tr></thead>
+      <tbody>
+        <tr><td>Comercial (CRM)</td><td>Cadastro de clientes e o pipeline de pedidos, do orçamento à entrega.</td></tr>
+        <tr><td>Lançar &amp; Faturar Pedidos</td><td>Tela única pra lançar um pedido e já faturar, sem alternar entre módulos.</td></tr>
+        <tr><td>Tabelas de Preço</td><td>Preço por cliente/grupo de cliente, usado automaticamente ao lançar pedido.</td></tr>
+        <tr><td>App de Vendas + Portfólio</td><td>Tela simplificada (celular/tablet) pra vendedor externo lançar pedido direto com o cliente, escolhendo produtos por foto do Portfólio.</td></tr>
+        <tr><td>Minhas Comissões</td><td>Cada vendedor vê sua própria comissão calculada, sem acesso ao financeiro completo.</td></tr>
+        <tr><td>Notas Fiscais (NF-e)</td><td>Emissão da nota de venda.</td></tr>
+        <tr><td>Notas Fiscais de Entrada</td><td>Lançamento manual de nota (SPED) — complementa a importação automática do módulo de Produção.</td></tr>
+        <tr><td>Transportadoras</td><td>Cadastro de quem coleta/entrega — aparece no Painel Tempo Real ("Expedido / Aguardando Coleta").</td></tr>
+      </tbody>
+    </table>
+    <div class="exemplo"><strong>Cliente real cadastrado:</strong> "alphanutrition" já está no sistema, com 2 pedidos novos lançados — ainda sem histórico de compra recorrente (aparece em "Clientes sem Atendimento" no Painel Executivo até o primeiro faturamento).</div>
+
+    <h2 id="financeiro"><span class="num">10</span> Financeiro</h2>
+    <p class="subtitulo">Contas a pagar/receber, conciliação bancária e o resultado consolidado.</p>
+    <ul class="lista-simples">
+      <li><strong>Financeiro</strong> — lançamentos de contas a pagar (fornecedor) e a receber (cliente), com baixa de pagamento/recebimento.</li>
+      <li><strong>Conciliação Bancária</strong> — confere o extrato do banco contra o que foi lançado, item por item.</li>
+      <li><strong>DRE Simplificado</strong> — Demonstrativo de Resultado, montado a partir dos lançamentos + custeio real de produção.</li>
+      <li><strong>Configuração de Boleto</strong> — dados bancários usados pra emitir boleto de cobrança.</li>
+    </ul>
+    <div class="aviso-real">Recebimentos e pagamentos acima de R$ 1.000 exigem <strong>dupla aprovação</strong> (uma segunda pessoa confirma antes de valer) — trava de segurança, não é bug se pedir uma segunda confirmação.</div>
+
+    <h2 id="relatorios"><span class="num">11</span> Relatórios &amp; Custos</h2>
+    <ul class="lista-simples">
+      <li><strong>Painel Gerencial (BI)</strong> — indicadores consolidados de todos os módulos, com filtro de período.</li>
+      <li><strong>Rastreabilidade (Recall)</strong> — a partir de UM lote, mostra tudo que ele originou (produção) e tudo que o originou (matéria-prima) — é a ferramenta pra um recall real, se um dia for preciso.</li>
+      <li><strong>Custo do Produto</strong> — custo real (material + mão de obra + overhead) por lote produzido, comparado ao custo padrão da fórmula.</li>
+    </ul>
+
+    <h2 id="administracao"><span class="num">12</span> Administração</h2>
+    <p class="subtitulo"><span class="selo selo-verde">5 usuários reais hoje</span></p>
+    <table>
+      <thead><tr><th>Nome</th><th>Perfil</th><th>2FA</th></tr></thead>
+      <tbody>
+        <tr><td>Clayton Borges da Silva</td><td>Administrador</td><td>Sim</td></tr>
+        <tr><td>Caroline Batista</td><td>PCP, Produção, Laboratório, Qualidade, Regulatório</td><td>Não</td></tr>
+        <tr><td>Edson Zaldguer</td><td>Laboratório, Regulatório</td><td>Não</td></tr>
+        <tr><td>Tabata</td><td>Vendedor</td><td>Não</td></tr>
+        <tr><td>Administrador Inicial</td><td>Administrador (conta de sistema, não usada no dia a dia)</td><td>Não</td></tr>
+      </tbody>
+    </table>
+    <ul class="lista-simples">
+      <li><strong>Usuários</strong> — cria/edita contas e vincula Perfis.</li>
+      <li><strong>Perfis</strong> — pacotes de permissão (ex.: "Laboratório" carrega só o que um analista precisa).</li>
+      <li><strong>Permissões</strong> — catálogo completo, só consulta (atribuição acontece em Perfis).</li>
+      <li><strong>Empresas</strong> — ver seção 2.</li>
+      <li><strong>Auditoria</strong> — trilha imutável de toda ação sensível do sistema, com quem/quando/o quê.</li>
+      <li><strong>Terminais</strong> — lista automática de todo computador/dispositivo que já acessou o sistema.</li>
+    </ul>
+    <div class="aviso-real"><strong>Segurança do banco de dados:</strong> o banco principal (todos os módulos, todos os dados) é criptografado de verdade (SQLCipher) — ninguém abre o arquivo sem a chave, nem copiando ele pra outro computador. A chave fica guardada na própria instalação e, como cópia de emergência, na página de downloads (acesso restrito a Administrador).</div>
+    <p><strong>Sincronização de login:</strong> a senha e o e-mail da conta administrativa (a mesma usada aqui no ERP) são compartilhados com o WhatsApp, o Memorial Técnico e o Protocolo de Estabilidade — trocar em "Minha Conta" atualiza os quatro de uma vez, automaticamente.</p>
+
+    <h2 id="whatsapp"><span class="num">13</span> WhatsApp</h2>
+    <p class="subtitulo">Caixa de entrada de WhatsApp da empresa, embutida no ERP — abre em aba nova.</p>
+    <p>Cópia real do "Seja Alpha" rodando localmente: conversas, contatos, respostas prontas, follow-up automático. Login próprio (sincronizado com a mesma senha do ERP).</p>
+
+    <h2 id="paineis"><span class="num">14</span> Painéis (Tempo Real / Executivo)</h2>
+    <p>O <strong>Painel Tempo Real</strong> mostra, em colunas, onde cada pedido/ordem está agora na cadeia (Aguardando Aprovação Financeira → Separação → Compras → Quarentena → Produção → Expedição) — atualiza sozinho a cada poucos segundos. O <strong>Painel Executivo</strong> é a visão consolidada (BI) por mês/ano: vendas, funil de pedidos, desempenho por vendedor, produção em andamento.</p>
+
+    <div class="rodape">
+      Manual Alphafitus OS — v1.0 · Sistema v123.4 · Gerado a partir do sistema real em produção, navegado e conferido tela por tela em 31/08/2026.
+    </div>
+  </main>
+</div>
+</body>
+</html>

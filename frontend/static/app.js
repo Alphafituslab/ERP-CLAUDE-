@@ -646,6 +646,12 @@
         { rota: "#/empresas", chave: "empresas", label: "Empresas", permissao: ["empresas", "visualizar"] },
         { rota: "#/auditoria", chave: "auditoria", label: "Auditoria", permissao: ["auditoria", "visualizar"] },
         { rota: "#/terminais", chave: "terminais", label: "Terminais", permissao: ["terminais", "visualizar"] },
+        // Fase 123 (pedido do usuário) — manual do sistema, hospedado na
+        // página de downloads (mesmo lugar que já mantém a versão mais
+        // atual do instalador) — sempre a versão mais recente, sem
+        // precisar reconstruir/reenviar nada aqui dentro quando o manual
+        // for atualizado.
+        { rota: "https://whatts.alphafitus.com.br/downloads/Manual_AlphafitusOS.html", chave: "manual-sistema", label: "Manual do Sistema", abrirNovaAba: true },
       ],
     },
     // Fase 123 (Parte 2) — Whatts Inbox incluso, rodando localmente (porta
