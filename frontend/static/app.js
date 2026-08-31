@@ -669,19 +669,27 @@
   // Reconstruída a cada renderShell (lista pequena, custo desprezível) —
   // sempre reflete as permissões do usuário JÁ logado, igual ao menu em
   // si: ninguém acha pela busca uma tela que nem apareceria no menu.
+  // Recursiva de propósito: um item de grupo pode ser, ele mesmo, outro
+  // nível (`tipo: "subgrupo"`, ex.: "Shelf Life" dentro de "Qualidade")
+  // — sem recursão, tudo que estivesse dentro de um subgrupo ficava
+  // invisível pra busca (bug real, achado pelo usuário: buscar "memorial"
+  // não achava nada depois dele se mudar pra dentro de Qualidade). Cada
+  // entrada carrega o CAMINHO completo (["Qualidade", "Shelf Life"]) —
+  // é o que permite bater tanto pelo nome do módulo quanto pelo nome de
+  // uma pasta no meio do caminho, não só pelo nome final da tela.
   function montarIndiceBuscaGlobal() {
     const indice = [];
-    ITENS_MENU.forEach((it) => {
-      if (it.tipo === "grupo") {
-        const itensVisiveis = it.itens.filter((sub) => !sub.permissao || temPermissao(sub.permissao[0], sub.permissao[1]));
-        itensVisiveis.forEach((sub) => {
-          indice.push({ grupo: it.nome, label: sub.label, rota: sub.rota, chave: sub.chave, abrirNovaAba: sub.abrirNovaAba });
-        });
-        return;
-      }
-      if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return;
-      indice.push({ grupo: null, label: it.label, rota: it.rota, chave: it.chave, abrirNovaAba: it.abrirNovaAba });
-    });
+    function visitar(itens, caminho) {
+      itens.forEach((it) => {
+        if (it.tipo === "grupo" || it.tipo === "subgrupo") {
+          visitar(it.itens, [...caminho, it.nome]);
+          return;
+        }
+        if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return;
+        indice.push({ caminho, label: it.label, rota: it.rota, chave: it.chave, abrirNovaAba: it.abrirNovaAba });
+      });
+    }
+    visitar(ITENS_MENU, []);
     return indice;
   }
 
@@ -689,13 +697,16 @@
     const termo = _normalizarBuscaGlobal(query);
     if (!termo) return [];
     const indice = montarIndiceBuscaGlobal();
-    // Nome de GRUPO batendo com a busca ("financeiro") devolve TODOS os
-    // itens daquele grupo — é o "me mostra tudo que tem dentro do módulo"
-    // pedido. Nome de TELA batendo devolve só aquela tela.
-    const gruposBatendo = new Set(
-      indice.filter((r) => r.grupo && _normalizarBuscaGlobal(r.grupo).includes(termo)).map((r) => r.grupo)
+    // Um nome de PASTA (módulo OU sub-pasta, ex.: "financeiro" ou "shelf
+    // life") batendo com a busca devolve TODOS os itens que passam por
+    // ali — é o "me mostra tudo que tem dentro" pedido, agora valendo pra
+    // qualquer nível do caminho, não só o módulo do topo. Nome de TELA
+    // batendo devolve só aquela tela.
+    return indice.filter(
+      (r) =>
+        r.caminho.some((segmento) => _normalizarBuscaGlobal(segmento).includes(termo)) ||
+        _normalizarBuscaGlobal(r.label).includes(termo)
     );
-    return indice.filter((r) => (r.grupo && gruposBatendo.has(r.grupo)) || _normalizarBuscaGlobal(r.label).includes(termo));
   }
 
   // Fase 51 — decide se um GRUPO do menu deve renderizar aberto: a página
@@ -885,7 +896,7 @@
         resultadosBuscaGlobal.innerHTML = encontrados
           .map(
             (r) => `<a class="busca-global-item" href="${r.rota}"${r.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>
-              ${r.grupo ? `<span class="busca-global-item-grupo">${escapeHtml(r.grupo)}</span>` : ""}
+              ${r.caminho.length ? `<span class="busca-global-item-grupo">${escapeHtml(r.caminho.join(" › "))}</span>` : ""}
               <span class="busca-global-item-label">${escapeHtml(r.label)}</span>
             </a>`
           )
