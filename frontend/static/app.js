@@ -658,6 +658,46 @@
     { rota: "#/notificacoes", chave: "notificacoes", label: "Notificações" },
   ];
 
+  // Fase 123 — pedido do usuário: uma lupa que, ao digitar o nome de um
+  // módulo (ex.: "financeiro"), mostra tudo que existe dentro dele — e ao
+  // digitar o nome de UMA tela específica, leva direto pra ela. Tira
+  // acento/caixa antes de comparar ("producao" acha "Produção").
+  function _normalizarBuscaGlobal(s) {
+    return (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().trim();
+  }
+
+  // Reconstruída a cada renderShell (lista pequena, custo desprezível) —
+  // sempre reflete as permissões do usuário JÁ logado, igual ao menu em
+  // si: ninguém acha pela busca uma tela que nem apareceria no menu.
+  function montarIndiceBuscaGlobal() {
+    const indice = [];
+    ITENS_MENU.forEach((it) => {
+      if (it.tipo === "grupo") {
+        const itensVisiveis = it.itens.filter((sub) => !sub.permissao || temPermissao(sub.permissao[0], sub.permissao[1]));
+        itensVisiveis.forEach((sub) => {
+          indice.push({ grupo: it.nome, label: sub.label, rota: sub.rota, chave: sub.chave, abrirNovaAba: sub.abrirNovaAba });
+        });
+        return;
+      }
+      if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return;
+      indice.push({ grupo: null, label: it.label, rota: it.rota, chave: it.chave, abrirNovaAba: it.abrirNovaAba });
+    });
+    return indice;
+  }
+
+  function buscarNoMenuGlobal(query) {
+    const termo = _normalizarBuscaGlobal(query);
+    if (!termo) return [];
+    const indice = montarIndiceBuscaGlobal();
+    // Nome de GRUPO batendo com a busca ("financeiro") devolve TODOS os
+    // itens daquele grupo — é o "me mostra tudo que tem dentro do módulo"
+    // pedido. Nome de TELA batendo devolve só aquela tela.
+    const gruposBatendo = new Set(
+      indice.filter((r) => r.grupo && _normalizarBuscaGlobal(r.grupo).includes(termo)).map((r) => r.grupo)
+    );
+    return indice.filter((r) => (r.grupo && gruposBatendo.has(r.grupo)) || _normalizarBuscaGlobal(r.label).includes(termo));
+  }
+
   // Fase 51 — decide se um GRUPO do menu deve renderizar aberto: a página
   // atual estar dentro dele SEMPRE força aberto (nunca esconde o grupo em
   // que o usuário está navegando agora, mesmo que ele tenha fechado esse
@@ -754,6 +794,11 @@
             <button class="botao-icone botao-menu-mobile" data-acao="alternar-menu-mobile" title="Abrir menu">☰</button>
             <button class="botao-icone botao-menu-desktop" data-acao="alternar-menu-desktop" title="Mostrar/ocultar menu lateral">${state.menuLateralOculto ? "▶" : "◀"}</button>
             <button class="pilula-status-servidor" data-pilula-status-servidor data-acao="mostrar-status-servidor" title="Detalhes da conexão">🟢 Servidor conectado</button>
+            <div class="busca-global">
+              <span class="busca-global-icone" aria-hidden="true">🔎</span>
+              <input type="text" id="busca-global-input" class="busca-global-input" placeholder="Pesquisar módulo ou tela… (ex.: financeiro)" autocomplete="off">
+              <div class="busca-global-resultados" id="busca-global-resultados" hidden></div>
+            </div>
             <span class="espacador-barra-superior"></span>
             <button class="botao-icone botao-icone-com-badge" data-acao="ir-notificacoes" title="Notificações">🔔<span class="badge-notificacoes" data-badge-notificacoes ${state.notificacoesNaoLidas > 0 ? "" : "hidden"}>${state.notificacoesNaoLidas > 99 ? "99+" : state.notificacoesNaoLidas}</span></button>
             <button class="botao-icone" data-acao="alternar-tema" title="Alternar tema claro/escuro">🌓</button>
@@ -785,6 +830,60 @@
         localStorage.setItem("alphafitus_grupos_menu", JSON.stringify(state.gruposMenuAbertos));
       });
     });
+
+    // Fase 123 — lupa de pesquisa global (módulo/tela). Refeita a cada
+    // renderShell, igual ao resto da barra — o `app.innerHTML` de cima já
+    // substituiu qualquer instância anterior, então não precisa remover
+    // um listener velho.
+    const campoBuscaGlobal = document.getElementById("busca-global-input");
+    const resultadosBuscaGlobal = document.getElementById("busca-global-resultados");
+    if (campoBuscaGlobal && resultadosBuscaGlobal) {
+      const renderizarResultadosBuscaGlobal = (query) => {
+        const encontrados = buscarNoMenuGlobal(query);
+        if (!encontrados.length) {
+          resultadosBuscaGlobal.innerHTML = `<p class="busca-global-vazio">Nada encontrado para "${escapeHtml(query)}".</p>`;
+          resultadosBuscaGlobal.hidden = false;
+          return;
+        }
+        resultadosBuscaGlobal.innerHTML = encontrados
+          .map(
+            (r) => `<a class="busca-global-item" href="${r.rota}"${r.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>
+              ${r.grupo ? `<span class="busca-global-item-grupo">${escapeHtml(r.grupo)}</span>` : ""}
+              <span class="busca-global-item-label">${escapeHtml(r.label)}</span>
+            </a>`
+          )
+          .join("");
+        resultadosBuscaGlobal.hidden = false;
+      };
+      campoBuscaGlobal.addEventListener("input", () => {
+        const termo = campoBuscaGlobal.value.trim();
+        if (!termo) {
+          resultadosBuscaGlobal.hidden = true;
+          resultadosBuscaGlobal.innerHTML = "";
+          return;
+        }
+        renderizarResultadosBuscaGlobal(termo);
+      });
+      campoBuscaGlobal.addEventListener("focus", () => {
+        if (campoBuscaGlobal.value.trim()) renderizarResultadosBuscaGlobal(campoBuscaGlobal.value.trim());
+      });
+      // Clicar num resultado navega (é um <a href> de verdade) — só
+      // precisa limpar a busca depois, pro próximo uso começar do zero.
+      resultadosBuscaGlobal.addEventListener("click", (e) => {
+        if (e.target.closest(".busca-global-item")) {
+          campoBuscaGlobal.value = "";
+          resultadosBuscaGlobal.hidden = true;
+          resultadosBuscaGlobal.innerHTML = "";
+        }
+      });
+      campoBuscaGlobal.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          campoBuscaGlobal.value = "";
+          resultadosBuscaGlobal.hidden = true;
+          campoBuscaGlobal.blur();
+        }
+      });
+    }
   }
 
   function definirFlash(tipo, texto) {
@@ -807,6 +906,18 @@
       definirFlash("erro", erro.message || "Ocorreu um erro.");
       montarRota();
     }
+  });
+
+  // Fase 123 — fecha o dropdown da lupa global ao clicar fora dele.
+  // Um único listener de vida inteira (não recriado a cada renderShell,
+  // diferente do resto da lupa que precisa de referências ao DOM novo a
+  // cada render): a checagem por `.closest(".busca-global")` já funciona
+  // contra o que estiver na tela no momento do clique, sem precisar
+  // reanexar nada.
+  document.addEventListener("click", (e) => {
+    if (e.target.closest(".busca-global")) return;
+    const resultados = document.getElementById("busca-global-resultados");
+    if (resultados) resultados.hidden = true;
   });
 
   document.addEventListener("submit", async (e) => {
