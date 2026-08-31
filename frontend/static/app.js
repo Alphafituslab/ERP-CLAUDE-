@@ -617,7 +617,18 @@
         { rota: "#/custeio", chave: "custeio", label: "Custo do Produto", permissao: ["custeio", "visualizar"] },
       ],
     },
-    { rota: "#/memorial/visao-geral", chave: "memorial", label: "Memorial Técnico", permissao: ["memoriais", "visualizar"] },
+    // Fase 123 (pedido do usuário 2026-08-31) — "vamos mudar o que tem
+    // integrado por enquanto": o Memorial Técnico embutido no ERP (Flask/
+    // vanilla JS, construído a partir da Fase 26 em diante) foi trocado
+    // por um link pra cópia REAL do sistema original
+    // (Alphafituslab/anvisa-technical-memorial, React+API Node+Postgres),
+    // hospedada no VPS igual ao Protocolo de Estabilidade — mesmo
+    // raciocínio: garante fidelidade total (o PDF/telas nunca mais
+    // precisam ser "perseguidos" à mão) em vez de continuar reimplementando
+    // aqui. O módulo antigo (rotas "#/memorial/...", mais abaixo neste
+    // arquivo) continua no código, só não tem mais link no menu — dado
+    // que já existia nele fica intacto, sem nenhuma perda.
+    { rota: "https://whatts.alphafitus.com.br:8444", chave: "memorial", label: "Memorial Técnico", abrirNovaAba: true, permissao: ["memoriais", "visualizar"] },
     // Fase 123 (pedido do usuário 2026-08-30) — "Protocolo de Estabilidade"
     // é uma cópia real do sistema Alphafituslab/Protocololo-Testes-de-
     // estabilidade (React+API Node+Postgres, monorepo completo — não dá
