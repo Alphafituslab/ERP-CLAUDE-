@@ -15123,7 +15123,20 @@
           method: "POST",
           body: { email: dados.get("email"), senha_atual: dados.get("senha_atual") },
         });
-        definirFlash("ok", `E-mail alterado para ${resp.email} — use esse endereço no próximo login.`);
+        // Fase 123 — mesmo padrão do case "trocar-senha" logo abaixo:
+        // só a conta administrativa vinculada recebe `sincronizacao`.
+        const sincEmail = resp && resp.sincronizacao;
+        if (sincEmail) {
+          const ROTULO_DESTINO_EMAIL = { whatts: "WhatsApp", protocolo: "Protocolo de Estabilidade", memorial: "Memorial Técnico" };
+          const partesEmail = Object.entries(sincEmail).map(([destino, r]) => `${ROTULO_DESTINO_EMAIL[destino] || destino}: ${r.ok ? "✓" : "✗ " + escapeHtml(r.mensagem || "falhou")}`);
+          const todasOkEmail = Object.values(sincEmail).every((r) => r.ok);
+          definirFlash(
+            todasOkEmail ? "ok" : "erro",
+            `E-mail alterado para ${resp.email}. Sincronização — ${partesEmail.join(" · ")}`,
+          );
+        } else {
+          definirFlash("ok", `E-mail alterado para ${resp.email} — use esse endereço no próximo login.`);
+        }
         return renderMinhaConta();
       }
       case "trocar-senha": {

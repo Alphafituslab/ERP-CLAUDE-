@@ -492,7 +492,20 @@ def trocar_email():
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                      acao="email_alterado", valor_anterior={"email": email_antigo}, valor_novo={"email": email_novo},
                      ip=client_ip(), dispositivo=client_device())
-    return jsonify({"ok": True, "email": email_novo})
+
+    # Fase 123 — pedido do usuário: "se trocar email fica igual em tudo"
+    # (mesmo espírito de `trocar_senha` acima, ver a nota lá).
+    resultado_sincronizacao = senha_sync_service.sincronizar_email_em_todos_sistemas(
+        usuario["id"], email_antigo, email_novo,
+    )
+    if resultado_sincronizacao:
+        audit.registrar(
+            conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
+            acao="email_sincronizado_outros_sistemas",
+            valor_novo={destino: bool(ok) for destino, (ok, _msg) in resultado_sincronizacao.items() if ok is not None},
+            ip=client_ip(), dispositivo=client_device(),
+        )
+    return jsonify({"ok": True, "email": email_novo, "sincronizacao": _sincronizacao_publica(resultado_sincronizacao)})
 
 
 @bp.put("/minha-foto")

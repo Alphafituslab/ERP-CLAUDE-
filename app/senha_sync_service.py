@@ -134,7 +134,142 @@ def _sincronizar_memorial(nova_senha):
         return False, str(erro)
 
 
+def _sincronizar_whatts_email_local(email_atual, email_novo):
+    caminho_db = os.path.join(_pasta_instalacao(), "data", "whatts.db")
+    if not os.path.isfile(caminho_db):
+        return None, "Módulo WhatsApp não está em uso nesta instalação (banco não encontrado)."
+    try:
+        conn = sqlite3.connect(caminho_db)
+        try:
+            conflito = conn.execute("SELECT id FROM usuarios WHERE email = ? AND email != ?", (email_novo, email_atual)).fetchone()
+            if conflito:
+                return False, "Já existe outro usuário com este e-mail no Whatts."
+            cur = conn.execute(
+                "UPDATE usuarios SET email = ? WHERE email = ?",
+                (email_novo, email_atual),
+            )
+            conn.commit()
+            if cur.rowcount == 0:
+                return False, "Usuário administrador não encontrado no banco do Whatts."
+            return True, None
+        finally:
+            conn.close()
+    except Exception as erro:
+        logger.exception("Falha ao sincronizar e-mail no Whatts Inbox")
+        return False, str(erro)
+
+
+def _persistir_variavel_config_ambiente(chave, valor):
+    """Depois de um sync de e-mail bem-sucedido, o "usuário atual" de
+    cada destino muda — se isso ficasse só em `os.environ` (memória do
+    processo), a PRÓXIMA sincronização (mesmo dias depois, depois de
+    reiniciar o Alphafitus OS) voltaria a procurar pelo login ANTIGO
+    (`config_ambiente.bat` é relido do zero a cada início) e falharia com
+    "usuário não encontrado". Por isso, além do `os.environ[...] = ...`
+    (efeito imediato, sem precisar reiniciar), regrava a mesma linha no
+    arquivo de configuração — mesmo arquivo/formato que
+    `gerar_config_ambiente_se_necessario` já escreve
+    (`installer/app_launcher.py`), só que aqui é uma edição pontual de
+    UMA linha, nunca reescrevendo o arquivo inteiro. Falha em persistir
+    (arquivo ausente/sem permissão) não derruba a sincronização em si —
+    só fica registrado no log; o valor em memória já está certo até o
+    próximo reinício."""
+    caminho = os.path.join(_pasta_instalacao(), "config_ambiente.bat")
+    try:
+        if not os.path.isfile(caminho):
+            return
+        with open(caminho, "r", encoding="utf-8") as f:
+            linhas = f.readlines()
+        prefixo = f'set "{chave}='
+        encontrada = False
+        for i, linha in enumerate(linhas):
+            if linha.strip().startswith(prefixo):
+                linhas[i] = f'set "{chave}={valor}"\n'
+                encontrada = True
+                break
+        if not encontrada:
+            linhas.append(f'set "{chave}={valor}"\n')
+        with open(caminho, "w", encoding="utf-8") as f:
+            f.writelines(linhas)
+    except Exception:
+        logger.exception("Falha ao persistir %s em config_ambiente.bat (valor em memória continua correto)", chave)
+
+
+def _sincronizar_protocolo_username(email_novo):
+    url = os.environ.get("ALPHAFITUS_SYNC_PROTOCOLO_URL")
+    senha_mestra = os.environ.get("ALPHAFITUS_SYNC_PROTOCOLO_MASTER")
+    usuario_atual = os.environ.get("ALPHAFITUS_SYNC_PROTOCOLO_USUARIO", "admin")
+    if not url or not senha_mestra:
+        return None, "Sincronização com o Protocolo de Estabilidade não configurada nesta instalação."
+    try:
+        ok, msg = _chamar_endpoint_sincronizacao(
+            url, "/api/auth/sync-username",
+            {"masterPassword": senha_mestra, "currentUsername": usuario_atual, "newUsername": email_novo},
+        )
+        if ok:
+            # A partir daqui, o login desse sistema passa a ser o e-mail novo
+            # — próxima sincronização (de senha ou de e-mail) precisa usar
+            # esse valor, não mais o antigo. Persistido em disco também
+            # (ver _persistir_variavel_config_ambiente), não só em memória.
+            os.environ["ALPHAFITUS_SYNC_PROTOCOLO_USUARIO"] = email_novo
+            _persistir_variavel_config_ambiente("ALPHAFITUS_SYNC_PROTOCOLO_USUARIO", email_novo)
+        return ok, msg
+    except Exception as erro:
+        logger.exception("Falha ao sincronizar login no Protocolo de Estabilidade")
+        return False, str(erro)
+
+
+def _sincronizar_memorial_username(email_novo):
+    url = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_URL")
+    segredo = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_SECRET")
+    usuario_atual = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_USUARIO", "Clayton")
+    if not url or not segredo:
+        return None, "Sincronização com o Memorial Técnico não configurada nesta instalação."
+    try:
+        ok, msg = _chamar_endpoint_sincronizacao(
+            url, "/api/auth/sync-username",
+            {"syncSecret": segredo, "currentUsuarioLogin": usuario_atual, "novoUsuarioLogin": email_novo},
+        )
+        if ok:
+            os.environ["ALPHAFITUS_SYNC_MEMORIAL_USUARIO"] = email_novo
+            _persistir_variavel_config_ambiente("ALPHAFITUS_SYNC_MEMORIAL_USUARIO", email_novo)
+        return ok, msg
+    except Exception as erro:
+        logger.exception("Falha ao sincronizar login no Memorial Técnico")
+        return False, str(erro)
+
+
 ID_USUARIO_ADMIN_SINCRONIZADO = 1
+
+
+def sincronizar_email_em_todos_sistemas(usuario_id, email_atual, email_novo):
+    """Espelha `sincronizar_senha_em_todos_sistemas`, mas pro LOGIN
+    (usuário/e-mail) em vez da senha — pedido do usuário: "se trocar
+    email fica igual em tudo". Os três destinos passam a usar o e-mail
+    NOVO como próprio identificador de login (Whatts: campo email;
+    Protocolo: username; Memorial: usuarioLogin) — não é só um "e-mail de
+    contato", é literalmente o que cada um vai pedir na tela de login daí
+    em diante. As variáveis de ambiente que guardam qual é o "usuário
+    atual" em cada destino são atualizadas em memória após um sucesso,
+    pra uma sincronização seguinte (de senha ou de e-mail de novo) já
+    mirar no valor certo sem precisar reiniciar o processo — mas isso é
+    só um cache: `config_ambiente.bat` continua com o valor ANTIGO até
+    alguém editar à mão (ver README/memória do projeto)."""
+    global EMAIL_ADMIN_SINCRONIZADO
+    e_admin_vinculado = usuario_id == ID_USUARIO_ADMIN_SINCRONIZADO or (
+        (email_atual or "").strip().lower() == EMAIL_ADMIN_SINCRONIZADO.lower()
+    )
+    if not e_admin_vinculado:
+        return None
+
+    resultado = {
+        "whatts": _sincronizar_whatts_email_local(email_atual, email_novo),
+        "protocolo": _sincronizar_protocolo_username(email_novo),
+        "memorial": _sincronizar_memorial_username(email_novo),
+    }
+    if usuario_id == ID_USUARIO_ADMIN_SINCRONIZADO:
+        EMAIL_ADMIN_SINCRONIZADO = email_novo
+    return resultado
 
 
 def sincronizar_senha_em_todos_sistemas(usuario_id, email_usuario, nova_senha):
