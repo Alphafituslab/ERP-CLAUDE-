@@ -530,6 +530,20 @@
         { rota: "#/lotes", chave: "lotes", label: "Lotes / Qualidade", permissao: ["lotes", "visualizar"] },
         { rota: "#/desvios", chave: "desvios", label: "Desvios", permissao: ["desvios", "visualizar"] },
         { rota: "#/configuracao-qualidade", chave: "configuracao-qualidade", label: "Configuração de Qualidade", permissao: ["qualidade", "configurar"] },
+        // Fase 123 (pedido do usuário 2026-08-31) — "colocar eles dentro
+        // do qualidade, e dentro do qualidade criar uma aba com o nome
+        // Shelf Life": Memorial Técnico e Protocolo de Estabilidade (as
+        // duas cópias reais vendorizadas, ver comentário mais abaixo de
+        // onde elas viviam antes) agora moram aqui dentro, numa sub-pasta
+        // própria — os dois lidam com validade/estabilidade de produto,
+        // por isso o agrupamento faz sentido dentro de Qualidade.
+        {
+          tipo: "subgrupo", chave: "subgrupo-shelf-life", nome: "Shelf Life",
+          itens: [
+            { rota: "https://whatts.alphafitus.com.br:8444", chave: "memorial", label: "Memorial Técnico", abrirNovaAba: true, permissao: ["memoriais", "visualizar"] },
+            { rota: "https://whatts.alphafitus.com.br:8443", chave: "protocolo-estabilidade", label: "Protocolo de Estabilidade", abrirNovaAba: true },
+          ],
+        },
       ],
     },
     {
@@ -617,26 +631,12 @@
         { rota: "#/custeio", chave: "custeio", label: "Custo do Produto", permissao: ["custeio", "visualizar"] },
       ],
     },
-    // Fase 123 (pedido do usuário 2026-08-31) — "vamos mudar o que tem
-    // integrado por enquanto": o Memorial Técnico embutido no ERP (Flask/
-    // vanilla JS, construído a partir da Fase 26 em diante) foi trocado
-    // por um link pra cópia REAL do sistema original
-    // (Alphafituslab/anvisa-technical-memorial, React+API Node+Postgres),
-    // hospedada no VPS igual ao Protocolo de Estabilidade — mesmo
-    // raciocínio: garante fidelidade total (o PDF/telas nunca mais
-    // precisam ser "perseguidos" à mão) em vez de continuar reimplementando
-    // aqui. O módulo antigo (rotas "#/memorial/...", mais abaixo neste
-    // arquivo) continua no código, só não tem mais link no menu — dado
-    // que já existia nele fica intacto, sem nenhuma perda.
-    { rota: "https://whatts.alphafitus.com.br:8444", chave: "memorial", label: "Memorial Técnico", abrirNovaAba: true, permissao: ["memoriais", "visualizar"] },
-    // Fase 123 (pedido do usuário 2026-08-30) — "Protocolo de Estabilidade"
-    // é uma cópia real do sistema Alphafituslab/Protocololo-Testes-de-
-    // estabilidade (React+API Node+Postgres, monorepo completo — não dá
-    // pra rodar embutido no instalador do Windows como o WhatsApp),
-    // hospedada no mesmo VPS do Whatts Inbox. Mesmo padrão de item que
-    // abre em aba nova, exatamente como "WhatsApp" logo abaixo no menu —
-    // login e telas são as do sistema original, sem SSO/iframe.
-    { rota: "https://whatts.alphafitus.com.br:8443", chave: "protocolo-estabilidade", label: "Protocolo de Estabilidade", abrirNovaAba: true },
+    // Fase 123 (pedido do usuário 2026-08-31) — Memorial Técnico e
+    // Protocolo de Estabilidade (cópias reais vendorizadas — Memorial
+    // substituiu o módulo antigo do ERP, que continua no código só sem
+    // link no menu; Protocolo nunca existiu aqui dentro, mesmo raciocínio
+    // de fidelidade) se mudaram pra dentro de Qualidade > Shelf Life, ver
+    // acima — não ficam mais soltos no nível raiz do menu.
     {
       tipo: "grupo", chave: "grupo-administracao", nome: "Administração",
       itens: [
@@ -744,13 +744,38 @@
 
   function renderShell(conteudoHtml, paginaAtiva) {
     const grupoAbertoUnico = calcularGrupoAbertoUnico(paginaAtiva);
+    // Fase 123 (pedido do usuário) — um item de grupo pode ser, ele
+    // próprio, um SUBGRUPO (ex.: "Shelf Life" dentro de "Qualidade") —
+    // uma segunda camada de <details>, um nível mais recolhida por
+    // padrão. `temPermissaoItemOuSubgrupo` decide se um item (folha OU
+    // subgrupo) deve aparecer, sem duplicar a mesma checagem em dois
+    // lugares.
+    const temPermissaoItemOuSubgrupo = (sub) => {
+      if (sub.tipo === "subgrupo") {
+        return sub.itens.some((neto) => !neto.permissao || temPermissao(neto.permissao[0], neto.permissao[1]));
+      }
+      return !sub.permissao || temPermissao(sub.permissao[0], sub.permissao[1]);
+    };
     const linksHtml = ITENS_MENU.map((it) => {
       if (it.tipo === "grupo") {
-        const itensVisiveis = it.itens.filter((sub) => !sub.permissao || temPermissao(sub.permissao[0], sub.permissao[1]));
+        const itensVisiveis = it.itens.filter(temPermissaoItemOuSubgrupo);
         if (!itensVisiveis.length) return "";
         const aberto = it.chave === grupoAbertoUnico;
         const subitensHtml = itensVisiveis
-          .map((sub) => `<a class="link-nav barra-lateral-subitem ${sub.chave === paginaAtiva ? "ativo" : ""}" href="${sub.rota}">${sub.label}</a>`)
+          .map((sub) => {
+            if (sub.tipo === "subgrupo") {
+              const netosVisiveis = sub.itens.filter((neto) => !neto.permissao || temPermissao(neto.permissao[0], neto.permissao[1]));
+              const subAberto = state.gruposMenuAbertos[sub.chave] === true;
+              const netosHtml = netosVisiveis
+                .map((neto) => `<a class="link-nav barra-lateral-subitem barra-lateral-subitem-nivel2 ${neto.chave === paginaAtiva ? "ativo" : ""}" href="${neto.rota}"${neto.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>${neto.label}</a>`)
+                .join("");
+              return `<details class="barra-lateral-subgrupo" data-subgrupo="${sub.chave}" ${subAberto ? "open" : ""}>
+                <summary>${escapeHtml(sub.nome)}</summary>
+                <div class="barra-lateral-subitens">${netosHtml}</div>
+              </details>`;
+            }
+            return `<a class="link-nav barra-lateral-subitem ${sub.chave === paginaAtiva ? "ativo" : ""}" href="${sub.rota}">${sub.label}</a>`;
+          })
           .join("");
         return `<details class="barra-lateral-grupo" data-grupo="${it.chave}" ${aberto ? "open" : ""}>
           <summary>${escapeHtml(it.nome)}</summary>
@@ -821,12 +846,24 @@
         state.gruposMenuAbertos[el.dataset.grupo] = el.open;
         // Sanfona: abrir um grupo fecha todos os outros — cada `.open =
         // false` dispara o "toggle" do PRÓPRIO elemento fechado, que já
-        // atualiza `gruposMenuAbertos` e o localStorage sozinho.
+        // atualiza `gruposMenuAbertos` e o localStorage sozinho. Os
+        // OUTROS módulos somem por completo enquanto um estiver aberto —
+        // isso já é feito em CSS puro (`:has()`, ver tema-3d.css), não
+        // precisa de nada aqui.
         if (el.open) {
           app.querySelectorAll(".barra-lateral-grupo").forEach((outro) => {
             if (outro !== el && outro.open) outro.open = false;
           });
         }
+        localStorage.setItem("alphafitus_grupos_menu", JSON.stringify(state.gruposMenuAbertos));
+      });
+    });
+    // Subgrupo (2º nível, ex.: "Shelf Life" dentro de "Qualidade") — só
+    // precisa lembrar se está aberto; não faz sanfona/foco (por ora só
+    // existe um por grupo, sem irmãos pra esconder).
+    app.querySelectorAll(".barra-lateral-subgrupo").forEach((el) => {
+      el.addEventListener("toggle", () => {
+        state.gruposMenuAbertos[el.dataset.subgrupo] = el.open;
         localStorage.setItem("alphafitus_grupos_menu", JSON.stringify(state.gruposMenuAbertos));
       });
     });

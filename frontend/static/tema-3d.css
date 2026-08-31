@@ -418,6 +418,32 @@ body {
   font-size: 12.5px !important;
 }
 
+/* Fase 123 (pedido do usuário) — 2º nível de aninhamento dentro de um
+   grupo (ex.: "Shelf Life" dentro de "Qualidade"). Mesmo `<details>` de
+   sempre, só que mais recolhido/indentado — reaproveita quase tudo de
+   `.barra-lateral-grupo`, sem duplicar a base. */
+.barra-lateral-subgrupo { margin: 2px 0; }
+.barra-lateral-subgrupo summary {
+  border-radius: 0;
+  margin: 0;
+  padding: 8px 12px 8px 28px;
+  font-family: "Outfit", -apple-system, "Segoe UI", sans-serif;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.5);
+  transition: color 0.15s ease;
+}
+.barra-lateral-subgrupo[open] summary,
+.barra-lateral-subgrupo summary:hover { color: rgba(255, 255, 255, 0.8); }
+.barra-lateral-subgrupo summary::after {
+  content: "▸"; font-size: 9px; opacity: 0.6; transition: transform 0.15s ease-out;
+  flex-shrink: 0; margin-left: auto;
+}
+.barra-lateral-subgrupo[open] summary::after { transform: rotate(90deg); }
+.barra-lateral-subitem-nivel2 { padding-left: 42px !important; }
+
 /* Fase 107 — ícones por rota trocados de emoji (dependem da fonte de
    emoji instalada no SO, inconsistentes entre Windows/telas) para
    ícones de linha em SVG, mascarados com `currentColor` — herdam a cor

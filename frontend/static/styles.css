@@ -461,6 +461,21 @@ body::before {
 .barra-lateral-subitens { display: flex; flex-direction: column; }
 .barra-lateral-subitem { padding-left: 34px !important; font-size: 12.5px !important; }
 
+/* Fase 123 (pedido do usuário) — 2º nível de aninhamento dentro de um
+   grupo (ex.: "Shelf Life" dentro de "Qualidade") — mesma estrutura
+   base de `.barra-lateral-grupo` acima, num `<details>` próprio pra não
+   colidir com a regra de "esconder os outros módulos" (que é só entre
+   os grupos de 1º nível, ver `:has()` mais abaixo). */
+.barra-lateral-subgrupo { margin: 2px 0; }
+.barra-lateral-subgrupo summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 20px; color: rgba(255,255,255,0.85); font-size: 13px;
+  cursor: pointer; list-style: none; user-select: none;
+}
+.barra-lateral-subgrupo summary::-webkit-details-marker { display: none; }
+.barra-lateral-subgrupo summary:hover { background: rgba(255,255,255,0.08); color: #fff; }
+.barra-lateral-subgrupo[open] summary { color: #fff; font-weight: 600; }
+
 .conteudo-principal { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
 .barra-superior {
