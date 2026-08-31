@@ -1650,10 +1650,38 @@
        </div>
 
        <div class="cartao">
+         <h3 style="margin-top:0;">Meu e-mail</h3>
+         <p class="texto-suave">Este é o e-mail usado pra entrar no sistema — pode trocar por um seu, se preferir.</p>
+         <form data-form="trocar-email">
+           <div class="campo"><label>E-mail</label><input name="email" type="email" value="${escapeHtml(me.email)}" required></div>
+           <div class="campo"><label>Senha atual (confirmação)</label>
+             <div class="campo-senha">
+               <input id="conta-email-senha" name="senha_atual" type="password" required>
+               <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha"
+                       data-alvo="conta-email-senha" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+             </div>
+           </div>
+           <button class="botao" type="submit">Trocar e-mail</button>
+         </form>
+       </div>
+
+       <div class="cartao">
          <h3 style="margin-top:0;">Trocar senha</h3>
          <form data-form="trocar-senha">
-           <div class="campo"><label>Senha atual</label><input name="senha_atual" type="password" required></div>
-           <div class="campo"><label>Nova senha</label><input name="senha_nova" type="password" required minlength="12"></div>
+           <div class="campo"><label>Senha atual</label>
+             <div class="campo-senha">
+               <input id="conta-senha-atual" name="senha_atual" type="password" required>
+               <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha"
+                       data-alvo="conta-senha-atual" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+             </div>
+           </div>
+           <div class="campo"><label>Nova senha</label>
+             <div class="campo-senha">
+               <input id="conta-senha-nova" name="senha_nova" type="password" required minlength="12">
+               <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha"
+                       data-alvo="conta-senha-nova" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+             </div>
+           </div>
            <button class="botao" type="submit">Trocar senha</button>
          </form>
        </div>
@@ -15089,6 +15117,14 @@
       }
       case "filtrar-agenda-aps": {
         return renderApsAgenda({ dataBase: form.dataset.data, centroId: dados.get("centro_id") });
+      }
+      case "trocar-email": {
+        const resp = await chamarApi("/auth/trocar-email", {
+          method: "POST",
+          body: { email: dados.get("email"), senha_atual: dados.get("senha_atual") },
+        });
+        definirFlash("ok", `E-mail alterado para ${resp.email} — use esse endereço no próximo login.`);
+        return renderMinhaConta();
       }
       case "trocar-senha": {
         const respostaTrocaSenha = await chamarApi("/auth/trocar-senha", {

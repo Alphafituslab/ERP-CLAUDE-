@@ -436,7 +436,7 @@ def trocar_senha():
     # Só dispara de fato para a identidade administrativa vinculada
     # (ver senha_sync_service); para os demais usuários, devolve None.
     resultado_sincronizacao = senha_sync_service.sincronizar_senha_em_todos_sistemas(
-        usuario["email"], senha_nova,
+        usuario["id"], usuario["email"], senha_nova,
     )
     if resultado_sincronizacao:
         audit.registrar(
@@ -460,6 +460,39 @@ def _sincronizacao_publica(resultado):
             continue
         publico[destino] = {"ok": ok, "mensagem": mensagem}
     return publico or None
+
+
+@bp.post("/trocar-email")
+@requires_auth
+def trocar_email():
+    """Autosserviço: pedido do usuário — "deixar trocar o email por
+    outro... assim posso tirar o email [padrão] e trabalhar com um meu".
+    Mesma régua de reautenticação de `trocar_senha`/`desativar_2fa`
+    (exige a senha atual): trocar o e-mail muda pra qual endereço o
+    login passa a responder, então merece a mesma cautela."""
+    usuario = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    senha_atual = (dados.get("senha_atual") or "").strip()
+    email_novo = (dados.get("email") or "").strip().lower()
+    conn = get_db()
+
+    if not security.verify_password(senha_atual, usuario["senha_hash"]):
+        raise ApiError("Senha atual incorreta.", status=400)
+    if not email_novo or "@" not in email_novo:
+        raise ApiError("Informe um e-mail válido.", status=400)
+
+    existente = conn.execute(
+        "SELECT id FROM usuarios WHERE email = ? AND id != ?", (email_novo, usuario["id"]),
+    ).fetchone()
+    if existente:
+        raise ApiError("Já existe outro usuário com este e-mail.", status=409)
+
+    email_antigo = usuario["email"]
+    conn.execute("UPDATE usuarios SET email = ? WHERE id = ?", (email_novo, usuario["id"]))
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
+                     acao="email_alterado", valor_anterior={"email": email_antigo}, valor_novo={"email": email_novo},
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True, "email": email_novo})
 
 
 @bp.put("/minha-foto")

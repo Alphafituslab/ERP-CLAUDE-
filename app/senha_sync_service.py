@@ -134,13 +134,25 @@ def _sincronizar_memorial(nova_senha):
         return False, str(erro)
 
 
-def sincronizar_senha_em_todos_sistemas(email_usuario, nova_senha):
+ID_USUARIO_ADMIN_SINCRONIZADO = 1
+
+
+def sincronizar_senha_em_todos_sistemas(usuario_id, email_usuario, nova_senha):
     """Devolve None se o usuário não é a identidade administrativa
     vinculada (nada a sincronizar). Senão, devolve um dict
     {"whatts"/"protocolo"/"memorial": (True|False|None, mensagem)} —
     True=sincronizado, False=tentou e falhou, None=não configurado
-    nesta instalação. Nunca levanta exceção."""
-    if (email_usuario or "").strip().lower() != EMAIL_ADMIN_SINCRONIZADO.lower():
+    nesta instalação. Nunca levanta exceção.
+
+    Checa pelo ID (âncora estável, id=1 é sempre o primeiro
+    administrador criado — ver seed.py) em vez de só pelo e-mail: o
+    usuário pode trocar o próprio e-mail (ver rota trocar-email) sem
+    perder a sincronização de senha."""
+    e_admin_vinculado = (
+        usuario_id == ID_USUARIO_ADMIN_SINCRONIZADO
+        or (email_usuario or "").strip().lower() == EMAIL_ADMIN_SINCRONIZADO.lower()
+    )
+    if not e_admin_vinculado:
         return None
 
     return {
