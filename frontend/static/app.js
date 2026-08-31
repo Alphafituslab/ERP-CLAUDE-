@@ -618,6 +618,14 @@
       ],
     },
     { rota: "#/memorial/visao-geral", chave: "memorial", label: "Memorial Técnico", permissao: ["memoriais", "visualizar"] },
+    // Fase 123 (pedido do usuário 2026-08-30) — "Protocolo de Estabilidade"
+    // é uma cópia real do sistema Alphafituslab/Protocololo-Testes-de-
+    // estabilidade (React+API Node+Postgres, monorepo completo — não dá
+    // pra rodar embutido no instalador do Windows como o WhatsApp),
+    // hospedada no mesmo VPS do Whatts Inbox. Mesmo padrão de item que
+    // abre em aba nova, exatamente como "WhatsApp" logo abaixo no menu —
+    // login e telas são as do sistema original, sem SSO/iframe.
+    { rota: "https://whatts.alphafitus.com.br:8443", chave: "protocolo-estabilidade", label: "Protocolo de Estabilidade", abrirNovaAba: true },
     {
       tipo: "grupo", chave: "grupo-administracao", nome: "Administração",
       itens: [
