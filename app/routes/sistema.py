@@ -37,8 +37,14 @@ de um clique dentro do sistema rodando.
 import datetime
 import io
 import os
-import sqlite3
 import tempfile
+
+# Fase 123 — mesmo motivo/mesma técnica do alias em app/db.py: o banco
+# agora é SQLCipher, então toda conexão sqlite3 aberta por fora de
+# `db_module._connect()` (como a de destino do backup abaixo) também
+# precisa ser desta biblioteca, com a MESMA chave — senão o arquivo de
+# backup gerado sairia sem criptografia nenhuma, anulando o propósito.
+from sqlcipher3 import dbapi2 as sqlite3  # noqa: F811 (troca intencional do sqlite3 padrão)
 
 from flask import Blueprint, Response, g, jsonify, request
 
@@ -61,6 +67,11 @@ def _gerar_backup_bytes(conn_origem: sqlite3.Connection) -> bytes:
     os.close(descritor)
     try:
         conn_destino = sqlite3.connect(caminho_tmp)
+        # Fase 123 — mesma chave da conexão de origem, ANTES do backup()
+        # de verdade: SQLCipher criptografa/descriptografa página a
+        # página, embaixo da API nativa de backup do sqlite — sem a
+        # chave aqui, o arquivo de destino sairia sem criptografia.
+        conn_destino.execute(f"PRAGMA key = '{db_module._obter_chave_criptografia()}'")
         try:
             conn_origem.backup(conn_destino)
         finally:
@@ -313,6 +324,11 @@ def _validar_arquivo_backup(caminho):
     sistema."""
     try:
         conn_teste = sqlite3.connect(caminho)
+        # Fase 123 — um backup de verdade, gerado por este sistema depois
+        # da criptografia, só abre com a chave certa; sem ela, a consulta
+        # abaixo cai no `except sqlite3.Error` e já devolve a mensagem
+        # certa ("não é um banco de dados SQLite válido").
+        conn_teste.execute(f"PRAGMA key = '{db_module._obter_chave_criptografia()}'")
         try:
             tabelas = {
                 r[0] for r in conn_teste.execute(

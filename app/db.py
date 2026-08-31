@@ -16,6 +16,18 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
+# Fase 123 — pedido do usuário: banco criptografado de verdade (SQLCipher),
+# não só um arquivo .db comum. `sqlcipher3-wheels` é um fork do módulo
+# `sqlite3` da própria biblioteca padrão com suporte a `PRAGMA key` — API
+# idêntica (mesmo `Row`, mesmo `PARSE_DECLTYPES`), então o resto do
+# sistema inteiro (que sempre passou por `_connect()`, nunca abriu o
+# arquivo por fora) não precisou mudar uma linha sequer. Import como
+# `sqlite3` mesmo (apelidado) de propósito: todo o resto do arquivo (e
+# de app/context.py, que reaproveita esta função) já usa `sqlite3.Row`/
+# `sqlite3.PARSE_DECLTYPES` etc. — trocar o nome do módulo aqui, sem
+# tocar nos usos, é o que mantém a mudança contida numa função só.
+from sqlcipher3 import dbapi2 as sqlite3  # noqa: F811 (troca intencional do sqlite3 padrão)
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_DB_PATH = os.path.join(BASE_DIR, "data", "alphafitus.db")
 MIGRATIONS_DIR = os.path.join(BASE_DIR, "migrations")
@@ -148,10 +160,30 @@ def get_db_path():
     return os.environ.get("ALPHAFITUS_DB_PATH", DEFAULT_DB_PATH)
 
 
+def _obter_chave_criptografia():
+    """A chave mora em `ALPHAFITUS_DB_KEY` (mesmo arquivo config_ambiente.bat
+    que já guarda ALPHAFITUS_JWT_SECRET) — nunca no código. `PRAGMA key`
+    não aceita parâmetro vinculado (`?`) como uma query normal, então o
+    valor entra por f-string; a checagem abaixo (só letras/dígitos) existe
+    exatamente pra isso nunca virar uma injeção via um valor manual
+    esquisito colocado na variável de ambiente."""
+    chave = os.environ.get("ALPHAFITUS_DB_KEY")
+    if not chave:
+        raise RuntimeError(
+            "ALPHAFITUS_DB_KEY não configurada — obrigatória desde que o banco passou a ser "
+            "criptografado (SQLCipher, Fase 123). Defina em config_ambiente.bat a mesma chave "
+            "usada na migração do banco."
+        )
+    if not chave.isalnum():
+        raise RuntimeError("ALPHAFITUS_DB_KEY só pode conter letras e números (restrição de segurança).")
+    return chave
+
+
 def _connect(db_path=None):
     path = db_path or get_db_path()
     os.makedirs(os.path.dirname(path), exist_ok=True)
     conn = sqlite3.connect(path, detect_types=sqlite3.PARSE_DECLTYPES)
+    conn.execute(f"PRAGMA key = '{_obter_chave_criptografia()}'")
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn

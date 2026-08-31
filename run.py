@@ -45,4 +45,11 @@ if __name__ == "__main__":
             "Defina a variável de ambiente ALPHAFITUS_JWT_SECRET antes de iniciar "
             "(ex.: export ALPHAFITUS_JWT_SECRET=$(python -c \"import secrets;print(secrets.token_hex(32))\"))"
         )
+    if not os.environ.get("ALPHAFITUS_DB_KEY"):
+        raise SystemExit(
+            "Defina a variável de ambiente ALPHAFITUS_DB_KEY antes de iniciar (Fase 123 — banco "
+            "criptografado com SQLCipher). Para um banco NOVO, qualquer valor alfanumérico serve "
+            "(ex.: export ALPHAFITUS_DB_KEY=$(python -c \"import secrets;print(secrets.token_hex(32))\")); "
+            "para o banco de produção já existente, use a MESMA chave gravada em config_ambiente.bat."
+        )
     app.run(host="127.0.0.1", port=5000, debug=False)

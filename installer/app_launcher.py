@@ -54,6 +54,13 @@ def gerar_config_ambiente_se_necessario(pasta):
     import secrets
 
     chave = secrets.token_hex(32)
+    # Fase 123 — pedido do usuário: banco criptografado de verdade
+    # (SQLCipher), não só um .db comum. Numa instalação NOVA (é exatamente
+    # o caso coberto por esta função — só roda quando config_ambiente.bat
+    # ainda não existe) o banco também ainda não existe, então esta chave
+    # nasce e é usada desde a primeira escrita — nunca precisa de migração
+    # como aconteceu na instalação já existente (feita à mão, uma vez).
+    chave_db = secrets.token_hex(32)
     db_path = os.path.join(pasta, "data", "alphafitus.db")
     print("Gerando a chave de segurança deste computador (primeira execução)...")
     with open(caminho, "w", encoding="utf-8") as f:
@@ -61,10 +68,12 @@ def gerar_config_ambiente_se_necessario(pasta):
         f.write("rem Gerado automaticamente pelo Alphafitus OS na primeira\n")
         f.write("rem execucao deste computador. NAO apague nem compartilhe\n")
         f.write("rem este arquivo: quem tiver a chave abaixo consegue forjar\n")
-        f.write("rem sessoes de login do sistema.\n")
+        f.write("rem sessoes de login do sistema, e quem tiver ALPHAFITUS_DB_KEY\n")
+        f.write("rem consegue abrir o banco de dados inteiro.\n")
         f.write(f'set "ALPHAFITUS_JWT_SECRET={chave}"\n')
         f.write('set "ALPHAFITUS_ADMIN_EMAIL=admin@alphafitus.com.br"\n')
         f.write(f'set "ALPHAFITUS_DB_PATH={db_path}"\n')
+        f.write(f'set "ALPHAFITUS_DB_KEY={chave_db}"\n')
         # Fase 123 — sincronização de senha do admin com o Whatts/
         # Protocolo/Memorial (ver app/senha_sync_service.py) é OPCIONAL e
         # específica de instalações que também têm esses sistemas

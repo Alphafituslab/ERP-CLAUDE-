@@ -51,3 +51,10 @@ requests>=2.31
 # vem por outro motivo (autenticação do próprio AlphafitusOS); pyotp é
 # só do Whatts (2FA dele, independente do 2FA do AlphafitusOS).
 pyotp>=2.9
+# sqlcipher3-wheels: banco de dados principal criptografado de verdade
+# (SQLCipher, Fase 123 — pedido do usuário). Fork da própria biblioteca
+# padrão `sqlite3` com suporte a `PRAGMA key` — API idêntica, importado
+# com apelido `sqlite3` em app/db.py e app/routes/sistema.py (ver
+# comentário lá). Traz o binário nativo pronto (wheel), sem precisar
+# compilar OpenSSL/SQLCipher na máquina do cliente.
+sqlcipher3-wheels>=0.5.7
