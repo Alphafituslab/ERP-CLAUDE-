@@ -993,11 +993,6 @@
          <p>Bem-vindo(a), <strong>${escapeHtml(state.usuarioAtual.nome)}</strong>.</p>
          <p class="texto-suave">Perfis: ${state.usuarioAtual.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "nenhum"}</p>
          <p class="texto-suave">${totalPermissoes} permissões concedidas ao seu usuário.</p>
-       </div>
-       <div class="cartao">
-         <p class="texto-suave">Esta é a Fase 1 (Fundação) do Alphafitus OS: usuários, perfis, permissões
-         granulares, autenticação com dois fatores e trilha de auditoria imutável. As próximas fases vão
-         adicionar qualidade/laboratório, produção, estoque, comercial e financeiro sobre esta base.</p>
        </div>`,
       "dashboard"
     );
