@@ -15091,12 +15091,27 @@
         return renderApsAgenda({ dataBase: form.dataset.data, centroId: dados.get("centro_id") });
       }
       case "trocar-senha": {
-        await chamarApi("/auth/trocar-senha", {
+        const respostaTrocaSenha = await chamarApi("/auth/trocar-senha", {
           method: "POST",
           body: { senha_atual: dados.get("senha_atual"), senha_nova: dados.get("senha_nova") },
         });
         form.reset();
-        definirFlash("ok", "Senha alterada com sucesso.");
+        // Fase 123 — pedido do usuário: só a conta administrativa
+        // vinculada (ver senha_sync_service.py no backend) recebe
+        // `sincronizacao` na resposta; para os demais usuários vem
+        // ausente/null, e a mensagem fica exatamente como sempre foi.
+        const sinc = respostaTrocaSenha && respostaTrocaSenha.sincronizacao;
+        if (sinc) {
+          const ROTULO_DESTINO = { whatts: "WhatsApp", protocolo: "Protocolo de Estabilidade", memorial: "Memorial Técnico" };
+          const partes = Object.entries(sinc).map(([destino, r]) => `${ROTULO_DESTINO[destino] || destino}: ${r.ok ? "✓" : "✗ " + escapeHtml(r.mensagem || "falhou")}`);
+          const todasOk = Object.values(sinc).every((r) => r.ok);
+          definirFlash(
+            todasOk ? "ok" : "erro",
+            `Senha alterada com sucesso. Sincronização — ${partes.join(" · ")}`,
+          );
+        } else {
+          definirFlash("ok", "Senha alterada com sucesso.");
+        }
         return renderMinhaConta();
       }
       case "salvar-foto-perfil": {

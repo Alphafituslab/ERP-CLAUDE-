@@ -3,7 +3,7 @@ import secrets
 
 from flask import Blueprint, g, jsonify, request
 
-from .. import audit, security
+from .. import audit, security, senha_sync_service
 from ..context import ApiError, AuthError, client_device, client_ip, get_current_user, get_db
 from ..imagens import validar_imagem_base64
 from ..permissions import requires_auth
@@ -428,7 +428,38 @@ def trocar_senha():
     )
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                      acao="senha_alterada", ip=client_ip(), dispositivo=client_device())
-    return jsonify({"ok": True})
+
+    # Fase 123 — pedido do usuário: "sempre que alterar uma [senha],
+    # altera todas" (Whatts/Protocolo/Memorial). A troca LOCAL já está
+    # concluída e persistida acima — a sincronização roda depois, best
+    # effort, e uma falha nela nunca desfaz nem afeta o que já foi salvo.
+    # Só dispara de fato para a identidade administrativa vinculada
+    # (ver senha_sync_service); para os demais usuários, devolve None.
+    resultado_sincronizacao = senha_sync_service.sincronizar_senha_em_todos_sistemas(
+        usuario["email"], senha_nova,
+    )
+    if resultado_sincronizacao:
+        audit.registrar(
+            conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
+            acao="senha_sincronizada_outros_sistemas",
+            valor_novo={destino: bool(ok) for destino, (ok, _msg) in resultado_sincronizacao.items() if ok is not None},
+            ip=client_ip(), dispositivo=client_device(),
+        )
+    return jsonify({"ok": True, "sincronizacao": _sincronizacao_publica(resultado_sincronizacao)})
+
+
+def _sincronizacao_publica(resultado):
+    """Formata o resultado da sincronização pra resposta da API — None
+    (não configurado) some do dict pra não confundir "não configurado
+    nesta instalação" com "falhou de verdade" na tela."""
+    if not resultado:
+        return None
+    publico = {}
+    for destino, (ok, mensagem) in resultado.items():
+        if ok is None:
+            continue
+        publico[destino] = {"ok": ok, "mensagem": mensagem}
+    return publico or None
 
 
 @bp.put("/minha-foto")

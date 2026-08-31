@@ -65,6 +65,15 @@ def gerar_config_ambiente_se_necessario(pasta):
         f.write(f'set "ALPHAFITUS_JWT_SECRET={chave}"\n')
         f.write('set "ALPHAFITUS_ADMIN_EMAIL=admin@alphafitus.com.br"\n')
         f.write(f'set "ALPHAFITUS_DB_PATH={db_path}"\n')
+        # Fase 123 — sincronização de senha do admin com o Whatts/
+        # Protocolo/Memorial (ver app/senha_sync_service.py) é OPCIONAL e
+        # específica de instalações que também têm esses sistemas
+        # vendorizados rodando — por isso não entra aqui no template
+        # padrão, só documentada: ALPHAFITUS_SYNC_PROTOCOLO_URL,
+        # ALPHAFITUS_SYNC_PROTOCOLO_MASTER, ALPHAFITUS_SYNC_MEMORIAL_URL,
+        # ALPHAFITUS_SYNC_MEMORIAL_SECRET (adicionar manualmente neste
+        # arquivo, ou direto no config_ambiente.bat já existente, quando
+        # essa integração for desejada).
 
 
 def carregar_config_ambiente(pasta):

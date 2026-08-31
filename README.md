@@ -5220,6 +5220,51 @@ tradução de cada tipo de coluna. Resumo das mudanças ao migrar:
   forma de pagamento) e no navegador (card do Portfólio com foto real,
   avatar do rodapé, fluxo completo cliente → forma de pagamento → pedido
   aparecendo em Comercial com "Forma de pagamento: Pix" no detalhe).
+- (Entregue na Fase 123.2) Sincronização de senha entre ERP, Whatts,
+  Protocolo de Estabilidade e Memorial Técnico — pedido do usuário:
+  "preciso que a senha ao logar o sistema seja a mesma em todas as abas
+  ... sempre que alterar uma altera todas". Os quatro sistemas guardam a
+  conta administrativa em bancos TOTALMENTE separados, cada um com seu
+  próprio esquema de hash (PBKDF2 no ERP/Whatts, bcrypt no Protocolo/
+  Memorial) — não existe (nem seria seguro inventar) forma de "copiar o
+  hash" de um pro outro, então a sincronização sempre passa pelo
+  mecanismo de troca de senha que cada sistema expõe.
+  - **`app/senha_sync_service.py`** (novo): ao trocar a senha pela tela
+    "Minha Conta" (`POST /auth/trocar-senha`), depois da troca LOCAL já
+    concluída, dispara em paralelo (best effort, uma falha não desfaz
+    nem bloqueia as outras) três sincronizações — só para a identidade
+    administrativa vinculada (`admin@alphafitus.com.br`), nunca para
+    usuários comuns, que não têm conta correspondente nos outros três
+    sistemas.
+  - **Whatts** (mesmo processo/máquina): escrita local direta no banco
+    dele, reaproveitando a MESMA função de hash que ele já usa.
+  - **Protocolo**: já tinha, de fábrica, `POST /api/auth/reset-password`
+    protegido pela senha mestra — reaproveitado tal como é, zero linha
+    de código dele tocada.
+  - **Memorial**: não tinha um endpoint livre equivalente (só
+    sincronizava a senha do admin com uma variável de ambiente, no
+    boot) — adicionado `POST /api/auth/sync-password`, protegido por um
+    segredo PRÓPRIO (`SYNC_PASSWORD_SECRET`, deliberadamente diferente
+    do `BACKUP_MASTER_PASSWORD`, pra não misturar o escopo de acesso a
+    backup com o de troca de senha) — única mudança de código real feita
+    nos sistemas vendorizados até agora, e é aditiva (não altera nenhuma
+    rota/comportamento existente).
+  Testado ponta-a-ponta: sincronização disparada de verdade, com login
+  real (não só a resposta da própria função) confirmado nos três
+  destinos depois.
+- (Entregue na Fase 123.2) Sincronizadas as duas cópias vendorizadas
+  (Protocolo/Memorial) com as atualizações reais do repositório
+  original — Protocolo recebeu um merge trazendo suporte a períodos de
+  longa duração (T9/T12/T18/T24, antes só T0/T3/T6) no Resultados e no
+  Certificado, mais melhorias no agendamento de backup. Também
+  corrigidos, nos dois: favicon/cores da marca (estavam com o laranja/
+  azul-marinho padrão do template Replit, nunca trocados pra identidade
+  Alphafitus — corrigido pros mesmos tons de verde/teal usados no resto
+  do ERP), título da aba do navegador ("... ERP", pra diferenciar da
+  cópia original hospedada no Replit), e a geração de link do "Portal do
+  Cliente" do Protocolo (dependia de uma variável só existente na
+  infraestrutura do Replit — corrigido via variável de ambiente, sem
+  tocar código).
 - (Entregue na Fase 123, parte 2) Módulo WhatsApp incluso no AlphafitusOS
   — o Whatts Inbox (caixa de entrada compartilhada de WhatsApp,
   `github.com/Alphafituslab/whatts-interativo-claude`, hoje também em
