@@ -227,7 +227,7 @@ def listar_contas_receber():
         SELECT cr.*, c.razao_social AS cliente_razao_social, pv.numero AS pedido_numero
         FROM contas_receber cr
         JOIN clientes c ON c.id = cr.cliente_id
-        JOIN pedidos_venda pv ON pv.id = cr.pedido_venda_id
+        LEFT JOIN pedidos_venda pv ON pv.id = cr.pedido_venda_id
         {where} ORDER BY cr.vencimento ASC, cr.id DESC
         """,
         params,
@@ -758,6 +758,69 @@ def listar_contas_pagar():
 def obter_conta_pagar(conta_id):
     conn = get_db()
     return jsonify(_conta_pagar_detalhada(conn, conta_id))
+
+
+def criar_conta_receber_interno(conn, usuario_atual, cliente_id, valor_total, vencimento,
+                                 descricao=None, empresa_id=None):
+    """Fase 125 — espelho de `criar_conta_pagar_interno` logo abaixo, para o
+    lançamento avulso de conta a receber (sem Pedido de Venda por trás —
+    ver nota de escopo em migrations/schema_fase125.sql). Deliberadamente
+    SEM `lote_id`/`pedido_venda_id`: quem precisa de rastreabilidade de
+    venda de verdade continua usando o fluxo normal (confirmar pedido),
+    esta função é só para o saldo que não tem — e nunca vai ter — essa
+    origem."""
+    if not cliente_id:
+        raise ApiError("Informe cliente_id.", status=400)
+    cliente = conn.execute("SELECT * FROM clientes WHERE id = ?", (cliente_id,)).fetchone()
+    if cliente is None:
+        raise ApiError("Cliente não encontrado.", status=404)
+    if valor_total is None:
+        raise ApiError("Informe valor_total.", status=400)
+    try:
+        valor_total = float(valor_total)
+    except (TypeError, ValueError):
+        raise ApiError("valor_total deve ser numérico.", status=400)
+    if valor_total <= 0:
+        raise ApiError("valor_total deve ser maior que zero.", status=400)
+    vencimento = (vencimento or "").strip()
+    if not vencimento:
+        raise ApiError("Informe vencimento (AAAA-MM-DD).", status=400)
+    if empresa_id:
+        _empresa_ou_404(conn, empresa_id)
+
+    numero = _gerar_numero("CR")
+    cur = conn.execute(
+        """
+        INSERT INTO contas_receber (numero, cliente_id, valor_total, vencimento, descricao, empresa_id, criado_por)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (numero, cliente_id, valor_total, vencimento, (descricao or "").strip() or None, empresa_id, usuario_atual["id"]),
+    )
+    conta_id = cur.lastrowid
+    conn.commit()
+    audit.registrar(conn, tabela="contas_receber", registro_id=conta_id, usuario_id=usuario_atual["id"],
+                     acao="conta_receber_criada_avulsa",
+                     valor_novo={"numero": numero, "cliente_id": cliente_id, "valor_total": valor_total, "vencimento": vencimento, "empresa_id": empresa_id},
+                     ip=client_ip(), dispositivo=client_device())
+    return conta_id
+
+
+@bp.post("/contas-receber")
+@requires_permission("financeiro", "criar_conta_receber")
+def criar_conta_receber_avulsa():
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+
+    conta_id = criar_conta_receber_interno(
+        conn, usuario_atual,
+        cliente_id=dados.get("cliente_id"),
+        valor_total=dados.get("valor_total"),
+        vencimento=dados.get("vencimento"),
+        descricao=dados.get("descricao"),
+        empresa_id=dados.get("empresa_id"),
+    )
+    return jsonify(_conta_receber_detalhada(conn, conta_id)), 201
 
 
 def criar_conta_pagar_interno(conn, usuario_atual, fornecedor_id, descricao, valor_total, vencimento,

@@ -153,6 +153,8 @@ SCHEMA_FILES = [
     "schema_fase114.sql",  # Fase 114 — Portfólio com fotos (itens.imagem) + forma_pagamento no App de Vendas
     "schema_fase115.sql",  # Fase 115 — Memorial Técnico: campos/catálogos faltando (paridade com sistema antigo)
     "schema_fase123.sql",  # Fase 123 — Recebimento e Importação de NF-e: unidades/conversão, vínculo fornecedor-produto, notas_fiscais_entrada
+    "schema_fase124.sql",  # Fase 124 — Importação Ema: campos faltando em clientes/fornecedores/itens/lotes/contas + codigo_legado_ema
+    "schema_fase125.sql",  # Fase 125 — Importação Ema: contas_receber ganha lançamento avulso (pedido_venda_id agora opcional) + descricao
 ]
 
 

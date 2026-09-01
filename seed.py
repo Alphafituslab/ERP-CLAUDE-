@@ -518,6 +518,16 @@ PERMISSOES_PADRAO = [
     # validação em app/routes/nfe_entrada.py), nunca passa batido.
     ("nfe_entrada", "importar_com_divergencia", "Importar uma NF-e mesmo com item(ns) em divergência de preço/quantidade fora da tolerância (exige justificativa)", 1),
     ("nfe_entrada", "configurar", "Alterar as tolerâncias de divergência de preço/quantidade e configurar o certificado digital A1 para consulta automática à SEFAZ", 0),
+
+    # Fase 125 — lançamento avulso de conta a receber, sem Pedido de Venda
+    # por trás (mesma ideia de "financeiro.criar_conta_pagar", que desde a
+    # Fase 41 já não exige Pedido de Compra). Até aqui toda conta a receber
+    # só nascia da confirmação de um pedido; isso deixava de fora qualquer
+    # saldo devedor que não veio de uma venda feita dentro do próprio
+    # Alphafitus — o caso real que motivou esta fase foi a importação do
+    # saldo de clientes do sistema anterior (Ema), mas serve para qualquer
+    # lançamento avulso futuro (ex.: acordo extrajudicial, reembolso).
+    ("financeiro", "criar_conta_receber", "Lançar uma nova conta a receber avulsa contra um cliente, sem um Pedido de Venda por trás", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
