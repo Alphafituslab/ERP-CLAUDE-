@@ -10193,10 +10193,6 @@
 
     function restricaoResumo(item) {
       const partes = [];
-      if (item.tabela_preco_restrita_id) {
-        const t = tabelas.find((x) => x.id === item.tabela_preco_restrita_id);
-        partes.push(`tabela "${escapeHtml(t ? t.nome : "?")}"`);
-      }
       if (item.clientes_vinculados && item.clientes_vinculados.length) {
         partes.push(`${item.clientes_vinculados.length} cliente(s)`);
       }
@@ -10312,9 +10308,6 @@
          <div class="campo"><label>Nome</label><input name="nome" required value="${escapeHtml(metodo ? metodo.nome : "")}"></div>
          <div class="campo"><label><input type="checkbox" name="ativo" ${!metodo || metodo.ativo ? "checked" : ""}> Ativo</label></div>
          <div class="campo"><label><input type="checkbox" name="visivel_app_vendas" ${!metodo || metodo.visivel_app_vendas ? "checked" : ""}> Visível no App de Vendas</label></div>
-         <div class="campo"><label>Restringir a uma tabela de preço</label>
-           <select name="tabela_preco_restrita_id">${opcoesTabelasPreco(metodo ? metodo.tabela_preco_restrita_id : null)}</select>
-         </div>
          <div class="campo"><label>Restringir a clientes específicos</label>
            <input type="text" data-busca-cliente-pagamento placeholder="Buscar cliente por razão social ou CNPJ…" autocomplete="off">
            <div data-resultados-cliente-pagamento></div>
@@ -10339,9 +10332,6 @@
          <div class="campo"><label>Dias entre parcelas (opcional)</label><input type="number" name="dias_entre_parcelas" min="1" value="${condicao && condicao.dias_entre_parcelas != null ? condicao.dias_entre_parcelas : ""}"></div>
          <div class="campo"><label><input type="checkbox" name="ativo" ${!condicao || condicao.ativo ? "checked" : ""}> Ativa</label></div>
          <div class="campo"><label><input type="checkbox" name="visivel_app_vendas" ${!condicao || condicao.visivel_app_vendas ? "checked" : ""}> Visível no App de Vendas</label></div>
-         <div class="campo"><label>Restringir a uma tabela de preço</label>
-           <select name="tabela_preco_restrita_id">${opcoesTabelasPreco(condicao ? condicao.tabela_preco_restrita_id : null)}</select>
-         </div>
          <div class="campo"><label>Restringir a clientes específicos</label>
            <input type="text" data-busca-cliente-pagamento placeholder="Buscar cliente por razão social ou CNPJ…" autocomplete="off">
            <div data-resultados-cliente-pagamento></div>
@@ -10526,15 +10516,32 @@
 
   async function renderTabelaPrecoDetalhe(tabelaId) {
     app.innerHTML = '<div class="carregando">Carregando tabela de preço…</div>';
-    const [tabelas, itensDaTabela, itensCatalogo] = await Promise.all([
+    const [tabelas, itensDaTabela, itensCatalogo, condicoesDaTabela, todosMetodos, todasCondicoes] = await Promise.all([
       chamarApi("/tabelas-preco?incluir_inativas=1"),
       chamarApi(`/tabelas-preco/${tabelaId}/itens`),
       chamarApi("/itens"),
+      chamarApi(`/tabelas-preco/${tabelaId}/condicoes-pagamento`),
+      chamarApi("/comercial/metodos-pagamento?ativos=1"),
+      chamarApi("/comercial/condicoes-pagamento?ativos=1"),
     ]);
     const tabela = tabelas.find((t) => t.id === tabelaId);
     if (!tabela) { definirFlash("erro", "Tabela de preço não encontrada."); return navegarPara("#/tabelas-preco"); }
     state.cache.itensCatalogoTabelaPreco = itensCatalogo;
     const podeGerenciar = temPermissao("tabelas_preco", "gerenciar");
+
+    // Fase 128 — agrupado por método (ex.: Boleto: 7/14/28, 28/42/56).
+    const gruposPorMetodo = {};
+    condicoesDaTabela.forEach((c) => {
+      if (!gruposPorMetodo[c.metodo_pagamento_id]) gruposPorMetodo[c.metodo_pagamento_id] = { nome: c.metodo_nome, combos: [] };
+      gruposPorMetodo[c.metodo_pagamento_id].combos.push(c);
+    });
+    const htmlCondicoesTabela = Object.values(gruposPorMetodo).map((grupo) => `
+      <div style="margin-bottom:10px;">
+        <strong style="font-size:13px;">${escapeHtml(grupo.nome)}</strong>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+          ${grupo.combos.map((c) => `<span class="selo ativo">${escapeHtml(c.condicao_nome)} ${podeGerenciar ? `<a href="#" data-remover-condicao-tabela="${c.id}" data-tabela-id="${tabelaId}" style="color:inherit;text-decoration:none;">✕</a>` : ""}</span>`).join("")}
+        </div>
+      </div>`).join("") || '<p class="texto-suave">Nenhuma condição comercial cadastrada nesta tabela ainda — quando faltar, o pedido de um cliente desta tabela cai no catálogo geral de métodos/condições.</p>';
 
     const linhas = itensDaTabela
       .map((it) => `<tr>
@@ -10567,6 +10574,28 @@
            <thead><tr><th>Código</th><th>Descrição</th><th>Preço</th><th>Atualizado em</th><th></th></tr></thead>
            <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhum item com preço cadastrado nesta tabela ainda.</td></tr>'}</tbody>
          </table>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Condições comerciais desta tabela</h3>
+         <p class="texto-suave" style="font-size:13px;">Para cada método de pagamento, os prazos disponíveis quando um cliente desta tabela for faturado. Ex.: Boleto com 7/14/28 dias OU 28/42/56 dias — pode ter mais de um prazo por método.</p>
+         ${htmlCondicoesTabela}
+         ${podeGerenciar ? `
+         <form data-form="adicionar-condicao-tabela" data-tabela-id="${tabelaId}" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-top:10px;">
+           <div class="campo" style="margin:0;"><label>Método</label>
+             <select name="metodo_pagamento_id" required>
+               <option value="">Selecione…</option>
+               ${todosMetodos.map((m) => `<option value="${m.id}">${escapeHtml(m.nome)}</option>`).join("")}
+             </select>
+           </div>
+           <div class="campo" style="margin:0;"><label>Condição</label>
+             <select name="condicao_pagamento_id" required>
+               <option value="">Selecione…</option>
+               ${todasCondicoes.map((c) => `<option value="${c.id}">${escapeHtml(c.nome)}</option>`).join("")}
+             </select>
+           </div>
+           <button type="submit" class="botao secundario pequeno">+ Adicionar</button>
+         </form>` : ""}
        </div>`,
       "tabelas-preco"
     );
@@ -10591,6 +10620,14 @@
         const botao = e.target.closest(".item-busca-resultado");
         if (!botao) return;
         modalDefinirPrecoItemTabela(tabelaId, Number(botao.dataset.itemId), botao.dataset.codigo, botao.dataset.descricao, null);
+      });
+      app.addEventListener("click", async (e) => {
+        const botaoRemover = e.target.closest("[data-remover-condicao-tabela]");
+        if (!botaoRemover) return;
+        e.preventDefault();
+        await chamarApi(`/tabelas-preco/${botaoRemover.dataset.tabelaId}/condicoes-pagamento/${botaoRemover.dataset.removerCondicaoTabela}`, { method: "DELETE" });
+        definirFlash("ok", "Condição removida desta tabela.");
+        renderTabelaPrecoDetalhe(tabelaId);
       });
     }
   }
@@ -10956,6 +10993,7 @@
       <form data-form="criar-pedido">
         ${_buscaClienteHtml()}
         <div id="area-risco-cliente-pedido"></div>
+        <div id="area-pagamento-pedido"></div>
         ${_buscaItemHtml()}
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
         <div class="campo"><label>Unidade</label><input name="unidade" placeholder="preenchida pelo cadastro do item" required></div>
@@ -10983,6 +11021,7 @@
           ? await chamarApi(`/comercial/clientes/${cliente.id}/tabela-preco`).catch(() => null)
           : null;
         _mostrarRiscoCliente(wrap, cliente);
+        await _renderizarSeletorPagamento(wrap, cliente, tabelaPrecoDoCliente);
         if (itemEscolhido) _preencherPrecoEMargem(wrap, itemEscolhido, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
       },
       onItem: (item) => {
@@ -10990,6 +11029,64 @@
         _preencherPrecoEMargem(wrap, item, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
       },
     });
+  }
+
+  // Fase 128 — método (Boleto/PIX/Cartão...) + condição (prazo) na hora
+  // de criar o pedido. Se o cliente está numa tabela de preço com
+  // condições comerciais configuradas, usa SÓ essas combinações
+  // (cascata: escolher o método filtra os prazos daquele método); senão
+  // cai no catálogo geral (método/condição disponíveis pro cliente, sem
+  // o pareamento específico de uma tabela).
+  async function _renderizarSeletorPagamento(wrap, cliente, tabelaPrecoDoCliente) {
+    const area = wrap.querySelector("#area-pagamento-pedido");
+    if (!area) return;
+    let combos = [];
+    if (tabelaPrecoDoCliente && tabelaPrecoDoCliente.tabela_preco_id) {
+      combos = await chamarApi(`/tabelas-preco/${tabelaPrecoDoCliente.tabela_preco_id}/condicoes-pagamento`).catch(() => []);
+    }
+
+    if (combos.length) {
+      const metodosUnicos = [...new Map(combos.map((c) => [c.metodo_pagamento_id, c.metodo_nome])).entries()];
+      area.innerHTML = `
+        <div class="campo"><label>Método de pagamento</label>
+          <select id="pedido-metodo-pagamento">
+            <option value="">Selecione…</option>
+            ${metodosUnicos.map(([id, nome]) => `<option value="${id}" ${cliente.metodo_pagamento_padrao_id === id ? "selected" : ""}>${escapeHtml(nome)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="campo"><label>Prazo / condição</label>
+          <select name="condicao_pagamento_id" id="pedido-condicao-pagamento"><option value="">Escolha o método primeiro</option></select>
+        </div>
+        <div class="dica">Condições comerciais de "${escapeHtml(tabelaPrecoDoCliente.tabela_preco_nome)}" (tabela de preço deste cliente).</div>`;
+      const selMetodo = area.querySelector("#pedido-metodo-pagamento");
+      const selCondicao = area.querySelector("#pedido-condicao-pagamento");
+      const atualizarCondicoes = () => {
+        const disponiveis = combos.filter((c) => String(c.metodo_pagamento_id) === selMetodo.value);
+        selCondicao.innerHTML = disponiveis.length
+          ? disponiveis.map((c) => `<option value="${c.condicao_pagamento_id}" ${cliente.condicao_pagamento_padrao_id === c.condicao_pagamento_id ? "selected" : ""}>${escapeHtml(c.condicao_nome)}</option>`).join("")
+          : '<option value="">Nenhum prazo cadastrado para este método nesta tabela</option>';
+      };
+      selMetodo.addEventListener("change", atualizarCondicoes);
+      if (selMetodo.value) atualizarCondicoes();
+    } else {
+      const [metodos, condicoes] = await Promise.all([
+        chamarApi(`/comercial/metodos-pagamento?ativos=1&cliente_id=${cliente.id}`).catch(() => []),
+        chamarApi(`/comercial/condicoes-pagamento?ativos=1&cliente_id=${cliente.id}`).catch(() => []),
+      ]);
+      area.innerHTML = `
+        <div class="campo"><label>Método de pagamento (opcional)</label>
+          <select id="pedido-metodo-pagamento">
+            <option value="">Nenhum</option>
+            ${metodos.map((m) => `<option value="${m.id}">${escapeHtml(m.nome)}</option>`).join("")}
+          </select>
+        </div>
+        <div class="campo"><label>Condição de pagamento (opcional)</label>
+          <select name="condicao_pagamento_id">
+            <option value="">Nenhuma</option>
+            ${condicoes.map((c) => `<option value="${c.id}" ${cliente.condicao_pagamento_padrao_id === c.id ? "selected" : ""}>${escapeHtml(c.nome)}</option>`).join("")}
+          </select>
+        </div>`;
+    }
   }
 
   function modalAdicionarItemPedido(pedidoId, tabelaPrecoDoCliente, empresaIdDoPedido) {
@@ -15526,12 +15623,19 @@
         definirFlash("ok", "Configuração de boleto salva.");
         return renderConfiguracaoBoleto();
       }
+      case "adicionar-condicao-tabela": {
+        await chamarApi(`/tabelas-preco/${form.dataset.tabelaId}/condicoes-pagamento`, {
+          method: "POST",
+          body: { metodo_pagamento_id: Number(dados.get("metodo_pagamento_id")), condicao_pagamento_id: Number(dados.get("condicao_pagamento_id")) },
+        });
+        definirFlash("ok", "Condição adicionada à tabela.");
+        return renderTabelaPrecoDetalhe(Number(form.dataset.tabelaId));
+      }
       case "salvar-metodo-pagamento": {
         const corpo = {
           nome: dados.get("nome"),
           ativo: !!dados.get("ativo"),
           visivel_app_vendas: !!dados.get("visivel_app_vendas"),
-          tabela_preco_restrita_id: dados.get("tabela_preco_restrita_id") ? Number(dados.get("tabela_preco_restrita_id")) : null,
           cliente_ids: JSON.parse(dados.get("cliente_ids_json") || "[]"),
         };
         if (form.dataset.id) {
@@ -15550,7 +15654,6 @@
           dias_entre_parcelas: dados.get("dias_entre_parcelas") ? Number(dados.get("dias_entre_parcelas")) : null,
           ativo: !!dados.get("ativo"),
           visivel_app_vendas: !!dados.get("visivel_app_vendas"),
-          tabela_preco_restrita_id: dados.get("tabela_preco_restrita_id") ? Number(dados.get("tabela_preco_restrita_id")) : null,
           cliente_ids: JSON.parse(dados.get("cliente_ids_json") || "[]"),
         };
         if (form.dataset.id) {

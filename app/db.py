@@ -157,6 +157,7 @@ SCHEMA_FILES = [
     "schema_fase125.sql",  # Fase 125 — Importação Ema: contas_receber ganha lançamento avulso (pedido_venda_id agora opcional) + descricao
     "schema_fase126.sql",  # Fase 126 — Boleto: substitui Asaas por CNAB 240 direto (Sicredi/Unicred)
     "schema_fase127.sql",  # Fase 127 — Catálogo de métodos e condições de pagamento (cliente padrão + pedido de venda)
+    "schema_fase128.sql",  # Fase 128 — tabela_preco_condicoes: cada tabela de preço configura seus próprios método+prazo
 ]
 
 

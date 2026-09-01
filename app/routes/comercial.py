@@ -571,14 +571,16 @@ def editar_cliente(cliente_id):
 
 
 # ============================================================
-# MÉTODOS E CONDIÇÕES DE PAGAMENTO (Fase 127)
+# MÉTODOS E CONDIÇÕES DE PAGAMENTO (Fase 127/128)
 # ============================================================
-# Mesma lógica de restrição pros dois catálogos (método e condição): sem
-# nenhum cliente vinculado E sem tabela_preco_restrita_id = disponível
-# pra QUALQUER cliente (comportamento padrão). Assim que qualquer uma das
-# duas restrições é usada, só fica disponível pra quem bate com pelo
-# menos uma delas — cliente listado diretamente, OU cliente cuja
-# tabela_preco_id é a tabela restrita.
+# Restrição por cliente (Fase 127): sem nenhum cliente vinculado =
+# disponível pra QUALQUER cliente (comportamento padrão); assim que
+# algum cliente é vinculado, só fica disponível pra quem está na lista.
+# Isso é independente de tabela de preço — a combinação método+prazo
+# ESPECÍFICA de cada tabela (ex.: "na tabela Terceirização, Boleto tem
+# 7/14/28 ou 28/42/56") é outra coisa, resolvida por `tabela_preco_
+# condicoes` (Fase 128) e usada na hora de montar/faturar um pedido, não
+# aqui na listagem geral do catálogo.
 def _decorar_clientes_vinculados(conn, tabela_link, campo_fk, registro_id):
     rows = conn.execute(
         f"""
@@ -598,10 +600,9 @@ def _disponivel_para_cliente_sql(tabela, alias, cliente_alias="c"):
     campo_fk = "metodo_pagamento_id" if tabela == "metodos_pagamento" else "condicao_pagamento_id"
     return f"""(
         NOT EXISTS (SELECT 1 FROM {tabela_link} WHERE {campo_fk} = {alias}.id)
-        AND {alias}.tabela_preco_restrita_id IS NULL
     ) OR EXISTS (
         SELECT 1 FROM {tabela_link} WHERE {campo_fk} = {alias}.id AND cliente_id = {cliente_alias}.id
-    ) OR ({alias}.tabela_preco_restrita_id IS NOT NULL AND {alias}.tabela_preco_restrita_id = {cliente_alias}.tabela_preco_id)"""
+    )"""
 
 
 @bp.get("/metodos-pagamento")
@@ -639,18 +640,13 @@ def criar_metodo_pagamento():
     nome = (dados.get("nome") or "").strip()
     if not nome:
         raise ApiError("Informe nome.", status=400)
-    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id")
-    if tabela_preco_restrita_id is not None:
-        conn = get_db()
-        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
-            raise ApiError("Tabela de preço não encontrada.", status=404)
     conn = get_db()
     if conn.execute("SELECT id FROM metodos_pagamento WHERE nome = ?", (nome,)).fetchone():
         raise ApiError("Já existe um método de pagamento com este nome.", status=409)
     visivel_app_vendas = 1 if dados.get("visivel_app_vendas", True) else 0
     cur = conn.execute(
-        "INSERT INTO metodos_pagamento (nome, visivel_app_vendas, tabela_preco_restrita_id, criado_por) VALUES (?, ?, ?, ?)",
-        (nome, visivel_app_vendas, tabela_preco_restrita_id, usuario_atual["id"]),
+        "INSERT INTO metodos_pagamento (nome, visivel_app_vendas, criado_por) VALUES (?, ?, ?)",
+        (nome, visivel_app_vendas, usuario_atual["id"]),
     )
     metodo_id = cur.lastrowid
     for cliente_id in (dados.get("cliente_ids") or []):
@@ -673,15 +669,11 @@ def editar_metodo_pagamento(metodo_id):
     nome = (dados.get("nome") or anterior["nome"]).strip()
     ativo = 1 if dados.get("ativo", anterior["ativo"]) else 0
     visivel_app_vendas = 1 if dados.get("visivel_app_vendas", anterior["visivel_app_vendas"]) else 0
-    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id", anterior["tabela_preco_restrita_id"])
-    if tabela_preco_restrita_id is not None:
-        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
-            raise ApiError("Tabela de preço não encontrada.", status=404)
     if conn.execute("SELECT id FROM metodos_pagamento WHERE nome = ? AND id != ?", (nome, metodo_id)).fetchone():
         raise ApiError("Já existe um método de pagamento com este nome.", status=409)
     conn.execute(
-        "UPDATE metodos_pagamento SET nome = ?, ativo = ?, visivel_app_vendas = ?, tabela_preco_restrita_id = ? WHERE id = ?",
-        (nome, ativo, visivel_app_vendas, tabela_preco_restrita_id, metodo_id),
+        "UPDATE metodos_pagamento SET nome = ?, ativo = ?, visivel_app_vendas = ? WHERE id = ?",
+        (nome, ativo, visivel_app_vendas, metodo_id),
     )
     if "cliente_ids" in dados:
         conn.execute("DELETE FROM metodos_pagamento_clientes WHERE metodo_pagamento_id = ?", (metodo_id,))
@@ -736,17 +728,13 @@ def criar_condicao_pagamento():
     if numero_parcelas < 1:
         raise ApiError("numero_parcelas deve ser pelo menos 1.", status=400)
     dias_entre_parcelas = dados.get("dias_entre_parcelas")
-    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id")
     conn = get_db()
-    if tabela_preco_restrita_id is not None:
-        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
-            raise ApiError("Tabela de preço não encontrada.", status=404)
     if conn.execute("SELECT id FROM condicoes_pagamento WHERE nome = ?", (nome,)).fetchone():
         raise ApiError("Já existe uma condição de pagamento com este nome.", status=409)
     visivel_app_vendas = 1 if dados.get("visivel_app_vendas", True) else 0
     cur = conn.execute(
-        "INSERT INTO condicoes_pagamento (nome, numero_parcelas, dias_entre_parcelas, visivel_app_vendas, tabela_preco_restrita_id, criado_por) VALUES (?, ?, ?, ?, ?, ?)",
-        (nome, numero_parcelas, dias_entre_parcelas, visivel_app_vendas, tabela_preco_restrita_id, usuario_atual["id"]),
+        "INSERT INTO condicoes_pagamento (nome, numero_parcelas, dias_entre_parcelas, visivel_app_vendas, criado_por) VALUES (?, ?, ?, ?, ?)",
+        (nome, numero_parcelas, dias_entre_parcelas, visivel_app_vendas, usuario_atual["id"]),
     )
     condicao_id = cur.lastrowid
     for cliente_id in (dados.get("cliente_ids") or []):
@@ -777,16 +765,12 @@ def editar_condicao_pagamento(condicao_id):
     dias_entre_parcelas = dados.get("dias_entre_parcelas", anterior["dias_entre_parcelas"])
     ativo = 1 if dados.get("ativo", anterior["ativo"]) else 0
     visivel_app_vendas = 1 if dados.get("visivel_app_vendas", anterior["visivel_app_vendas"]) else 0
-    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id", anterior["tabela_preco_restrita_id"])
-    if tabela_preco_restrita_id is not None:
-        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
-            raise ApiError("Tabela de preço não encontrada.", status=404)
     if conn.execute("SELECT id FROM condicoes_pagamento WHERE nome = ? AND id != ?", (nome, condicao_id)).fetchone():
         raise ApiError("Já existe uma condição de pagamento com este nome.", status=409)
     conn.execute(
         "UPDATE condicoes_pagamento SET nome = ?, numero_parcelas = ?, dias_entre_parcelas = ?, ativo = ?, "
-        "visivel_app_vendas = ?, tabela_preco_restrita_id = ? WHERE id = ?",
-        (nome, numero_parcelas, dias_entre_parcelas, ativo, visivel_app_vendas, tabela_preco_restrita_id, condicao_id),
+        "visivel_app_vendas = ? WHERE id = ?",
+        (nome, numero_parcelas, dias_entre_parcelas, ativo, visivel_app_vendas, condicao_id),
     )
     if "cliente_ids" in dados:
         conn.execute("DELETE FROM condicoes_pagamento_clientes WHERE condicao_pagamento_id = ?", (condicao_id,))
