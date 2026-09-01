@@ -844,7 +844,7 @@
             <button class="pilula-status-servidor" data-pilula-status-servidor data-acao="mostrar-status-servidor" title="Detalhes da conexão">🟢 Servidor conectado</button>
             <div class="busca-global">
               <span class="busca-global-icone" aria-hidden="true">🔎</span>
-              <input type="text" id="busca-global-input" class="busca-global-input" placeholder="Pesquisar módulo ou tela… (ex.: financeiro)" autocomplete="off">
+              <input type="text" id="busca-global-input" class="busca-global-input" placeholder="Pesquisar módulo, tela ou cliente… (ex.: financeiro, alphanutrition)" autocomplete="off">
               <div class="busca-global-resultados" id="busca-global-resultados" hidden></div>
             </div>
             <span class="espacador-barra-superior"></span>
@@ -898,14 +898,37 @@
     const campoBuscaGlobal = document.getElementById("busca-global-input");
     const resultadosBuscaGlobal = document.getElementById("busca-global-resultados");
     if (campoBuscaGlobal && resultadosBuscaGlobal) {
-      const renderizarResultadosBuscaGlobal = (query) => {
-        const encontrados = buscarNoMenuGlobal(query);
-        if (!encontrados.length) {
+      // Fase 129 — a lupa era só um navegador de MENU (nome de tela/
+      // módulo) — pesquisar "clientes" não achava nada porque nenhuma
+      // tela se chama assim, e ninguém esperava isso: quem digita ali
+      // geralmente está procurando um registro de verdade. Agora, junto
+      // com o resultado de menu, também busca clientes de verdade pelo
+      // nome/CNPJ (servidor, `busca=`) quando o termo tem 2+ letras —
+      // clicar num cliente encontrado abre direto a edição dele.
+      let ultimaBuscaGlobalToken = 0;
+      const renderizarResultadosBuscaGlobal = async (query) => {
+        const tokenDestaBusca = ++ultimaBuscaGlobalToken;
+        const encontradosMenu = buscarNoMenuGlobal(query);
+        let clientesEncontrados = [];
+        if (query.trim().length >= 2 && temPermissao("comercial", "visualizar")) {
+          clientesEncontrados = await chamarApi(`/comercial/clientes?busca=${encodeURIComponent(query.trim())}`).catch(() => []);
+        }
+        if (tokenDestaBusca !== ultimaBuscaGlobalToken) return; // uma busca mais nova já chegou primeiro
+
+        if (!encontradosMenu.length && !clientesEncontrados.length) {
           resultadosBuscaGlobal.innerHTML = `<p class="busca-global-vazio">Nada encontrado para "${escapeHtml(query)}".</p>`;
           resultadosBuscaGlobal.hidden = false;
           return;
         }
-        resultadosBuscaGlobal.innerHTML = encontrados
+        const htmlClientes = clientesEncontrados
+          .map(
+            (c) => `<a class="busca-global-item" href="#/comercial" data-busca-global-cliente-id="${c.id}">
+              <span class="busca-global-item-grupo">Clientes</span>
+              <span class="busca-global-item-label">${escapeHtml(c.razao_social)} <span class="mono texto-suave">${escapeHtml(c.cnpj)}</span></span>
+            </a>`
+          )
+          .join("");
+        const htmlMenu = encontradosMenu
           .map(
             (r) => `<a class="busca-global-item" href="${r.rota}"${r.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>
               ${r.caminho.length ? `<span class="busca-global-item-grupo">${escapeHtml(r.caminho.join(" › "))}</span>` : ""}
@@ -913,6 +936,7 @@
             </a>`
           )
           .join("");
+        resultadosBuscaGlobal.innerHTML = htmlClientes + htmlMenu;
         resultadosBuscaGlobal.hidden = false;
       };
       campoBuscaGlobal.addEventListener("input", () => {
@@ -929,7 +953,13 @@
       });
       // Clicar num resultado navega (é um <a href> de verdade) — só
       // precisa limpar a busca depois, pro próximo uso começar do zero.
+      // Um resultado de CLIENTE guarda o id pra tela de Comercial abrir
+      // a edição dele automaticamente assim que terminar de carregar.
       resultadosBuscaGlobal.addEventListener("click", (e) => {
+        const itemCliente = e.target.closest("[data-busca-global-cliente-id]");
+        if (itemCliente) {
+          state.clienteParaAbrirAoEntrarComercial = Number(itemCliente.dataset.buscaGlobalClienteId);
+        }
         if (e.target.closest(".busca-global-item")) {
           campoBuscaGlobal.value = "";
           resultadosBuscaGlobal.hidden = true;
@@ -10162,6 +10192,25 @@
           '<tr><td colspan="7" class="texto-suave">Nenhum cliente encontrado para esta busca.</td></tr>';
         if (contadorClientes) contadorClientes.textContent = `(${filtrados.length})`;
       });
+    }
+
+    // Fase 129 — veio de um clique num resultado de cliente na lupa de
+    // pesquisa global: abre a edição dele direto, sem precisar procurar
+    // na tabela de novo (o cliente já foi achado, é só continuar).
+    if (state.clienteParaAbrirAoEntrarComercial) {
+      const idParaAbrir = state.clienteParaAbrirAoEntrarComercial;
+      state.clienteParaAbrirAoEntrarComercial = null;
+      const clienteParaAbrir = clientes.find((c) => c.id === idParaAbrir);
+      if (clienteParaAbrir) {
+        if (temPermissao("tabelas_preco", "visualizar")) {
+          state.cache.tabelasPrecoParaCliente = await chamarApi("/tabelas-preco");
+        }
+        const [metodosParaCliente, condicoesParaCliente] = await Promise.all([
+          chamarApi(`/comercial/metodos-pagamento?ativos=1&cliente_id=${idParaAbrir}`),
+          chamarApi(`/comercial/condicoes-pagamento?ativos=1&cliente_id=${idParaAbrir}`),
+        ]);
+        modalEditarCliente(clienteParaAbrir, metodosParaCliente, condicoesParaCliente);
+      }
     }
   }
 

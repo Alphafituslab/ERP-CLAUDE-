@@ -401,6 +401,24 @@ def consultar_cnpj_cliente(cnpj):
 @requires_permission("comercial", "visualizar")
 def listar_clientes():
     conn = get_db()
+    # Fase 129 — `busca` opcional, usada pela lupa de pesquisa global (o
+    # índice de menu não sabe nada sobre dado real — nome de cliente,
+    # CNPJ etc. — então a busca por um cliente específico precisa vir
+    # daqui, não do índice estático de telas). Sem `busca`, comportamento
+    # idêntico a antes (lista tudo).
+    termo_busca = (request.args.get("busca") or "").strip()
+    if termo_busca:
+        termo_like = f"%{termo_busca}%"
+        rows = conn.execute(
+            """
+            SELECT c.*, tp.nome AS tabela_preco_nome FROM clientes c
+            LEFT JOIN tabelas_preco tp ON tp.id = c.tabela_preco_id
+            WHERE c.razao_social LIKE ? OR c.nome_fantasia LIKE ? OR c.cnpj LIKE ?
+            ORDER BY c.razao_social LIMIT 8
+            """,
+            (termo_like, termo_like, termo_like),
+        ).fetchall()
+        return jsonify([dict(r) for r in rows])
     rows = conn.execute(
         """
         SELECT c.*, tp.nome AS tabela_preco_nome FROM clientes c
