@@ -6332,6 +6332,9 @@
         <td class="texto-suave">${(h.tamanho_bytes / 1024).toFixed(0)} KB</td>
         <td>${seloDestino(h.nuvem_tentado, h.nuvem_sucesso, h.nuvem_erro)}</td>
         <td>${seloDestino(h.email_tentado, h.email_sucesso, h.email_erro)}</td>
+        <td>${seloDestino(h.local_tentado, h.local_sucesso, h.local_erro)}</td>
+        <td>${seloDestino(h.drive_tentado, h.drive_sucesso, h.drive_erro)}</td>
+        <td>${seloDestino(h.whatsapp_tentado, h.whatsapp_sucesso, h.whatsapp_erro)}</td>
       </tr>`;
     }).join("");
 
@@ -6371,8 +6374,8 @@
            <div class="cartao">
              <h3 style="margin-top:0;">Histórico de execuções</h3>
              <table>
-               <thead><tr><th>Quando</th><th>Origem</th><th>Tamanho</th><th>Nuvem</th><th>E-mail</th></tr></thead>
-               <tbody>${linhasHistorico || '<tr><td colspan="5" class="texto-suave">Nenhum backup executado ainda.</td></tr>'}</tbody>
+               <thead><tr><th>Quando</th><th>Origem</th><th>Tamanho</th><th>Nuvem</th><th>E-mail</th><th>Local</th><th>Drive</th><th>WhatsApp</th></tr></thead>
+               <tbody>${linhasHistorico || '<tr><td colspan="8" class="texto-suave">Nenhum backup executado ainda.</td></tr>'}</tbody>
              </table>
            </div>
 
@@ -6409,6 +6412,44 @@
         <div class="campo"><label>Destinatários (separados por vírgula)</label>
           <input name="email_destinatarios" value="${escapeHtml(config.email_destinatarios || "")}" placeholder="ti@empresa.com, backup@empresa.com"></div>
         <p class="dica">Usa o mesmo servidor SMTP já configurado em Notificações — configure-o lá antes de ativar este destino.</p>
+
+        <h4>Destino: Local (pasta neste computador, HD externo ou rede)</h4>
+        <div class="campo"><label><input type="checkbox" name="local_ativo" ${config.local_ativo ? "checked" : ""}> Ativo</label></div>
+        <div class="campo"><label>Pasta de destino</label>
+          <input name="local_pasta" value="${escapeHtml(config.local_pasta || "")}" placeholder="D:\\Backups\\Alphafitus ou \\\\servidor\\backups"></div>
+
+        <h4>Destino: Google Drive</h4>
+        <div class="campo"><label><input type="checkbox" name="drive_ativo" ${config.drive_ativo ? "checked" : ""}> Ativo</label></div>
+        <div class="campo"><label>Client ID</label><input name="drive_client_id" value="${escapeHtml(config.drive_client_id || "")}"></div>
+        <div class="campo"><label>Client Secret</label><input name="drive_client_secret" type="password" autocomplete="new-password"
+          placeholder="${config.drive_client_secret_configurado ? "deixe em branco para manter o valor atual" : "nenhum ainda"}"></div>
+        <div class="campo"><label>ID da pasta no Drive (opcional)</label>
+          <input name="drive_pasta_id" value="${escapeHtml(config.drive_pasta_id || "")}" placeholder="deixe em branco para salvar na raiz do Drive"></div>
+        <p class="dica">
+          Precisa de uma credencial OAuth do Google Cloud (uma vez só): entre em
+          <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener">console.cloud.google.com/apis/credentials</a>,
+          crie um projeto (se ainda não tiver um), clique em "Criar credenciais" → "ID do cliente OAuth" → tipo
+          <strong>"App para computador"</strong>, copie o Client ID e o Client Secret gerados e cole acima. Salve a
+          configuração primeiro — o botão abaixo só aparece depois.
+        </p>
+        ${config.drive_client_id ? `
+          <div class="campo">
+            <a class="botao secundario" href="/api/v1/sistema/backup/drive/autorizar" target="_blank" rel="noopener">
+              ${config.drive_conectado ? "Reconectar Google Drive" : "Conectar Google Drive"}
+            </a>
+            ${config.drive_conectado ? '<span class="selo ativo" style="margin-left:8px;">Conectado</span>' : '<span class="selo inativo" style="margin-left:8px;">Ainda não conectado</span>'}
+          </div>` : ""}
+
+        <h4>Aviso por WhatsApp (só um texto — o arquivo é grande demais pro limite do WhatsApp)</h4>
+        <div class="campo"><label><input type="checkbox" name="whatsapp_ativo" ${config.whatsapp_ativo ? "checked" : ""}> Ativo</label></div>
+        <div class="campo"><label>Número de destino (com DDD)</label>
+          <input name="whatsapp_numero_destino" value="${escapeHtml(config.whatsapp_numero_destino || "")}" placeholder="48999999999"></div>
+        <div class="campo"><label>URL da Evolution API</label>
+          <input name="whatsapp_evolution_url" value="${escapeHtml(config.whatsapp_evolution_url || "")}"></div>
+        <div class="campo"><label>Chave de API</label><input name="whatsapp_evolution_apikey" type="password" autocomplete="new-password"
+          placeholder="${config.whatsapp_apikey_configurada ? "deixe em branco para manter a chave atual" : "nenhuma ainda"}"></div>
+        <div class="campo"><label>Nome da instância</label>
+          <input name="whatsapp_instancia_nome" value="${escapeHtml(config.whatsapp_instancia_nome || "")}"></div>
 
         ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
         <div class="rodape-modal" style="padding:0;">
@@ -17476,6 +17517,17 @@
             nuvem_secret_key: dados.get("nuvem_secret_key") || null,
             email_ativo: dados.get("email_ativo") === "on",
             email_destinatarios: dados.get("email_destinatarios") || null,
+            local_ativo: dados.get("local_ativo") === "on",
+            local_pasta: dados.get("local_pasta") || null,
+            drive_ativo: dados.get("drive_ativo") === "on",
+            drive_client_id: dados.get("drive_client_id") || null,
+            drive_client_secret: dados.get("drive_client_secret") || null,
+            drive_pasta_id: dados.get("drive_pasta_id") || null,
+            whatsapp_ativo: dados.get("whatsapp_ativo") === "on",
+            whatsapp_numero_destino: dados.get("whatsapp_numero_destino") || null,
+            whatsapp_evolution_url: dados.get("whatsapp_evolution_url") || null,
+            whatsapp_evolution_apikey: dados.get("whatsapp_evolution_apikey") || null,
+            whatsapp_instancia_nome: dados.get("whatsapp_instancia_nome") || null,
           },
         });
         definirFlash("ok", "Configuração de backup automático salva.");

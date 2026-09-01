@@ -46,7 +46,7 @@ import tempfile
 # backup gerado sairia sem criptografia nenhuma, anulando o propósito.
 from sqlcipher3 import dbapi2 as sqlite3  # noqa: F811 (troca intencional do sqlite3 padrão)
 
-from flask import Blueprint, Response, g, jsonify, request
+from flask import Blueprint, Response, g, jsonify, redirect, request
 
 from .. import audit
 from .. import backup_service
@@ -133,9 +133,18 @@ def _config_backup_publica(config):
     d = dict(config)
     d["nuvem_chave_configurada"] = bool(d.get("nuvem_secret_key"))
     d.pop("nuvem_secret_key", None)
+    d["drive_client_secret_configurado"] = bool(d.get("drive_client_secret"))
+    d.pop("drive_client_secret", None)
+    d["drive_conectado"] = bool(d.get("drive_refresh_token"))
+    d.pop("drive_refresh_token", None)
+    d["whatsapp_apikey_configurada"] = bool(d.get("whatsapp_evolution_apikey"))
+    d.pop("whatsapp_evolution_apikey", None)
     d["ativo"] = bool(d.get("ativo"))
     d["nuvem_ativo"] = bool(d.get("nuvem_ativo"))
     d["email_ativo"] = bool(d.get("email_ativo"))
+    d["local_ativo"] = bool(d.get("local_ativo"))
+    d["drive_ativo"] = bool(d.get("drive_ativo"))
+    d["whatsapp_ativo"] = bool(d.get("whatsapp_ativo"))
     return d
 
 
@@ -157,32 +166,57 @@ def atualizar_configuracao_backup():
     ativo = 1 if dados.get("ativo") else 0
     nuvem_ativo = 1 if dados.get("nuvem_ativo") else 0
     email_ativo = 1 if dados.get("email_ativo") else 0
+    local_ativo = 1 if dados.get("local_ativo") else 0
+    drive_ativo = 1 if dados.get("drive_ativo") else 0
+    whatsapp_ativo = 1 if dados.get("whatsapp_ativo") else 0
     nuvem_endpoint_url = (dados.get("nuvem_endpoint_url") or "").strip() or None
     nuvem_regiao = (dados.get("nuvem_regiao") or "").strip() or None
     nuvem_bucket = (dados.get("nuvem_bucket") or "").strip() or None
     nuvem_access_key = (dados.get("nuvem_access_key") or "").strip() or None
     nuvem_prefixo = (dados.get("nuvem_prefixo") or "").strip() or None
     email_destinatarios = (dados.get("email_destinatarios") or "").strip() or None
+    local_pasta = (dados.get("local_pasta") or "").strip() or None
+    drive_client_id = (dados.get("drive_client_id") or "").strip() or None
+    drive_pasta_id = (dados.get("drive_pasta_id") or "").strip() or None
+    whatsapp_numero_destino = (dados.get("whatsapp_numero_destino") or "").strip() or None
+    whatsapp_evolution_url = (dados.get("whatsapp_evolution_url") or "").strip() or None
+    whatsapp_instancia_nome = (dados.get("whatsapp_instancia_nome") or "").strip() or None
 
-    # Chave secreta: campo vazio/omitido MANTÉM a chave já salva — mesmo
-    # padrão de smtp_senha (Fase 37) e nuvem_secret_key nunca é devolvida
-    # pela API para poder ser reenviada sem querer.
-    nova_chave = dados.get("nuvem_secret_key")
-    nuvem_secret_key = anterior.get("nuvem_secret_key") if not nova_chave else nova_chave
+    # Segredos: campo vazio/omitido MANTÉM o valor já salvo — mesmo
+    # padrão de smtp_senha (Fase 37) e nuvem_secret_key, nunca devolvidos
+    # pela API pra não arriscar reenviar em branco sem querer.
+    nova_chave_nuvem = dados.get("nuvem_secret_key")
+    nuvem_secret_key = anterior.get("nuvem_secret_key") if not nova_chave_nuvem else nova_chave_nuvem
+    novo_client_secret = dados.get("drive_client_secret")
+    drive_client_secret = anterior.get("drive_client_secret") if not novo_client_secret else novo_client_secret
+    nova_apikey_whatsapp = dados.get("whatsapp_evolution_apikey")
+    whatsapp_evolution_apikey = anterior.get("whatsapp_evolution_apikey") if not nova_apikey_whatsapp else nova_apikey_whatsapp
+    # drive_refresh_token NUNCA é editado por aqui — só pelo fluxo de
+    # autorização (/backup/drive/callback), preservado sempre.
+    drive_refresh_token = anterior.get("drive_refresh_token")
 
     if nuvem_ativo and (not nuvem_endpoint_url or not nuvem_bucket):
         raise ApiError("Para ativar o envio para nuvem, informe ao menos nuvem_endpoint_url e nuvem_bucket.", status=400)
     if email_ativo and not email_destinatarios:
         raise ApiError("Para ativar o envio por e-mail, informe ao menos um destinatário em email_destinatarios.", status=400)
-    if ativo and not nuvem_ativo and not email_ativo:
-        raise ApiError("Ative ao menos um destino (nuvem ou e-mail) antes de ligar o backup automático.", status=400)
+    if local_ativo and not local_pasta:
+        raise ApiError("Para ativar o destino Local, informe local_pasta.", status=400)
+    if drive_ativo and not drive_refresh_token:
+        raise ApiError("Para ativar o Google Drive, conecte a conta primeiro (botão 'Conectar Google Drive').", status=400)
+    if whatsapp_ativo and (not whatsapp_numero_destino or not whatsapp_evolution_url or not whatsapp_evolution_apikey):
+        raise ApiError("Para ativar o aviso por WhatsApp, informe o número de destino, a URL e a chave de API.", status=400)
+    if ativo and not any((nuvem_ativo, email_ativo, local_ativo, drive_ativo)):
+        raise ApiError("Ative ao menos um destino de ARQUIVO (nuvem, e-mail, local ou drive) antes de ligar o backup automático — o WhatsApp sozinho só avisa, não guarda o arquivo.", status=400)
 
     conn.execute(
         """
         INSERT INTO configuracoes_backup
             (id, ativo, nuvem_ativo, nuvem_endpoint_url, nuvem_regiao, nuvem_bucket, nuvem_access_key,
-             nuvem_secret_key, nuvem_prefixo, email_ativo, email_destinatarios, atualizado_em, atualizado_por)
-        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             nuvem_secret_key, nuvem_prefixo, email_ativo, email_destinatarios,
+             local_ativo, local_pasta, drive_ativo, drive_client_id, drive_client_secret, drive_pasta_id,
+             whatsapp_ativo, whatsapp_numero_destino, whatsapp_evolution_url, whatsapp_evolution_apikey, whatsapp_instancia_nome,
+             atualizado_em, atualizado_por)
+        VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(id) DO UPDATE SET
             ativo = excluded.ativo,
             nuvem_ativo = excluded.nuvem_ativo,
@@ -194,20 +228,139 @@ def atualizar_configuracao_backup():
             nuvem_prefixo = excluded.nuvem_prefixo,
             email_ativo = excluded.email_ativo,
             email_destinatarios = excluded.email_destinatarios,
+            local_ativo = excluded.local_ativo,
+            local_pasta = excluded.local_pasta,
+            drive_ativo = excluded.drive_ativo,
+            drive_client_id = excluded.drive_client_id,
+            drive_client_secret = excluded.drive_client_secret,
+            drive_pasta_id = excluded.drive_pasta_id,
+            whatsapp_ativo = excluded.whatsapp_ativo,
+            whatsapp_numero_destino = excluded.whatsapp_numero_destino,
+            whatsapp_evolution_url = excluded.whatsapp_evolution_url,
+            whatsapp_evolution_apikey = excluded.whatsapp_evolution_apikey,
+            whatsapp_instancia_nome = excluded.whatsapp_instancia_nome,
             atualizado_em = excluded.atualizado_em,
             atualizado_por = excluded.atualizado_por
         """,
         (ativo, nuvem_ativo, nuvem_endpoint_url, nuvem_regiao, nuvem_bucket, nuvem_access_key,
-         nuvem_secret_key, nuvem_prefixo, email_ativo, email_destinatarios, _now_iso_completo(), usuario_atual["id"]),
+         nuvem_secret_key, nuvem_prefixo, email_ativo, email_destinatarios,
+         local_ativo, local_pasta, drive_ativo, drive_client_id, drive_client_secret, drive_pasta_id,
+         whatsapp_ativo, whatsapp_numero_destino, whatsapp_evolution_url, whatsapp_evolution_apikey, whatsapp_instancia_nome,
+         _now_iso_completo(), usuario_atual["id"]),
     )
     audit.registrar(
         conn, tabela="configuracoes_backup", registro_id=1, usuario_id=usuario_atual["id"],
         acao="configuracao_backup_atualizada",
-        valor_anterior={"ativo": bool(anterior.get("ativo")), "nuvem_ativo": bool(anterior.get("nuvem_ativo")), "email_ativo": bool(anterior.get("email_ativo"))},
-        valor_novo={"ativo": bool(ativo), "nuvem_ativo": bool(nuvem_ativo), "email_ativo": bool(email_ativo)},
+        valor_anterior={"ativo": bool(anterior.get("ativo")), "nuvem_ativo": bool(anterior.get("nuvem_ativo")), "email_ativo": bool(anterior.get("email_ativo")),
+                        "local_ativo": bool(anterior.get("local_ativo")), "drive_ativo": bool(anterior.get("drive_ativo")), "whatsapp_ativo": bool(anterior.get("whatsapp_ativo"))},
+        valor_novo={"ativo": bool(ativo), "nuvem_ativo": bool(nuvem_ativo), "email_ativo": bool(email_ativo),
+                    "local_ativo": bool(local_ativo), "drive_ativo": bool(drive_ativo), "whatsapp_ativo": bool(whatsapp_ativo)},
         ip=client_ip(), dispositivo=client_device(),
     )
     return jsonify(_config_backup_publica(backup_service.obter_configuracao(conn)))
+
+
+# ============================================================
+# GOOGLE DRIVE — AUTORIZAÇÃO OAUTH (Fase 130)
+# ============================================================
+DRIVE_REDIRECT_URI = "http://localhost:5000/api/v1/sistema/backup/drive/callback"
+DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.file"
+
+
+@bp.get("/backup/drive/autorizar")
+@requires_permission("sistema", "configurar_backup")
+def autorizar_drive():
+    """Redireciona pra tela de consentimento do Google — client_id
+    precisa já estar salvo (o usuário preenche e salva a configuração
+    ANTES de clicar em 'Conectar Google Drive'). `access_type=offline`
+    + `prompt=consent` garantem que a resposta traga um refresh_token
+    (sem isso, numa segunda autorização o Google só devolve access_token,
+    que expira em ~1h e não serve pra um backup que roda de madrugada
+    sem ninguém logado)."""
+    conn = get_db()
+    config = backup_service.obter_configuracao(conn)
+    if not config.get("drive_client_id"):
+        raise ApiError("Salve o Client ID do Google Drive antes de conectar.", status=400)
+
+    import secrets as secrets_lib
+    state = secrets_lib.token_urlsafe(24)
+    conn.execute("UPDATE configuracoes_backup SET drive_oauth_state = ? WHERE id = 1", (state,))
+    conn.commit()
+
+    from urllib.parse import urlencode
+    query = urlencode({
+        "client_id": config["drive_client_id"],
+        "redirect_uri": DRIVE_REDIRECT_URI,
+        "response_type": "code",
+        "scope": DRIVE_SCOPE,
+        "access_type": "offline",
+        "prompt": "consent",
+        "state": state,
+    })
+    return redirect(f"https://accounts.google.com/o/oauth2/v2/auth?{query}")
+
+
+@bp.get("/backup/drive/callback")
+def callback_drive():
+    """SEM @requires_permission de propósito — o Google redireciona o
+    NAVEGADOR pra cá depois do consentimento, sem levar o token de
+    acesso do Alphafitus junto (é uma aba/redirect novo). A segurança
+    real está em `redirect_uri` ser fixo (o Google só manda o código pra
+    esse endereço exato, cadastrado no próprio Google Cloud) e no código
+    de autorização só valer uma vez, por poucos minutos."""
+    codigo = request.args.get("code")
+    erro_google = request.args.get("error")
+    state_recebido = request.args.get("state")
+    if erro_google:
+        return f"<h3>Autorização cancelada ou negada: {erro_google}</h3><p>Feche esta aba e tente de novo.</p>", 400
+    if not codigo:
+        return "<h3>Código de autorização não recebido.</h3>", 400
+
+    conn = get_db()
+    config = backup_service.obter_configuracao(conn)
+    if not config.get("drive_oauth_state") or state_recebido != config.get("drive_oauth_state"):
+        return "<h3>Sessão de autorização inválida ou expirada — volte em Administração &gt; Backup e clique em 'Conectar Google Drive' de novo.</h3>", 400
+    conn.execute("UPDATE configuracoes_backup SET drive_oauth_state = NULL WHERE id = 1")
+    conn.commit()
+    if not config.get("drive_client_id") or not config.get("drive_client_secret"):
+        return "<h3>Client ID/Secret não configurados — volte em Administração &gt; Backup e salve antes de conectar.</h3>", 400
+
+    import requests as requests_lib
+    resp = requests_lib.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": codigo,
+            "client_id": config["drive_client_id"],
+            "client_secret": config["drive_client_secret"],
+            "redirect_uri": DRIVE_REDIRECT_URI,
+            "grant_type": "authorization_code",
+        },
+        timeout=30,
+    )
+    if not resp.ok:
+        return f"<h3>Falha ao trocar o código por um token (HTTP {resp.status_code})</h3><pre>{resp.text[:1000]}</pre>", 502
+    corpo = resp.json()
+    refresh_token = corpo.get("refresh_token")
+    if not refresh_token:
+        return (
+            "<h3>O Google não devolveu um refresh_token desta vez.</h3>"
+            "<p>Isso acontece quando a conta já tinha autorizado este aplicativo antes. Revogue o acesso em "
+            "<a href='https://myaccount.google.com/permissions' target='_blank'>myaccount.google.com/permissions</a> "
+            "e tente conectar de novo.</p>"
+        ), 400
+
+    conn.execute("UPDATE configuracoes_backup SET drive_refresh_token = ? WHERE id = 1", (refresh_token,))
+    conn.commit()
+    audit.registrar(
+        conn, tabela="configuracoes_backup", registro_id=1, usuario_id=None,
+        acao="google_drive_conectado", valor_novo={"conectado": True},
+        ip=client_ip(), dispositivo=client_device(),
+    )
+    return (
+        "<h3>Google Drive conectado com sucesso ✅</h3>"
+        "<p>Pode fechar esta aba e voltar para o Alphafitus OS — ative o destino 'Google Drive' na tela de "
+        "Backup para começar a usar.</p>"
+    )
 
 
 def _now_iso_completo():
