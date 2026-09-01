@@ -525,7 +525,7 @@
     // já tem (ver app/routes/painel_executivo.py), então também fica sem
     // `permissao` fixa aqui no item de menu.
     { rota: "#/painel-executivo", chave: "painel-executivo", label: "Painel Executivo (BI em Tempo Real)" },
-    { rota: "#/itens", chave: "itens", label: "Itens", permissao: ["itens", "visualizar"] },
+    { rota: "#/itens", chave: "itens", label: "Itens", permissao: ["itens", "visualizar"], apelidos: ["produtos", "produto", "materia prima", "materia-prima"] },
     {
       tipo: "grupo", chave: "grupo-qualidade", nome: "Qualidade",
       itens: [
@@ -599,7 +599,7 @@
     {
       tipo: "grupo", chave: "grupo-comercial", nome: "Comercial & Vendas",
       itens: [
-        { rota: "#/comercial", chave: "comercial", label: "Comercial (CRM)", permissao: ["comercial", "visualizar"] },
+        { rota: "#/comercial", chave: "comercial", label: "Comercial (CRM)", permissao: ["comercial", "visualizar"], apelidos: ["clientes", "cliente"] },
         // Fase 97 — tela única para lançar e faturar pedidos sem alternar
         // entre Comercial e Fiscal a cada etapa.
         { rota: "#/lancar-faturar", chave: "lancar-faturar", label: "Lançar & Faturar Pedidos", permissao: ["comercial", "criar_pedido"] },
@@ -698,7 +698,7 @@
           return;
         }
         if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return;
-        indice.push({ caminho, label: it.label, rota: it.rota, chave: it.chave, abrirNovaAba: it.abrirNovaAba });
+        indice.push({ caminho, label: it.label, rota: it.rota, chave: it.chave, abrirNovaAba: it.abrirNovaAba, apelidos: it.apelidos || [] });
       });
     }
     visitar(ITENS_MENU, []);
@@ -714,10 +714,15 @@
     // ali — é o "me mostra tudo que tem dentro" pedido, agora valendo pra
     // qualquer nível do caminho, não só o módulo do topo. Nome de TELA
     // batendo devolve só aquela tela.
+    // `apelidos` (Fase 129) — palavras genéricas que ninguém acharia
+    // batendo com o LABEL da tela (ex.: alguém digita "clientes",
+    // procurando a tela que na verdade se chama "Comercial (CRM)") —
+    // sem isso, a busca só serve pra quem já sabe o nome exato da tela.
     return indice.filter(
       (r) =>
         r.caminho.some((segmento) => _normalizarBuscaGlobal(segmento).includes(termo)) ||
-        _normalizarBuscaGlobal(r.label).includes(termo)
+        _normalizarBuscaGlobal(r.label).includes(termo) ||
+        r.apelidos.some((apelido) => _normalizarBuscaGlobal(apelido).includes(termo))
     );
   }
 
