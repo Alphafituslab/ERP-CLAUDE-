@@ -440,6 +440,7 @@
           case "fiscal-configuracao": return renderFiscalConfiguracao();
           case "fiscal-configuracao-sped": return renderConfiguracaoSped();
           case "transportadoras": return renderTransportadoras();
+          case "pagamentos": return renderPagamentos();
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "financeiro-remessa-cnab": return renderRemessaCnab();
           case "financeiro-retorno-cnab": return renderRetornoCnab();
@@ -603,6 +604,7 @@
         // entre Comercial e Fiscal a cada etapa.
         { rota: "#/lancar-faturar", chave: "lancar-faturar", label: "Lançar & Faturar Pedidos", permissao: ["comercial", "criar_pedido"] },
         { rota: "#/tabelas-preco", chave: "tabelas-preco", label: "Tabelas de Preço", permissao: ["tabelas_preco", "visualizar"] },
+        { rota: "#/pagamentos", chave: "pagamentos", label: "Métodos & Condições de Pagamento", permissao: ["comercial", "visualizar"] },
         { rota: "#/app-vendas", chave: "app-vendas", label: "App de Vendas", permissao: ["vendas_app", "usar"] },
         { rota: "#/app-vendas/portfolio", chave: "app-vendas-portfolio", label: "Portfólio", permissao: ["vendas_app", "usar"] },
         { rota: "#/minhas-comissoes", chave: "minhas-comissoes", label: "Minhas Comissões", permissao: ["vendas_app", "usar"] },
@@ -10076,8 +10078,8 @@
     const podeConfigurarAppVendas = temPermissao("comercial", "configurar_comercial");
     const podeAprovarCliente = temPermissao("comercial", "aprovar_pedido_acima_limite_credito");
 
-    const linhasClientes = clientes
-      .map((c) => `<tr>
+    function linhaCliente(c) {
+      return `<tr>
         <td>${escapeHtml(c.razao_social)}</td>
         <td class="mono">${escapeHtml(c.cnpj)}</td>
         <td class="texto-suave">${escapeHtml(c.endereco || "—")}</td>
@@ -10090,8 +10092,9 @@
           ${podeAprovarCliente && c.aprovacao_financeira_status !== "aprovado" ? `<button class="botao pequeno" data-acao="aprovar-cliente-financeiramente" data-id="${c.id}">Aprovar</button>` : ""}
           ${podeAprovarCliente && c.aprovacao_financeira_status !== "reprovado" ? `<button class="botao perigo pequeno" data-acao="abrir-reprovar-cliente-financeiramente" data-id="${c.id}" data-nome="${escapeHtml(c.razao_social)}">Reprovar</button>` : ""}
         </td>
-      </tr>`)
-      .join("");
+      </tr>`;
+    }
+    const linhasClientes = clientes.map(linhaCliente).join("");
 
     const linhasPedidos = pedidos
       .map((p) => `<tr>
@@ -10118,12 +10121,15 @@
 
        <div class="cartao">
          <div class="barra-acoes">
-           <h3 style="margin:0;">Clientes</h3>
+           <h3 style="margin:0;">Clientes <span class="texto-suave" style="font-weight:400;font-size:12.5px;" data-clientes-contador>(${clientes.length})</span></h3>
            ${podeCadastrarCliente ? `<button class="botao secundario pequeno" data-acao="novo-cliente">+ Novo cliente</button>` : ""}
+         </div>
+         <div class="campo" style="margin-bottom:10px;">
+           <input type="search" placeholder="Procurar por razão social, nome fantasia ou CNPJ…" data-busca-clientes autocomplete="off">
          </div>
          <table>
            <thead><tr><th>Razão social</th><th>CNPJ</th><th>Endereço</th><th>Limite de crédito</th><th>Financeiro</th><th>Status</th><th>Ações</th></tr></thead>
-           <tbody>${linhasClientes || '<tr><td colspan="7" class="texto-suave">Nenhum cliente cadastrado.</td></tr>'}</tbody>
+           <tbody data-tabela-clientes>${linhasClientes || '<tr><td colspan="7" class="texto-suave">Nenhum cliente cadastrado.</td></tr>'}</tbody>
          </table>
        </div>
 
@@ -10140,6 +10146,215 @@
        </div>`,
       "comercial"
     );
+
+    const campoBuscaClientes = app.querySelector("[data-busca-clientes]");
+    const tabelaClientesBody = app.querySelector("[data-tabela-clientes]");
+    const contadorClientes = app.querySelector("[data-clientes-contador]");
+    if (campoBuscaClientes) {
+      campoBuscaClientes.addEventListener("input", () => {
+        const termo = campoBuscaClientes.value.trim().toLowerCase();
+        const filtrados = !termo ? clientes : clientes.filter((c) =>
+          (c.razao_social || "").toLowerCase().includes(termo) ||
+          (c.nome_fantasia || "").toLowerCase().includes(termo) ||
+          (c.cnpj || "").toLowerCase().includes(termo)
+        );
+        tabelaClientesBody.innerHTML = filtrados.map(linhaCliente).join("") ||
+          '<tr><td colspan="7" class="texto-suave">Nenhum cliente encontrado para esta busca.</td></tr>';
+        if (contadorClientes) contadorClientes.textContent = `(${filtrados.length})`;
+      });
+    }
+  }
+
+  // =======================================================================
+  // Fase 127 — Métodos & Condições de Pagamento: catálogo próprio (o
+  // sistema antes só tinha uma lista fixa de forma_pagamento usada na
+  // hora da baixa). Cada método/condição pode ficar disponível pra todo
+  // mundo (padrão) ou ser restrito a uma tabela de preço e/ou a uma
+  // lista específica de clientes — e pode ser escondido do App de Vendas
+  // sem deixar de valer no Comercial normal.
+  // =======================================================================
+  function seloSimNao(valor, rotuloSim, rotuloNao) {
+    return valor
+      ? `<span class="selo ativo">${escapeHtml(rotuloSim || "Sim")}</span>`
+      : `<span class="selo inativo">${escapeHtml(rotuloNao || "Não")}</span>`;
+  }
+
+  async function renderPagamentos() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const [metodos, condicoes, tabelas, clientes] = await Promise.all([
+      chamarApi("/comercial/metodos-pagamento"),
+      chamarApi("/comercial/condicoes-pagamento"),
+      chamarApi("/tabelas-preco?incluir_inativas=1"),
+      chamarApi("/comercial/clientes"),
+    ]);
+    state.cache.tabelasPrecoParaPagamento = tabelas;
+    state.cache.clientesParaPagamento = clientes;
+    const podeConfigurar = temPermissao("comercial", "configurar_pagamento");
+
+    function restricaoResumo(item) {
+      const partes = [];
+      if (item.tabela_preco_restrita_id) {
+        const t = tabelas.find((x) => x.id === item.tabela_preco_restrita_id);
+        partes.push(`tabela "${escapeHtml(t ? t.nome : "?")}"`);
+      }
+      if (item.clientes_vinculados && item.clientes_vinculados.length) {
+        partes.push(`${item.clientes_vinculados.length} cliente(s)`);
+      }
+      return partes.length ? partes.join(" + ") : '<span class="texto-suave">todos os clientes</span>';
+    }
+
+    const linhasMetodos = metodos.map((m) => `<tr>
+      <td>${escapeHtml(m.nome)}</td>
+      <td>${seloSimNao(m.ativo)}</td>
+      <td>${seloSimNao(m.visivel_app_vendas)}</td>
+      <td>${restricaoResumo(m)}</td>
+      <td>${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="editar-metodo-pagamento" data-id="${m.id}">Editar</button>` : ""}</td>
+    </tr>`).join("");
+
+    const linhasCondicoes = condicoes.map((c) => `<tr>
+      <td>${escapeHtml(c.nome)}</td>
+      <td>${c.numero_parcelas}x${c.dias_entre_parcelas ? ` (a cada ${c.dias_entre_parcelas} dias)` : ""}</td>
+      <td>${seloSimNao(c.ativo)}</td>
+      <td>${seloSimNao(c.visivel_app_vendas)}</td>
+      <td>${restricaoResumo(c)}</td>
+      <td>${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="editar-condicao-pagamento" data-id="${c.id}">Editar</button>` : ""}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Métodos &amp; Condições de Pagamento</h2>
+       <p class="subtitulo">Cadastro livre — crie quantos precisar. Sem restrição, um método/condição fica disponível pra qualquer cliente e aparece no App de Vendas; restrinja a uma tabela de preço e/ou a clientes específicos quando precisar limitar.</p>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Métodos de Pagamento</h3>
+           ${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="novo-metodo-pagamento">+ Novo método</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>Ativo</th><th>App de Vendas</th><th>Disponível para</th><th>Ações</th></tr></thead>
+           <tbody>${linhasMetodos || '<tr><td colspan="5" class="texto-suave">Nenhum método cadastrado.</td></tr>'}</tbody>
+         </table>
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Condições de Pagamento</h3>
+           ${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="nova-condicao-pagamento">+ Nova condição</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>Parcelas</th><th>Ativa</th><th>App de Vendas</th><th>Disponível para</th><th>Ações</th></tr></thead>
+           <tbody>${linhasCondicoes || '<tr><td colspan="6" class="texto-suave">Nenhuma condição cadastrada.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "pagamentos"
+    );
+  }
+
+  // Reaproveitado pelos modais de método e de condição — busca+chips de
+  // cliente, mesmo padrão de campoBusca/listaResultados já usado na
+  // solicitação de material (acima).
+  function configurarSeletorClientesPagamento(wrap, clientesJaVinculados) {
+    const clientes = state.cache.clientesParaPagamento || [];
+    const selecionados = new Map((clientesJaVinculados || []).map((c) => [c.id, c.razao_social]));
+    const campoBusca = wrap.querySelector("[data-busca-cliente-pagamento]");
+    const listaResultados = wrap.querySelector("[data-resultados-cliente-pagamento]");
+    const chipsContainer = wrap.querySelector("[data-chips-cliente-pagamento]");
+    const campoJson = wrap.querySelector('input[name="cliente_ids_json"]');
+
+    function sincronizar() {
+      campoJson.value = JSON.stringify(Array.from(selecionados.keys()));
+      chipsContainer.innerHTML = selecionados.size
+        ? Array.from(selecionados.entries()).map(([id, nome]) =>
+            `<span class="selo ativo" style="margin:2px 4px 2px 0;">${escapeHtml(nome)} <a href="#" data-remover-cliente-pagamento="${id}" style="color:inherit;text-decoration:none;">✕</a></span>`
+          ).join("")
+        : '<span class="texto-suave" style="font-size:12.5px;">Nenhum — disponível pra todos os clientes.</span>';
+    }
+    sincronizar();
+
+    campoBusca.addEventListener("input", () => {
+      const termo = campoBusca.value.trim().toLowerCase();
+      if (!termo) { listaResultados.innerHTML = ""; return; }
+      const encontrados = clientes
+        .filter((c) => !selecionados.has(c.id) && ((c.razao_social || "").toLowerCase().includes(termo) || (c.cnpj || "").includes(termo)))
+        .slice(0, 8);
+      listaResultados.innerHTML = encontrados.map((c) =>
+        `<button type="button" class="item-busca-resultado" data-add-cliente-pagamento="${c.id}" data-nome-cliente="${escapeHtml(c.razao_social)}">${escapeHtml(c.razao_social)} <span class="mono texto-suave">${escapeHtml(c.cnpj)}</span></button>`
+      ).join("");
+    });
+
+    wrap.addEventListener("click", (e) => {
+      const addBtn = e.target.closest("[data-add-cliente-pagamento]");
+      if (addBtn) {
+        selecionados.set(Number(addBtn.dataset.addClientePagamento), addBtn.dataset.nomeCliente);
+        campoBusca.value = "";
+        listaResultados.innerHTML = "";
+        sincronizar();
+        return;
+      }
+      const remBtn = e.target.closest("[data-remover-cliente-pagamento]");
+      if (remBtn) {
+        e.preventDefault();
+        selecionados.delete(Number(remBtn.dataset.removerClientePagamento));
+        sincronizar();
+      }
+    });
+  }
+
+  function opcoesTabelasPreco(tabelaSelecionadaId) {
+    const tabelas = state.cache.tabelasPrecoParaPagamento || [];
+    return `<option value="">Nenhuma (disponível pra qualquer tabela)</option>` +
+      tabelas.map((t) => `<option value="${t.id}" ${tabelaSelecionadaId === t.id ? "selected" : ""}>${escapeHtml(t.nome)}</option>`).join("");
+  }
+
+  function modalMetodoPagamento(metodo) {
+    const wrap = abrirModal(
+      `<h3>${metodo ? "Editar" : "Novo"} método de pagamento</h3>
+       <form data-form="salvar-metodo-pagamento" ${metodo ? `data-id="${metodo.id}"` : ""}>
+         <div class="campo"><label>Nome</label><input name="nome" required value="${escapeHtml(metodo ? metodo.nome : "")}"></div>
+         <div class="campo"><label><input type="checkbox" name="ativo" ${!metodo || metodo.ativo ? "checked" : ""}> Ativo</label></div>
+         <div class="campo"><label><input type="checkbox" name="visivel_app_vendas" ${!metodo || metodo.visivel_app_vendas ? "checked" : ""}> Visível no App de Vendas</label></div>
+         <div class="campo"><label>Restringir a uma tabela de preço</label>
+           <select name="tabela_preco_restrita_id">${opcoesTabelasPreco(metodo ? metodo.tabela_preco_restrita_id : null)}</select>
+         </div>
+         <div class="campo"><label>Restringir a clientes específicos</label>
+           <input type="text" data-busca-cliente-pagamento placeholder="Buscar cliente por razão social ou CNPJ…" autocomplete="off">
+           <div data-resultados-cliente-pagamento></div>
+           <div data-chips-cliente-pagamento style="margin-top:6px;"></div>
+           <input type="hidden" name="cliente_ids_json">
+         </div>
+         <div class="rodape-modal" style="padding:0;">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Salvar</button>
+         </div>
+       </form>`
+    );
+    configurarSeletorClientesPagamento(wrap, metodo ? metodo.clientes_vinculados : []);
+  }
+
+  function modalCondicaoPagamento(condicao) {
+    const wrap = abrirModal(
+      `<h3>${condicao ? "Editar" : "Nova"} condição de pagamento</h3>
+       <form data-form="salvar-condicao-pagamento" ${condicao ? `data-id="${condicao.id}"` : ""}>
+         <div class="campo"><label>Nome</label><input name="nome" required value="${escapeHtml(condicao ? condicao.nome : "")}" placeholder="Ex.: 30/60/90 dias"></div>
+         <div class="campo"><label>Número de parcelas</label><input type="number" name="numero_parcelas" min="1" value="${condicao ? condicao.numero_parcelas : 1}"></div>
+         <div class="campo"><label>Dias entre parcelas (opcional)</label><input type="number" name="dias_entre_parcelas" min="1" value="${condicao && condicao.dias_entre_parcelas != null ? condicao.dias_entre_parcelas : ""}"></div>
+         <div class="campo"><label><input type="checkbox" name="ativo" ${!condicao || condicao.ativo ? "checked" : ""}> Ativa</label></div>
+         <div class="campo"><label><input type="checkbox" name="visivel_app_vendas" ${!condicao || condicao.visivel_app_vendas ? "checked" : ""}> Visível no App de Vendas</label></div>
+         <div class="campo"><label>Restringir a uma tabela de preço</label>
+           <select name="tabela_preco_restrita_id">${opcoesTabelasPreco(condicao ? condicao.tabela_preco_restrita_id : null)}</select>
+         </div>
+         <div class="campo"><label>Restringir a clientes específicos</label>
+           <input type="text" data-busca-cliente-pagamento placeholder="Buscar cliente por razão social ou CNPJ…" autocomplete="off">
+           <div data-resultados-cliente-pagamento></div>
+           <div data-chips-cliente-pagamento style="margin-top:6px;"></div>
+           <input type="hidden" name="cliente_ids_json">
+         </div>
+         <div class="rodape-modal" style="padding:0;">
+           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+           <button type="submit" class="botao">Salvar</button>
+         </div>
+       </form>`
+    );
+    configurarSeletorClientesPagamento(wrap, condicao ? condicao.clientes_vinculados : []);
   }
 
   // =======================================================================
@@ -10453,10 +10668,16 @@
     });
   }
 
-  function modalEditarCliente(cliente) {
+  function modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente) {
     const tabelasPreco = state.cache.tabelasPrecoParaCliente || [];
     const opcoesTabelaPreco = tabelasPreco
       .map((t) => `<option value="${t.id}" ${cliente.tabela_preco_id === t.id ? "selected" : ""}>${escapeHtml(t.nome)}</option>`)
+      .join("");
+    const opcoesMetodo = (metodosParaCliente || [])
+      .map((m) => `<option value="${m.id}" ${cliente.metodo_pagamento_padrao_id === m.id ? "selected" : ""}>${escapeHtml(m.nome)}</option>`)
+      .join("");
+    const opcoesCondicao = (condicoesParaCliente || [])
+      .map((c) => `<option value="${c.id}" ${cliente.condicao_pagamento_padrao_id === c.id ? "selected" : ""}>${escapeHtml(c.nome)}</option>`)
       .join("");
     abrirModal(`
       <h3>Editar ${escapeHtml(cliente.razao_social)}</h3>
@@ -10472,6 +10693,18 @@
           </select>
           <div class="dica">Fase 99 — o preço do item já vem sugerido ao montar um pedido para este cliente, de acordo com esta tabela. Continua editável na hora.</div>
         </div>` : ""}
+        <div class="campo"><label>Método de pagamento padrão (opcional)</label>
+          <select name="metodo_pagamento_padrao_id">
+            <option value="">Nenhum — escolhe a cada pedido</option>
+            ${opcoesMetodo}
+          </select>
+        </div>
+        <div class="campo"><label>Condição de pagamento padrão (opcional)</label>
+          <select name="condicao_pagamento_padrao_id">
+            <option value="">Nenhuma — escolhe a cada pedido</option>
+            ${opcoesCondicao}
+          </select>
+        </div>
         <div class="campo"><label>Limite de crédito (R$, opcional)</label>
           <input name="limite_credito" type="number" step="0.01" min="0" placeholder="deixe em branco = sem limite"
                  value="${cliente.limite_credito != null ? cliente.limite_credito : ""}">
@@ -14681,7 +14914,30 @@
         if (temPermissao("tabelas_preco", "visualizar")) {
           state.cache.tabelasPrecoParaCliente = await chamarApi("/tabelas-preco");
         }
-        modalEditarCliente(cliente);
+        const [metodosParaCliente, condicoesParaCliente] = await Promise.all([
+          chamarApi(`/comercial/metodos-pagamento?ativos=1&cliente_id=${cliente.id}`),
+          chamarApi(`/comercial/condicoes-pagamento?ativos=1&cliente_id=${cliente.id}`),
+        ]);
+        modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente);
+        return;
+      }
+      // ---- Fase 127: Métodos & Condições de Pagamento ----
+      case "novo-metodo-pagamento":
+        state.cache.clientesParaPagamento = state.cache.clientesParaPagamento || await chamarApi("/comercial/clientes");
+        modalMetodoPagamento(null);
+        return;
+      case "editar-metodo-pagamento": {
+        const metodos = await chamarApi("/comercial/metodos-pagamento");
+        modalMetodoPagamento(metodos.find((m) => m.id === Number(alvo.dataset.id)));
+        return;
+      }
+      case "nova-condicao-pagamento":
+        state.cache.clientesParaPagamento = state.cache.clientesParaPagamento || await chamarApi("/comercial/clientes");
+        modalCondicaoPagamento(null);
+        return;
+      case "editar-condicao-pagamento": {
+        const condicoes = await chamarApi("/comercial/condicoes-pagamento");
+        modalCondicaoPagamento(condicoes.find((c) => c.id === Number(alvo.dataset.id)));
         return;
       }
       // ---- Fase 102: Aprovação Financeira do Cadastro de Cliente ----
@@ -15269,6 +15525,42 @@
         });
         definirFlash("ok", "Configuração de boleto salva.");
         return renderConfiguracaoBoleto();
+      }
+      case "salvar-metodo-pagamento": {
+        const corpo = {
+          nome: dados.get("nome"),
+          ativo: !!dados.get("ativo"),
+          visivel_app_vendas: !!dados.get("visivel_app_vendas"),
+          tabela_preco_restrita_id: dados.get("tabela_preco_restrita_id") ? Number(dados.get("tabela_preco_restrita_id")) : null,
+          cliente_ids: JSON.parse(dados.get("cliente_ids_json") || "[]"),
+        };
+        if (form.dataset.id) {
+          await chamarApi(`/comercial/metodos-pagamento/${form.dataset.id}`, { method: "PUT", body: corpo });
+        } else {
+          await chamarApi("/comercial/metodos-pagamento", { method: "POST", body: corpo });
+        }
+        fecharModais();
+        definirFlash("ok", "Método de pagamento salvo.");
+        return renderPagamentos();
+      }
+      case "salvar-condicao-pagamento": {
+        const corpo = {
+          nome: dados.get("nome"),
+          numero_parcelas: Number(dados.get("numero_parcelas") || 1),
+          dias_entre_parcelas: dados.get("dias_entre_parcelas") ? Number(dados.get("dias_entre_parcelas")) : null,
+          ativo: !!dados.get("ativo"),
+          visivel_app_vendas: !!dados.get("visivel_app_vendas"),
+          tabela_preco_restrita_id: dados.get("tabela_preco_restrita_id") ? Number(dados.get("tabela_preco_restrita_id")) : null,
+          cliente_ids: JSON.parse(dados.get("cliente_ids_json") || "[]"),
+        };
+        if (form.dataset.id) {
+          await chamarApi(`/comercial/condicoes-pagamento/${form.dataset.id}`, { method: "PUT", body: corpo });
+        } else {
+          await chamarApi("/comercial/condicoes-pagamento", { method: "POST", body: corpo });
+        }
+        fecharModais();
+        definirFlash("ok", "Condição de pagamento salva.");
+        return renderPagamentos();
       }
       case "gerar-remessa-cnab": {
         const idsSelecionados = Array.from(form.querySelectorAll("[data-remessa-boleto]:checked"))
@@ -16514,6 +16806,15 @@
         // já associada ao cliente sem ninguém ter pedido isso.
         if (dados.has("tabela_preco_id")) {
           corpoEdicaoCliente.tabela_preco_id = dados.get("tabela_preco_id") ? Number(dados.get("tabela_preco_id")) : null;
+        }
+        // Fase 127 — mesmo raciocínio do campo acima: só manda a chave se
+        // o seletor apareceu no formulário (não zera um padrão já
+        // configurado sem o usuário ter mexido nesse campo).
+        if (dados.has("metodo_pagamento_padrao_id")) {
+          corpoEdicaoCliente.metodo_pagamento_padrao_id = dados.get("metodo_pagamento_padrao_id") ? Number(dados.get("metodo_pagamento_padrao_id")) : null;
+        }
+        if (dados.has("condicao_pagamento_padrao_id")) {
+          corpoEdicaoCliente.condicao_pagamento_padrao_id = dados.get("condicao_pagamento_padrao_id") ? Number(dados.get("condicao_pagamento_padrao_id")) : null;
         }
         await chamarApi(`/comercial/clientes/${form.dataset.id}`, { method: "PUT", body: corpoEdicaoCliente });
         fecharModais();

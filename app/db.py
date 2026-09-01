@@ -156,6 +156,7 @@ SCHEMA_FILES = [
     "schema_fase124.sql",  # Fase 124 — Importação Ema: campos faltando em clientes/fornecedores/itens/lotes/contas + codigo_legado_ema
     "schema_fase125.sql",  # Fase 125 — Importação Ema: contas_receber ganha lançamento avulso (pedido_venda_id agora opcional) + descricao
     "schema_fase126.sql",  # Fase 126 — Boleto: substitui Asaas por CNAB 240 direto (Sicredi/Unicred)
+    "schema_fase127.sql",  # Fase 127 — Catálogo de métodos e condições de pagamento (cliente padrão + pedido de venda)
 ]
 
 

@@ -475,15 +475,18 @@ def criar_cliente():
     # mas continuam 100% opcionais: um cadastro manual sem consultar nada
     # funciona exatamente como antes desta fase.
     valores_fiscais = [dados.get(campo) for campo in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS]
+    metodo_pagamento_padrao_id = dados.get("metodo_pagamento_padrao_id")
+    condicao_pagamento_padrao_id = dados.get("condicao_pagamento_padrao_id")
 
     cur = conn.execute(
         f"""
         INSERT INTO clientes (razao_social, nome_fantasia, cnpj, endereco, email, criado_por,
+               metodo_pagamento_padrao_id, condicao_pagamento_padrao_id,
                {', '.join(CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)})
-        VALUES (?, ?, ?, ?, ?, ?, {', '.join('?' for _ in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, {', '.join('?' for _ in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)})
         """,
         (razao_social, dados.get("nome_fantasia"), cnpj, dados.get("endereco"), dados.get("email"),
-         usuario_atual["id"], *valores_fiscais),
+         usuario_atual["id"], metodo_pagamento_padrao_id, condicao_pagamento_padrao_id, *valores_fiscais),
     )
     cliente_id = cur.lastrowid
     audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],
@@ -514,6 +517,18 @@ def editar_cliente(cliente_id):
         if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_id,)).fetchone():
             raise ApiError("Tabela de preço não encontrada.", status=404)
 
+    # Fase 127 — método/condição de pagamento PADRÃO do cliente, ambos
+    # opcionais (null = sem padrão definido, escolhe-se na hora de cada
+    # pedido); só valida que o id informado existe e está ativo.
+    metodo_pagamento_padrao_id = dados.get("metodo_pagamento_padrao_id", anterior["metodo_pagamento_padrao_id"])
+    if metodo_pagamento_padrao_id is not None:
+        if not conn.execute("SELECT 1 FROM metodos_pagamento WHERE id = ? AND ativo = 1", (metodo_pagamento_padrao_id,)).fetchone():
+            raise ApiError("Método de pagamento não encontrado ou inativo.", status=404)
+    condicao_pagamento_padrao_id = dados.get("condicao_pagamento_padrao_id", anterior["condicao_pagamento_padrao_id"])
+    if condicao_pagamento_padrao_id is not None:
+        if not conn.execute("SELECT 1 FROM condicoes_pagamento WHERE id = ? AND ativo = 1", (condicao_pagamento_padrao_id,)).fetchone():
+            raise ApiError("Condição de pagamento não encontrada ou inativa.", status=404)
+
     # Fase 63 — limite_credito é sempre OPCIONAL: `None`/omitido significa
     # "sem limite configurado" (nenhuma confirmação de pedido deste
     # cliente nunca fica pendente por conta de crédito), mesmo raciocínio
@@ -540,15 +555,246 @@ def editar_cliente(cliente_id):
     conn.execute(
         f"""
         UPDATE clientes SET nome_fantasia = ?, endereco = ?, email = ?, status = ?, limite_credito = ?, tabela_preco_id = ?,
+               metodo_pagamento_padrao_id = ?, condicao_pagamento_padrao_id = ?,
                {', '.join(f'{c} = ?' for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)}
         WHERE id = ?
         """,
         (nome_fantasia, endereco, email, status, limite_credito, tabela_preco_id,
+         metodo_pagamento_padrao_id, condicao_pagamento_padrao_id,
          *[valores_fiscais[c] for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS], cliente_id),
     )
     novo = _cliente_ou_404(conn, cliente_id)
     audit.registrar(conn, tabela="clientes", registro_id=cliente_id, usuario_id=usuario_atual["id"],
                      acao="cliente_editado", valor_anterior=anterior, valor_novo=novo,
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(novo)
+
+
+# ============================================================
+# MÉTODOS E CONDIÇÕES DE PAGAMENTO (Fase 127)
+# ============================================================
+# Mesma lógica de restrição pros dois catálogos (método e condição): sem
+# nenhum cliente vinculado E sem tabela_preco_restrita_id = disponível
+# pra QUALQUER cliente (comportamento padrão). Assim que qualquer uma das
+# duas restrições é usada, só fica disponível pra quem bate com pelo
+# menos uma delas — cliente listado diretamente, OU cliente cuja
+# tabela_preco_id é a tabela restrita.
+def _decorar_clientes_vinculados(conn, tabela_link, campo_fk, registro_id):
+    rows = conn.execute(
+        f"""
+        SELECT c.id, c.razao_social FROM {tabela_link} l
+        JOIN clientes c ON c.id = l.cliente_id
+        WHERE l.{campo_fk} = ? ORDER BY c.razao_social
+        """,
+        (registro_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _disponivel_para_cliente_sql(tabela, alias, cliente_alias="c"):
+    """Fragmento SQL reaproveitado nas listagens filtradas por cliente —
+    ver a regra de restrição documentada acima."""
+    tabela_link = "metodos_pagamento_clientes" if tabela == "metodos_pagamento" else "condicoes_pagamento_clientes"
+    campo_fk = "metodo_pagamento_id" if tabela == "metodos_pagamento" else "condicao_pagamento_id"
+    return f"""(
+        NOT EXISTS (SELECT 1 FROM {tabela_link} WHERE {campo_fk} = {alias}.id)
+        AND {alias}.tabela_preco_restrita_id IS NULL
+    ) OR EXISTS (
+        SELECT 1 FROM {tabela_link} WHERE {campo_fk} = {alias}.id AND cliente_id = {cliente_alias}.id
+    ) OR ({alias}.tabela_preco_restrita_id IS NOT NULL AND {alias}.tabela_preco_restrita_id = {cliente_alias}.tabela_preco_id)"""
+
+
+@bp.get("/metodos-pagamento")
+@requires_permission("comercial", "visualizar")
+def listar_metodos_pagamento():
+    conn = get_db()
+    apenas_ativos = request.args.get("ativos") == "1"
+    cliente_id = request.args.get("cliente_id", type=int)
+    apenas_app_vendas = request.args.get("app_vendas") == "1"
+    clausulas = []
+    if apenas_ativos:
+        clausulas.append("m.ativo = 1")
+    if apenas_app_vendas:
+        clausulas.append("m.visivel_app_vendas = 1")
+    params = []
+    if cliente_id:
+        clausulas.append(f"({_disponivel_para_cliente_sql('metodos_pagamento', 'm')})")
+        params.append(cliente_id)
+    where = f"JOIN clientes c ON c.id = ? " if cliente_id else ""
+    where_final = ("WHERE " + " AND ".join(clausulas)) if clausulas else ""
+    rows = conn.execute(f"SELECT m.* FROM metodos_pagamento m {where} {where_final} ORDER BY m.nome", params).fetchall()
+    resultado = []
+    for r in rows:
+        item = dict(r)
+        item["clientes_vinculados"] = _decorar_clientes_vinculados(conn, "metodos_pagamento_clientes", "metodo_pagamento_id", item["id"])
+        resultado.append(item)
+    return jsonify(resultado)
+
+
+@bp.post("/metodos-pagamento")
+@requires_permission("comercial", "configurar_pagamento")
+def criar_metodo_pagamento():
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    nome = (dados.get("nome") or "").strip()
+    if not nome:
+        raise ApiError("Informe nome.", status=400)
+    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id")
+    if tabela_preco_restrita_id is not None:
+        conn = get_db()
+        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
+            raise ApiError("Tabela de preço não encontrada.", status=404)
+    conn = get_db()
+    if conn.execute("SELECT id FROM metodos_pagamento WHERE nome = ?", (nome,)).fetchone():
+        raise ApiError("Já existe um método de pagamento com este nome.", status=409)
+    visivel_app_vendas = 1 if dados.get("visivel_app_vendas", True) else 0
+    cur = conn.execute(
+        "INSERT INTO metodos_pagamento (nome, visivel_app_vendas, tabela_preco_restrita_id, criado_por) VALUES (?, ?, ?, ?)",
+        (nome, visivel_app_vendas, tabela_preco_restrita_id, usuario_atual["id"]),
+    )
+    metodo_id = cur.lastrowid
+    for cliente_id in (dados.get("cliente_ids") or []):
+        conn.execute("INSERT OR IGNORE INTO metodos_pagamento_clientes (metodo_pagamento_id, cliente_id) VALUES (?, ?)", (metodo_id, cliente_id))
+    audit.registrar(conn, tabela="metodos_pagamento", registro_id=metodo_id, usuario_id=usuario_atual["id"],
+                     acao="metodo_pagamento_criado", valor_novo={"nome": nome},
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(dict(conn.execute("SELECT * FROM metodos_pagamento WHERE id = ?", (metodo_id,)).fetchone())), 201
+
+
+@bp.put("/metodos-pagamento/<int:metodo_id>")
+@requires_permission("comercial", "configurar_pagamento")
+def editar_metodo_pagamento(metodo_id):
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+    anterior = conn.execute("SELECT * FROM metodos_pagamento WHERE id = ?", (metodo_id,)).fetchone()
+    if anterior is None:
+        raise ApiError("Método de pagamento não encontrado.", status=404)
+    nome = (dados.get("nome") or anterior["nome"]).strip()
+    ativo = 1 if dados.get("ativo", anterior["ativo"]) else 0
+    visivel_app_vendas = 1 if dados.get("visivel_app_vendas", anterior["visivel_app_vendas"]) else 0
+    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id", anterior["tabela_preco_restrita_id"])
+    if tabela_preco_restrita_id is not None:
+        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
+            raise ApiError("Tabela de preço não encontrada.", status=404)
+    if conn.execute("SELECT id FROM metodos_pagamento WHERE nome = ? AND id != ?", (nome, metodo_id)).fetchone():
+        raise ApiError("Já existe um método de pagamento com este nome.", status=409)
+    conn.execute(
+        "UPDATE metodos_pagamento SET nome = ?, ativo = ?, visivel_app_vendas = ?, tabela_preco_restrita_id = ? WHERE id = ?",
+        (nome, ativo, visivel_app_vendas, tabela_preco_restrita_id, metodo_id),
+    )
+    if "cliente_ids" in dados:
+        conn.execute("DELETE FROM metodos_pagamento_clientes WHERE metodo_pagamento_id = ?", (metodo_id,))
+        for cliente_id in (dados.get("cliente_ids") or []):
+            conn.execute("INSERT OR IGNORE INTO metodos_pagamento_clientes (metodo_pagamento_id, cliente_id) VALUES (?, ?)", (metodo_id, cliente_id))
+    novo = dict(conn.execute("SELECT * FROM metodos_pagamento WHERE id = ?", (metodo_id,)).fetchone())
+    audit.registrar(conn, tabela="metodos_pagamento", registro_id=metodo_id, usuario_id=usuario_atual["id"],
+                     acao="metodo_pagamento_editado", valor_anterior=dict(anterior), valor_novo=novo,
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(novo)
+
+
+@bp.get("/condicoes-pagamento")
+@requires_permission("comercial", "visualizar")
+def listar_condicoes_pagamento():
+    conn = get_db()
+    apenas_ativos = request.args.get("ativos") == "1"
+    cliente_id = request.args.get("cliente_id", type=int)
+    apenas_app_vendas = request.args.get("app_vendas") == "1"
+    clausulas = []
+    if apenas_ativos:
+        clausulas.append("m.ativo = 1")
+    if apenas_app_vendas:
+        clausulas.append("m.visivel_app_vendas = 1")
+    params = []
+    if cliente_id:
+        clausulas.append(f"({_disponivel_para_cliente_sql('condicoes_pagamento', 'm')})")
+        params.append(cliente_id)
+    where = f"JOIN clientes c ON c.id = ? " if cliente_id else ""
+    where_final = ("WHERE " + " AND ".join(clausulas)) if clausulas else ""
+    rows = conn.execute(f"SELECT m.* FROM condicoes_pagamento m {where} {where_final} ORDER BY m.nome", params).fetchall()
+    resultado = []
+    for r in rows:
+        item = dict(r)
+        item["clientes_vinculados"] = _decorar_clientes_vinculados(conn, "condicoes_pagamento_clientes", "condicao_pagamento_id", item["id"])
+        resultado.append(item)
+    return jsonify(resultado)
+
+
+@bp.post("/condicoes-pagamento")
+@requires_permission("comercial", "configurar_pagamento")
+def criar_condicao_pagamento():
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    nome = (dados.get("nome") or "").strip()
+    if not nome:
+        raise ApiError("Informe nome.", status=400)
+    try:
+        numero_parcelas = int(dados.get("numero_parcelas") or 1)
+    except (TypeError, ValueError):
+        raise ApiError("numero_parcelas deve ser um número inteiro.", status=400)
+    if numero_parcelas < 1:
+        raise ApiError("numero_parcelas deve ser pelo menos 1.", status=400)
+    dias_entre_parcelas = dados.get("dias_entre_parcelas")
+    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id")
+    conn = get_db()
+    if tabela_preco_restrita_id is not None:
+        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
+            raise ApiError("Tabela de preço não encontrada.", status=404)
+    if conn.execute("SELECT id FROM condicoes_pagamento WHERE nome = ?", (nome,)).fetchone():
+        raise ApiError("Já existe uma condição de pagamento com este nome.", status=409)
+    visivel_app_vendas = 1 if dados.get("visivel_app_vendas", True) else 0
+    cur = conn.execute(
+        "INSERT INTO condicoes_pagamento (nome, numero_parcelas, dias_entre_parcelas, visivel_app_vendas, tabela_preco_restrita_id, criado_por) VALUES (?, ?, ?, ?, ?, ?)",
+        (nome, numero_parcelas, dias_entre_parcelas, visivel_app_vendas, tabela_preco_restrita_id, usuario_atual["id"]),
+    )
+    condicao_id = cur.lastrowid
+    for cliente_id in (dados.get("cliente_ids") or []):
+        conn.execute("INSERT OR IGNORE INTO condicoes_pagamento_clientes (condicao_pagamento_id, cliente_id) VALUES (?, ?)", (condicao_id, cliente_id))
+    audit.registrar(conn, tabela="condicoes_pagamento", registro_id=condicao_id, usuario_id=usuario_atual["id"],
+                     acao="condicao_pagamento_criada", valor_novo={"nome": nome, "numero_parcelas": numero_parcelas},
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(dict(conn.execute("SELECT * FROM condicoes_pagamento WHERE id = ?", (condicao_id,)).fetchone())), 201
+
+
+@bp.put("/condicoes-pagamento/<int:condicao_id>")
+@requires_permission("comercial", "configurar_pagamento")
+def editar_condicao_pagamento(condicao_id):
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+    anterior = conn.execute("SELECT * FROM condicoes_pagamento WHERE id = ?", (condicao_id,)).fetchone()
+    if anterior is None:
+        raise ApiError("Condição de pagamento não encontrada.", status=404)
+    nome = (dados.get("nome") or anterior["nome"]).strip()
+    numero_parcelas = dados.get("numero_parcelas", anterior["numero_parcelas"])
+    try:
+        numero_parcelas = int(numero_parcelas)
+    except (TypeError, ValueError):
+        raise ApiError("numero_parcelas deve ser um número inteiro.", status=400)
+    if numero_parcelas < 1:
+        raise ApiError("numero_parcelas deve ser pelo menos 1.", status=400)
+    dias_entre_parcelas = dados.get("dias_entre_parcelas", anterior["dias_entre_parcelas"])
+    ativo = 1 if dados.get("ativo", anterior["ativo"]) else 0
+    visivel_app_vendas = 1 if dados.get("visivel_app_vendas", anterior["visivel_app_vendas"]) else 0
+    tabela_preco_restrita_id = dados.get("tabela_preco_restrita_id", anterior["tabela_preco_restrita_id"])
+    if tabela_preco_restrita_id is not None:
+        if not conn.execute("SELECT 1 FROM tabelas_preco WHERE id = ?", (tabela_preco_restrita_id,)).fetchone():
+            raise ApiError("Tabela de preço não encontrada.", status=404)
+    if conn.execute("SELECT id FROM condicoes_pagamento WHERE nome = ? AND id != ?", (nome, condicao_id)).fetchone():
+        raise ApiError("Já existe uma condição de pagamento com este nome.", status=409)
+    conn.execute(
+        "UPDATE condicoes_pagamento SET nome = ?, numero_parcelas = ?, dias_entre_parcelas = ?, ativo = ?, "
+        "visivel_app_vendas = ?, tabela_preco_restrita_id = ? WHERE id = ?",
+        (nome, numero_parcelas, dias_entre_parcelas, ativo, visivel_app_vendas, tabela_preco_restrita_id, condicao_id),
+    )
+    if "cliente_ids" in dados:
+        conn.execute("DELETE FROM condicoes_pagamento_clientes WHERE condicao_pagamento_id = ?", (condicao_id,))
+        for cliente_id in (dados.get("cliente_ids") or []):
+            conn.execute("INSERT OR IGNORE INTO condicoes_pagamento_clientes (condicao_pagamento_id, cliente_id) VALUES (?, ?)", (condicao_id, cliente_id))
+    novo = dict(conn.execute("SELECT * FROM condicoes_pagamento WHERE id = ?", (condicao_id,)).fetchone())
+    audit.registrar(conn, tabela="condicoes_pagamento", registro_id=condicao_id, usuario_id=usuario_atual["id"],
+                     acao="condicao_pagamento_editada", valor_anterior=dict(anterior), valor_novo=novo,
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(novo)
 
@@ -649,6 +895,12 @@ def criar_pedido():
     # automaticamente na expedição (ver `expedir()` abaixo) herda esta
     # MESMA empresa, sem precisar informar de novo.
     empresa_id = dados.get("empresa_id")
+    # Fase 127 — opcional; quando não informado, herda o padrão do
+    # próprio cliente (se ele tiver um configurado) — mesma ideia de
+    # `tabela_preco_id` já herdado no lançamento de pedido pelo App de
+    # Vendas, só que aqui é explícito no corpo da resposta pro operador
+    # ver o que foi assumido.
+    condicao_pagamento_id = dados.get("condicao_pagamento_id")
     conn = get_db()
 
     if not cliente_id:
@@ -660,11 +912,16 @@ def criar_pedido():
         raise ApiError("Não é possível criar pedido para um cliente inativo.", status=400)
     if not itens:
         raise ApiError("Informe ao menos um item em 'itens'.", status=400)
+    if condicao_pagamento_id is None:
+        condicao_pagamento_id = cliente["condicao_pagamento_padrao_id"]
+    if condicao_pagamento_id is not None:
+        if not conn.execute("SELECT 1 FROM condicoes_pagamento WHERE id = ? AND ativo = 1", (condicao_pagamento_id,)).fetchone():
+            raise ApiError("Condição de pagamento não encontrada ou inativa.", status=404)
 
     numero = _gerar_numero_pedido()
     cur = conn.execute(
-        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, criado_por) VALUES (?, ?, ?, ?)",
-        (numero, cliente_id, empresa_id, usuario_atual["id"]),
+        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, condicao_pagamento_id, criado_por) VALUES (?, ?, ?, ?, ?)",
+        (numero, cliente_id, empresa_id, condicao_pagamento_id, usuario_atual["id"]),
     )
     pedido_id = cur.lastrowid
 

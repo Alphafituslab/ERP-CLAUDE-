@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "126.0"
+VERSAO_SISTEMA = "127.0"
 
 
 def create_app(test_config: dict = None) -> Flask:

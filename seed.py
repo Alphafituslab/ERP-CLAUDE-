@@ -528,6 +528,13 @@ PERMISSOES_PADRAO = [
     # saldo de clientes do sistema anterior (Ema), mas serve para qualquer
     # lançamento avulso futuro (ex.: acordo extrajudicial, reembolso).
     ("financeiro", "criar_conta_receber", "Lançar uma nova conta a receber avulsa contra um cliente, sem um Pedido de Venda por trás", 0),
+
+    # Fase 127 — catálogo de métodos e condições de pagamento (Dinheiro,
+    # PIX, Boleto..., À vista, 30/60/90 dias...), usados como padrão do
+    # cliente e opcionalmente no pedido de venda. Mesma régua de
+    # "comercial.configurar_comercial" (config de baixo risco/frequência,
+    # não do dia a dia de vendas).
+    ("comercial", "configurar_pagamento", "Cadastrar, editar e ativar/desativar métodos e condições de pagamento", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)

@@ -26,7 +26,11 @@ def _tabela_ou_404(conn, tabela_id):
 def listar():
     conn = get_db()
     incluir_inativas = request.args.get("incluir_inativas") == "1"
-    where = "" if incluir_inativas else "WHERE status = 'ativo'"
+    apenas_app_vendas = request.args.get("app_vendas") == "1"
+    clausulas = [] if incluir_inativas else ["status = 'ativo'"]
+    if apenas_app_vendas:
+        clausulas.append("visivel_app_vendas = 1")
+    where = ("WHERE " + " AND ".join(clausulas)) if clausulas else ""
     rows = conn.execute(f"SELECT * FROM tabelas_preco {where} ORDER BY nome").fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -44,9 +48,10 @@ def criar():
     if conn.execute("SELECT id FROM tabelas_preco WHERE nome = ?", (nome,)).fetchone():
         raise ApiError("Já existe uma tabela de preço com este nome.", status=409)
 
+    visivel_app_vendas = 1 if dados.get("visivel_app_vendas", True) else 0
     cur = conn.execute(
-        "INSERT INTO tabelas_preco (nome, criado_por) VALUES (?, ?)",
-        (nome, usuario_atual["id"]),
+        "INSERT INTO tabelas_preco (nome, visivel_app_vendas, criado_por) VALUES (?, ?, ?)",
+        (nome, visivel_app_vendas, usuario_atual["id"]),
     )
     tabela_id = cur.lastrowid
     audit.registrar(conn, tabela="tabelas_preco", registro_id=tabela_id, usuario_id=usuario_atual["id"],
@@ -68,8 +73,9 @@ def editar(tabela_id):
         raise ApiError("status deve ser 'ativo' ou 'inativo'.", status=400)
     if nome != anterior["nome"] and conn.execute("SELECT id FROM tabelas_preco WHERE nome = ? AND id != ?", (nome, tabela_id)).fetchone():
         raise ApiError("Já existe uma tabela de preço com este nome.", status=409)
+    visivel_app_vendas = 1 if dados.get("visivel_app_vendas", anterior["visivel_app_vendas"]) else 0
 
-    conn.execute("UPDATE tabelas_preco SET nome = ?, status = ? WHERE id = ?", (nome, status, tabela_id))
+    conn.execute("UPDATE tabelas_preco SET nome = ?, status = ?, visivel_app_vendas = ? WHERE id = ?", (nome, status, visivel_app_vendas, tabela_id))
     novo = _tabela_ou_404(conn, tabela_id)
     audit.registrar(conn, tabela="tabelas_preco", registro_id=tabela_id, usuario_id=usuario_atual["id"],
                      acao="tabela_preco_editada", valor_anterior=anterior, valor_novo=novo,
