@@ -215,6 +215,16 @@ def inteiro(valor):
     return int(n) if n is not None else None
 
 
+def peso_kg(valor):
+    """item.pesobruto/pesoliquido no Ema NÃO está em kg (checado contra o
+    peso que várias descrições trazem no próprio nome, ex.: 'CREATINA PURA
+    300G' tinha pesobruto=300 — se fosse kg seria 300kg, um absurdo para
+    um pote de creatina; bate exatamente como 300 GRAMAS). Convertido aqui
+    pra kg de verdade, que é o que a coluna peso_bruto_kg promete guardar."""
+    n = numero(valor)
+    return round(n / 1000.0, 6) if n else n
+
+
 def vencimento_plausivel(data):
     """Auditoria encontrou 1 (de 774) título com vencimento '2202-02-11'
     — claramente um erro de digitação no Ema (o mesmo registro tem
@@ -408,7 +418,7 @@ def main():
         conn.execute(
             "UPDATE itens SET peso_bruto_kg = ?, peso_liquido_kg = ?, dias_validade_padrao = ?, "
             "codigo_legado_ema = ?, status = ? WHERE id = ?",
-            (numero(row.get("pesobruto")), numero(row.get("pesoliquido")), inteiro(row.get("diaslotevalidade")),
+            (peso_kg(row.get("pesobruto")), peso_kg(row.get("pesoliquido")), inteiro(row.get("diaslotevalidade")),
              codigo_legado, "inativo" if limpo(row.get("inativo")) == "S" else "ativo", item_id),
         )
         conn.commit()
