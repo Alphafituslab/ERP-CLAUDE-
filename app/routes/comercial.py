@@ -870,6 +870,10 @@ def listar_pedidos():
     # instante exato.
     data_de = request.args.get("data_de")
     data_ate = request.args.get("data_ate")
+    # Fase 132 — de onde veio o pedido (canal) e quem vendeu, pra amarrar
+    # comissão à venda: filtro por canal_origem e por vendedor_id.
+    canal_origem = request.args.get("canal_origem")
+    vendedor_id = request.args.get("vendedor_id", type=int)
     clausulas, params = [], []
     if status:
         clausulas.append("pv.status = ?")
@@ -889,16 +893,49 @@ def listar_pedidos():
     if data_ate:
         clausulas.append("DATE(pv.criado_em) <= DATE(?)")
         params.append(data_ate)
+    if canal_origem in ("comercial", "app_vendas"):
+        clausulas.append("pv.canal_origem = ?")
+        params.append(canal_origem)
+    if vendedor_id:
+        clausulas.append("pv.vendedor_id = ?")
+        params.append(vendedor_id)
     where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
     rows = conn.execute(
         f"""
-        SELECT pv.*, c.razao_social AS cliente_razao_social,
+        SELECT pv.*, c.razao_social AS cliente_razao_social, v.nome AS vendedor_nome,
                (SELECT COALESCE(SUM(quantidade * preco_unitario), 0) FROM pedido_venda_itens WHERE pedido_id = pv.id) AS valor_total,
                EXISTS (SELECT 1 FROM notas_fiscais nf WHERE nf.pedido_id = pv.id AND nf.status = 'autorizada') AS faturado
-        FROM pedidos_venda pv JOIN clientes c ON c.id = pv.cliente_id
+        FROM pedidos_venda pv
+        JOIN clientes c ON c.id = pv.cliente_id
+        LEFT JOIN usuarios v ON v.id = pv.vendedor_id
         {where} ORDER BY pv.id DESC
         """,
         params,
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@bp.get("/vendedores")
+@requires_permission("comercial", "visualizar")
+def listar_vendedores():
+    """Fase 132 — usuários ATIVOS com permissão pra vender (mesma
+    permissão que libera criar pedido em Comercial), pro seletor de
+    'vendedor responsável' na hora de lançar um pedido manualmente e pro
+    filtro por vendedor em Pedidos de Venda. Não é a lista de usuários
+    inteira (essa exige `usuarios.visualizar`, que um vendedor comum não
+    tem) — é um recorte mínimo, só id/nome, seguindo o mesmo critério já
+    usado por `notificacoes_service.notificar_usuarios_com_permissao`."""
+    conn = get_db()
+    rows = conn.execute(
+        """
+        SELECT DISTINCT u.id, u.nome
+        FROM usuarios u
+        JOIN usuario_perfil up ON up.usuario_id = u.id
+        JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
+        JOIN permissoes p ON p.id = pp.permissao_id
+        WHERE p.modulo = 'comercial' AND p.acao = 'criar_pedido' AND u.status = 'ativo'
+        ORDER BY u.nome
+        """,
     ).fetchall()
     return jsonify([dict(r) for r in rows])
 
@@ -936,6 +973,14 @@ def criar_pedido():
     tipo_pedido = dados.get("tipo_pedido")
     if tipo_pedido is not None and tipo_pedido not in ("terceirizacao", "marca_propria"):
         raise ApiError("tipo_pedido deve ser 'terceirizacao' ou 'marca_propria' (ou omitido).", status=400)
+    # Fase 132 — opcional: quem foi o vendedor responsável por esta venda,
+    # quando o pedido é lançado manualmente (canal 'comercial') em vez de
+    # pelo App de Vendas (que já grava vendedor_id sozinho desde a Fase
+    # 36 — o vendedor ali é sempre quem está logado no app). Não exige
+    # nenhuma permissão especial no usuário escolhido: um assistente pode
+    # lançar em nome de outra pessoa (mesmo raciocínio já documentado na
+    # Fase 36), só precisa ser um usuário ativo de verdade.
+    vendedor_id = dados.get("vendedor_id")
     conn = get_db()
 
     if not cliente_id:
@@ -952,11 +997,14 @@ def criar_pedido():
     if condicao_pagamento_id is not None:
         if not conn.execute("SELECT 1 FROM condicoes_pagamento WHERE id = ? AND ativo = 1", (condicao_pagamento_id,)).fetchone():
             raise ApiError("Condição de pagamento não encontrada ou inativa.", status=404)
+    if vendedor_id is not None:
+        if not conn.execute("SELECT 1 FROM usuarios WHERE id = ? AND status = 'ativo'", (vendedor_id,)).fetchone():
+            raise ApiError("Vendedor não encontrado ou inativo.", status=404)
 
     numero = _gerar_numero_pedido()
     cur = conn.execute(
-        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, condicao_pagamento_id, tipo_pedido, criado_por) VALUES (?, ?, ?, ?, ?, ?)",
-        (numero, cliente_id, empresa_id, condicao_pagamento_id, tipo_pedido, usuario_atual["id"]),
+        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, condicao_pagamento_id, tipo_pedido, vendedor_id, canal_origem, criado_por) VALUES (?, ?, ?, ?, ?, ?, 'comercial', ?)",
+        (numero, cliente_id, empresa_id, condicao_pagamento_id, tipo_pedido, vendedor_id, usuario_atual["id"]),
     )
     pedido_id = cur.lastrowid
 
@@ -1037,7 +1085,7 @@ def duplicar_pedido(pedido_id):
 
     numero = _gerar_numero_pedido()
     cur = conn.execute(
-        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, criado_por) VALUES (?, ?, ?, ?)",
+        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, canal_origem, criado_por) VALUES (?, ?, ?, 'comercial', ?)",
         (numero, origem["cliente_id"], origem["empresa_id"], usuario_atual["id"]),
     )
     novo_pedido_id = cur.lastrowid

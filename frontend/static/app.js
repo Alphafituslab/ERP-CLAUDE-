@@ -10207,9 +10207,18 @@
     return `<span class="selo azul">${escapeHtml(ROTULOS_TIPO_PEDIDO[tipo] || tipo)}</span>`;
   }
 
+  // Fase 132 — de onde veio o pedido: hoje só existem estes dois canais
+  // reais de criação no sistema (Comercial/"Lançar & Faturar" — o que o
+  // usuário chama de "portal" — e o App de Vendas de campo).
+  const ROTULOS_CANAL_ORIGEM = { comercial: "Portal (Comercial)", app_vendas: "App de Vendas" };
+
+  function rotuloCanalOrigem(canal) {
+    return ROTULOS_CANAL_ORIGEM[canal] || canal || "—";
+  }
+
   async function renderPedidosVenda() {
     app.innerHTML = '<div class="carregando">Carregando pedidos…</div>';
-    const [clientes] = await Promise.all([chamarApi("/comercial/clientes")]);
+    const [clientes, vendedores] = await Promise.all([chamarApi("/comercial/clientes"), chamarApi("/comercial/vendedores")]);
     state.cache.clientesParaFiltroPedidos = clientes;
 
     const filtros = state.filtrosPedidosVenda || {};
@@ -10220,15 +10229,22 @@
     if (filtros.faturado) query.set("faturado", filtros.faturado);
     if (filtros.data_de) query.set("data_de", filtros.data_de);
     if (filtros.data_ate) query.set("data_ate", filtros.data_ate);
+    if (filtros.canal_origem) query.set("canal_origem", filtros.canal_origem);
+    if (filtros.vendedor_id) query.set("vendedor_id", filtros.vendedor_id);
     const pedidos = await chamarApi(`/comercial/pedidos${query.toString() ? "?" + query.toString() : ""}`);
 
     const opcoesClientes = clientes
       .map((c) => `<option value="${c.id}" ${String(filtros.cliente_id) === String(c.id) ? "selected" : ""}>${escapeHtml(c.razao_social)}</option>`)
       .join("");
+    const opcoesVendedores = vendedores
+      .map((v) => `<option value="${v.id}" ${String(filtros.vendedor_id) === String(v.id) ? "selected" : ""}>${escapeHtml(v.nome)}</option>`)
+      .join("");
 
     const linhas = pedidos.map((p) => `<tr>
       <td class="mono"><a href="#/pedido/${p.id}">${escapeHtml(p.numero)}</a></td>
       <td>${escapeHtml(p.cliente_razao_social)}</td>
+      <td class="texto-suave">${escapeHtml(rotuloCanalOrigem(p.canal_origem))}</td>
+      <td>${p.vendedor_nome ? escapeHtml(p.vendedor_nome) : '<span class="texto-suave">—</span>'}</td>
       <td>${seloTipoPedido(p.tipo_pedido)}</td>
       <td>${seloPedido(p.status)}</td>
       <td>${p.faturado ? '<span class="selo ativo">Faturado</span>' : '<span class="selo inativo">Não faturado</span>'}</td>
@@ -10267,6 +10283,16 @@
                <option value="nao" ${filtros.faturado === "nao" ? "selected" : ""}>Não faturados</option>
              </select>
            </div>
+           <div class="campo" style="margin:0;"><label>Canal</label>
+             <select name="canal_origem">
+               <option value="">Todos</option>
+               <option value="comercial" ${filtros.canal_origem === "comercial" ? "selected" : ""}>Portal (Comercial)</option>
+               <option value="app_vendas" ${filtros.canal_origem === "app_vendas" ? "selected" : ""}>App de Vendas</option>
+             </select>
+           </div>
+           <div class="campo" style="margin:0;"><label>Vendedor</label>
+             <select name="vendedor_id"><option value="">Todos</option>${opcoesVendedores}</select>
+           </div>
            <div class="campo" style="margin:0;"><label>De</label>
              <input type="date" name="data_de" value="${filtros.data_de || ""}">
            </div>
@@ -10277,10 +10303,12 @@
          </form>
        </div>
        <div class="cartao">
+         <div class="tabela-scroll">
          <table>
-           <thead><tr><th>Número</th><th>Cliente</th><th>Tipo</th><th>Status</th><th>Faturado</th><th>Valor</th><th>Criado em</th><th></th></tr></thead>
-           <tbody>${linhas || '<tr><td colspan="8" class="texto-suave">Nenhum pedido encontrado para este filtro.</td></tr>'}</tbody>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Canal</th><th>Vendedor</th><th>Tipo</th><th>Status</th><th>Faturado</th><th>Valor</th><th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="10" class="texto-suave">Nenhum pedido encontrado para este filtro.</td></tr>'}</tbody>
          </table>
+         </div>
        </div>`,
       "pedidos-venda"
     );
@@ -10295,6 +10323,8 @@
         faturado: dados.get("faturado") || null,
         data_de: dados.get("data_de") || null,
         data_ate: dados.get("data_ate") || null,
+        canal_origem: dados.get("canal_origem") || null,
+        vendedor_id: dados.get("vendedor_id") || null,
       };
       renderPedidosVenda();
     });
@@ -10466,6 +10496,8 @@
       const pedidosDoCliente = await chamarApi(`/comercial/pedidos?${query.toString()}`).catch(() => []);
       const linhas = pedidosDoCliente.map((p) => `<tr>
         <td class="mono"><a href="#/pedido/${p.id}">${escapeHtml(p.numero)}</a></td>
+        <td class="texto-suave">${escapeHtml(rotuloCanalOrigem(p.canal_origem))}</td>
+        <td>${p.vendedor_nome ? escapeHtml(p.vendedor_nome) : '<span class="texto-suave">—</span>'}</td>
         <td>${seloTipoPedido(p.tipo_pedido)}</td>
         <td>${seloPedido(p.status)}</td>
         <td>${p.faturado ? '<span class="selo ativo">Faturado</span>' : '<span class="selo inativo">Não faturado</span>'}</td>
@@ -11362,6 +11394,9 @@
         ${_buscaClienteHtml()}
         <div id="area-risco-cliente-pedido"></div>
         <div id="area-pagamento-pedido"></div>
+        <div class="campo"><label>Vendedor responsável (opcional)</label>
+          <select name="vendedor_id" id="pedido-vendedor"><option value="">Carregando…</option></select>
+        </div>
         ${_buscaItemHtml()}
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
         <div class="campo"><label>Unidade</label><input name="unidade" placeholder="preenchida pelo cadastro do item" required></div>
@@ -11381,6 +11416,20 @@
     let tabelaPrecoDoCliente = null;
     let itemEscolhido = null;
     const campoEmpresa = wrap.querySelector('select[name="empresa_id"]');
+
+    // Fase 132 — quem vendeu, pra amarrar comissão à venda. Carregado
+    // depois do modal já estar aberto (mesmo padrão de
+    // `_renderizarSeletorPagamento`) — não trava a abertura do modal
+    // esperando essa chamada.
+    chamarApi("/comercial/vendedores").then((vendedores) => {
+      const sel = wrap.querySelector("#pedido-vendedor");
+      if (!sel) return;
+      sel.innerHTML = '<option value="">Nenhum (não informado)</option>' +
+        vendedores.map((v) => `<option value="${v.id}">${escapeHtml(v.nome)}</option>`).join("");
+    }).catch(() => {
+      const sel = wrap.querySelector("#pedido-vendedor");
+      if (sel) sel.innerHTML = '<option value="">Nenhum (não informado)</option>';
+    });
 
     const aoEscolherCliente = async (cliente) => {
       tabelaPrecoDoCliente = temPermissao("comercial", "visualizar")
@@ -17317,6 +17366,12 @@
             // Fase 52 — opcional; a conta a receber gerada na expedição herda
             // este empresa_id automaticamente (nunca perguntado de novo).
             empresa_id: dados.get("empresa_id") ? Number(dados.get("empresa_id")) : null,
+            // Fase 128 — condição de pagamento escolhida no seletor
+            // (_renderizarSeletorPagamento); campo existe no form desde a
+            // Fase 128 mas não estava sendo enviado — corrigido aqui.
+            condicao_pagamento_id: dados.get("condicao_pagamento_id") ? Number(dados.get("condicao_pagamento_id")) : null,
+            // Fase 132 — vendedor responsável, pra amarrar comissão à venda.
+            vendedor_id: dados.get("vendedor_id") ? Number(dados.get("vendedor_id")) : null,
           },
         });
         fecharModais();

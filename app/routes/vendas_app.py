@@ -549,7 +549,7 @@ def duplicar_pedido(pedido_origem_id):
 
     numero = _gerar_numero_pedido()
     cur = conn.execute(
-        "INSERT INTO pedidos_venda (numero, cliente_id, criado_por, vendedor_id) VALUES (?, ?, ?, ?)",
+        "INSERT INTO pedidos_venda (numero, cliente_id, criado_por, vendedor_id, canal_origem) VALUES (?, ?, ?, ?, 'app_vendas')",
         (numero, origem["cliente_id"], usuario_atual["id"], usuario_atual["id"]),
     )
     pedido_id = cur.lastrowid
@@ -641,7 +641,7 @@ def iniciar_rascunho():
 
     numero = _gerar_numero_pedido()
     cur = conn.execute(
-        "INSERT INTO pedidos_venda (numero, cliente_id, criado_por, vendedor_id) VALUES (?, ?, ?, ?)",
+        "INSERT INTO pedidos_venda (numero, cliente_id, criado_por, vendedor_id, canal_origem) VALUES (?, ?, ?, ?, 'app_vendas')",
         (numero, cliente_id, usuario_atual["id"], usuario_atual["id"]),
     )
     pedido_id = cur.lastrowid
