@@ -441,6 +441,8 @@
           case "fiscal-configuracao-sped": return renderConfiguracaoSped();
           case "transportadoras": return renderTransportadoras();
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
+          case "financeiro-remessa-cnab": return renderRemessaCnab();
+          case "financeiro-retorno-cnab": return renderRetornoCnab();
           case "conciliacao-bancaria": return param ? renderConciliacaoBancariaDetalhe(Number(param)) : renderConciliacaoBancaria();
           case "painel-gerencial": return renderPainelGerencial();
           case "rastreabilidade": return renderRastreabilidade();
@@ -619,8 +621,10 @@
         { rota: "#/financeiro", chave: "financeiro", label: "Financeiro", permissao: ["financeiro", "visualizar"] },
         { rota: "#/conciliacao-bancaria", chave: "conciliacao-bancaria", label: "Conciliação Bancária", permissao: ["financeiro", "conciliar_extrato"] },
         { rota: "#/dre", chave: "dre", label: "DRE Simplificado", permissao: ["custeio", "visualizar"] },
-        // Fase 71 — Boleto Bancário.
+        // Fase 126 — Boleto Bancário via CNAB 240 (Sicredi/Unicred).
         { rota: "#/financeiro-configuracao-boleto", chave: "financeiro-configuracao-boleto", label: "Configuração de Boleto", permissao: ["financeiro", "configurar_boleto"] },
+        { rota: "#/financeiro-remessa-cnab", chave: "financeiro-remessa-cnab", label: "Remessa CNAB", permissao: ["financeiro", "gerar_boleto"] },
+        { rota: "#/financeiro-retorno-cnab", chave: "financeiro-retorno-cnab", label: "Retorno CNAB", permissao: ["financeiro", "registrar_baixa_receber"] },
       ],
     },
     {
@@ -11349,24 +11353,38 @@
       `<h2>Configuração de Boleto Bancário</h2>
        <div class="cartao">
          <p class="dica">
-           Integração com um gateway de pagamentos terceirizado (Asaas) — diferente da NF-e (Fase 70, por empresa
-           emitente), a conta no provedor de boleto é ÚNICA para todo o sistema. Comece em ambiente
-           <strong>Sandbox</strong> (testes) e só troque para <strong>Produção</strong> depois de validar a
-           emissão de boletos de teste.
+           Boleto via CNAB 240 direto com o banco (sem gateway terceirizado) — o sistema gera o arquivo de
+           <strong>remessa</strong> pra você baixar e subir no internet banking, e lê o arquivo de <strong>retorno</strong>
+           que o banco devolve pra dar baixa automática nos títulos pagos. Preencha aqui os dados do convênio de
+           cobrança fornecidos pelo banco. Comece em <strong>Homologação</strong> e só troque para
+           <strong>Produção</strong> depois de validar um ciclo completo de remessa/retorno com o banco.
          </p>
          <form data-form="salvar-configuracao-boleto">
-           <div class="campo"><label>Provedor</label>
-             <select name="provedor"><option value="asaas" selected>Asaas</option></select>
+           <div class="campo"><label>Banco</label>
+             <select name="banco_codigo">
+               <option value="">Selecione…</option>
+               <option value="748" ${config.banco_codigo === "748" ? "selected" : ""}>748 — Sicredi</option>
+               <option value="136" ${config.banco_codigo === "136" ? "selected" : ""}>136 — Unicred</option>
+             </select>
            </div>
            <div class="campo"><label>Ambiente</label>
              <select name="ambiente">
-               <option value="sandbox" ${config.ambiente === "sandbox" ? "selected" : ""}>Sandbox (testes)</option>
+               <option value="homologacao" ${config.ambiente === "homologacao" ? "selected" : ""}>Homologação (testes)</option>
                <option value="producao" ${config.ambiente === "producao" ? "selected" : ""}>Produção (valendo de verdade)</option>
              </select>
            </div>
-           <div class="campo"><label>Token de API</label>
-             <input name="token_api" type="password" autocomplete="new-password"
-                    placeholder="${config.token_configurado ? "deixe em branco para manter o token atual" : "nenhum token configurado ainda"}">
+           <div class="campo"><label>Agência</label><input name="agencia" value="${config.agencia || ""}"></div>
+           <div class="campo"><label>Dígito da agência</label><input name="digito_agencia" value="${config.digito_agencia || ""}"></div>
+           <div class="campo"><label>Conta</label><input name="conta" value="${config.conta || ""}"></div>
+           <div class="campo"><label>Dígito da conta</label><input name="digito_conta" value="${config.digito_conta || ""}"></div>
+           <div class="campo"><label>Carteira</label><input name="carteira" value="${config.carteira || ""}"></div>
+           <div class="campo"><label>Convênio</label><input name="convenio" value="${config.convenio || ""}"></div>
+           <div class="campo"><label>Código do cedente</label><input name="codigo_cedente" value="${config.codigo_cedente || ""}"></div>
+           <p class="dica">Próximo nosso número: <strong>${config.proximo_nosso_numero}</strong> · Próxima remessa: <strong>${config.proximo_numero_remessa}</strong></p>
+           <div class="aviso-real">
+             O layout do arquivo CNAB 240 usado aqui segue o padrão FEBRABAN geral — antes de enviar a primeira
+             remessa de verdade ao banco, valide o arquivo gerado contra o Manual de Especificação Técnica que o
+             Sicredi/Unicred fornecem (alguns campos específicos do banco ainda não foram confirmados).
            </div>
            ${config.atualizado_em ? `<p class="dica">Última alteração: ${fmtData(config.atualizado_em)}.</p>` : ""}
            <div class="rodape-modal" style="padding:0;">
@@ -11375,6 +11393,95 @@
          </form>
        </div>`,
       "financeiro-configuracao-boleto"
+    );
+  }
+
+  async function renderRemessaCnab() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const [pendentes, remessas] = await Promise.all([
+      chamarApi("/financeiro/boletos/remessa/pendentes"),
+      chamarApi("/financeiro/boletos/remessa"),
+    ]);
+    const podeGerar = temPermissao("financeiro", "gerar_boleto");
+
+    const linhasPendentes = pendentes.map((b) => `<tr>
+      <td><input type="checkbox" data-remessa-boleto="${b.id}" checked></td>
+      <td>${fmtMoeda(b.valor)}</td>
+      <td>${escapeHtml(b.vencimento)}</td>
+      <td class="mono texto-suave" style="font-size:11px;">${escapeHtml(b.nosso_numero)}</td>
+    </tr>`).join("");
+
+    const linhasHistorico = remessas.map((r) => `<tr>
+      <td>${escapeHtml(r.nome_arquivo)}</td>
+      <td>${r.quantidade_titulos}</td>
+      <td>${fmtMoeda(r.valor_total)}</td>
+      <td>${fmtData(r.gerado_em)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Remessa CNAB</h2>
+       <div class="cartao">
+         <p class="dica">
+           Gera o arquivo de remessa com os boletos pendentes abaixo, baixa ele pra você subir no internet
+           banking do banco. Nenhum dado é enviado direto ao banco por aqui.
+         </p>
+         ${linhasPendentes ? `
+           <form data-form="gerar-remessa-cnab">
+             <table>
+               <thead><tr><th>Incluir</th><th>Valor</th><th>Vencimento</th><th>Nosso número</th></tr></thead>
+               <tbody>${linhasPendentes}</tbody>
+             </table>
+             ${podeGerar ? '<button type="submit" class="botao" style="margin-top:12px;">Gerar remessa e baixar arquivo</button>' : ""}
+           </form>
+         ` : '<p class="texto-suave">Nenhum boleto pendente pra remessa no momento.</p>'}
+       </div>
+       <div class="cartao">
+         <h3>Remessas já geradas</h3>
+         ${linhasHistorico ? `<table>
+           <thead><tr><th>Arquivo</th><th>Títulos</th><th>Valor total</th><th>Gerada em</th></tr></thead>
+           <tbody>${linhasHistorico}</tbody>
+         </table>` : '<p class="texto-suave">Nenhuma remessa gerada ainda.</p>'}
+       </div>`,
+      "financeiro-remessa-cnab"
+    );
+  }
+
+  async function renderRetornoCnab() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const retornos = await chamarApi("/financeiro/boletos/retorno");
+    const podeProcessar = temPermissao("financeiro", "registrar_baixa_receber");
+
+    const linhasHistorico = retornos.map((r) => `<tr>
+      <td>${escapeHtml(r.nome_arquivo)}</td>
+      <td>${r.quantidade_titulos_lidos}</td>
+      <td>${r.quantidade_baixas_geradas}</td>
+      <td>${fmtData(r.processado_em)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Retorno CNAB</h2>
+       <div class="cartao">
+         <p class="dica">
+           Suba aqui o arquivo de retorno que o banco disponibilizou no internet banking — o sistema lê cada
+           título, dá baixa automática nos que o banco confirmou como pagos, e mostra o resultado de cada linha.
+         </p>
+         ${podeProcessar ? `
+           <form data-form="processar-retorno-cnab">
+             <div class="campo"><label>Arquivo de retorno (.ret/.txt)</label>
+               <input type="file" name="arquivo" accept=".ret,.txt,.rem" required>
+             </div>
+             <button type="submit" class="botao">Processar retorno</button>
+           </form>
+         ` : ""}
+       </div>
+       <div class="cartao">
+         <h3>Retornos já processados</h3>
+         ${linhasHistorico ? `<table>
+           <thead><tr><th>Arquivo</th><th>Títulos lidos</th><th>Baixas geradas</th><th>Processado em</th></tr></thead>
+           <tbody>${linhasHistorico}</tbody>
+         </table>` : '<p class="texto-suave">Nenhum retorno processado ainda.</p>'}
+       </div>`,
+      "financeiro-retorno-cnab"
     );
   }
 
@@ -12449,13 +12556,13 @@
   // ledger, referenciando a original. Esta tela só lista o ledger completo
   // (baixas normais + estornos) e oferece o botão "Estornar" em cada baixa
   // normal ainda não estornada.
-  // Fase 71 — Boletos Bancários (só se aplica a contas a RECEBER).
+  // Fase 126 — Boletos Bancários via CNAB 240 (só se aplica a contas a RECEBER).
   const ROTULOS_STATUS_BOLETO = {
-    pendente: ["amarelo", "Pendente"],
+    pendente: ["amarelo", "Pendente (ainda não remetido)"],
+    em_remessa: ["amarelo", "Em remessa (aguardando o banco)"],
     recebido: ["ativo", "Recebido"],
     vencido: ["bloqueado", "Vencido"],
     cancelado: ["inativo", "Cancelado"],
-    erro: ["bloqueado", "Erro"],
   };
 
   function seloBoleto(status) {
@@ -12466,27 +12573,25 @@
   function secaoBoletosDaConta(conta, boletos) {
     const podeGerar = temPermissao("financeiro", "gerar_boleto");
     const podeCancelar = temPermissao("financeiro", "cancelar_boleto");
-    const existeBoletoPendente = boletos.some((b) => b.status === "pendente");
+    const existeBoletoAtivo = boletos.some((b) => b.status === "pendente" || b.status === "em_remessa");
 
     const linhas = boletos.map((b) => `<tr>
       <td>${seloBoleto(b.status)}</td>
       <td>${fmtMoeda(b.valor)}</td>
       <td>${escapeHtml(b.vencimento)}</td>
-      <td>${b.status === "pendente" ? `<span class="mono texto-suave" style="font-size:11px;">${escapeHtml(b.linha_digitavel || "—")}</span>` : "—"}</td>
+      <td><span class="mono texto-suave" style="font-size:11px;">${escapeHtml(b.linha_digitavel || "—")}</span></td>
       <td style="display:flex;gap:6px;flex-wrap:wrap;">
-        ${b.url_boleto ? `<a class="botao secundario pequeno" href="${escapeHtml(b.url_boleto)}" target="_blank" rel="noopener">Ver boleto</a>` : ""}
-        ${b.status === "pendente" ? `<button class="botao secundario pequeno" data-acao="consultar-status-boleto" data-id="${b.id}" data-conta-id="${conta.id}">Consultar status</button>` : ""}
-        ${b.status === "pendente" && podeCancelar ? `<button class="botao perigo pequeno" data-acao="abrir-cancelar-boleto" data-id="${b.id}" data-conta-id="${conta.id}">Cancelar</button>` : ""}
+        ${(b.status === "pendente" || b.status === "em_remessa") && podeCancelar ? `<button class="botao perigo pequeno" data-acao="abrir-cancelar-boleto" data-id="${b.id}" data-conta-id="${conta.id}">Cancelar</button>` : ""}
       </td>
     </tr>`).join("");
 
     return `
-      <h4>Boleto bancário (Fase 71)</h4>
+      <h4>Boleto bancário (CNAB 240)</h4>
       ${linhas ? `<table>
         <thead><tr><th>Status</th><th>Valor</th><th>Vencimento</th><th>Linha digitável</th><th>Ação</th></tr></thead>
         <tbody>${linhas}</tbody>
       </table>` : '<p class="texto-suave">Nenhum boleto gerado para esta conta ainda.</p>'}
-      ${conta.status !== "pago" && conta.status !== "cancelado" && !existeBoletoPendente && podeGerar
+      ${conta.status !== "pago" && conta.status !== "cancelado" && !existeBoletoAtivo && podeGerar
         ? `<button class="botao secundario" data-acao="gerar-boleto" data-conta-id="${conta.id}">Gerar boleto (saldo em aberto)</button>` : ""}
       <p class="dica">Via provedor terceirizado (Asaas) — configure o token de API em
       <a href="#/financeiro-configuracao-boleto">Configuração de Boleto</a> antes da primeira emissão.
@@ -13960,26 +14065,16 @@
 
       // ---- Fase 71: Financeiro — Boleto Bancário ----
       case "gerar-boleto": {
-        // Fase 72 (auditoria de segurança): mesmo raciocínio de
-        // "emitir-nfe" acima — "Gerar boleto" chama uma API financeira
-        // externa (Asaas) e um duplo-clique não pode disparar uma
-        // segunda geração enquanto a primeira ainda está em voo.
+        // Fase 126 — "Gerar boleto" agora é 100% local (CNAB, sem API
+        // externa): só reserva o nosso número e calcula a linha
+        // digitável; nada é enviado ao banco ainda (isso só acontece na
+        // tela de Remessa CNAB). Mesmo assim mantém a trava de
+        // duplo-clique — nunca custa nada ser cauteloso aqui.
         if (alvo.disabled) return;
-        if (!confirm("Gerar boleto para o saldo em aberto desta conta? Esta ação envia os dados ao provedor de boleto configurado.")) return;
+        if (!confirm("Gerar boleto para o saldo em aberto desta conta?")) return;
         alvo.disabled = true;
         await chamarApi(`/financeiro/boletos/contas-receber/${alvo.dataset.contaId}/gerar`, { method: "POST" });
-        definirFlash("ok", "Boleto gerado.");
-        fecharModais();
-        return renderFinanceiro();
-      }
-      case "consultar-status-boleto": {
-        const boletoAtualizado = await chamarApi(`/financeiro/boletos/${alvo.dataset.id}/consultar-status`, { method: "POST" });
-        definirFlash(
-          "ok",
-          boletoAtualizado.status === "recebido"
-            ? "Pagamento confirmado — a baixa foi registrada automaticamente."
-            : `Status atual: ${boletoAtualizado.status}.`
-        );
+        definirFlash("ok", "Boleto gerado — inclua-o numa remessa (Financeiro > Remessa CNAB) para enviar ao banco.");
         fecharModais();
         return renderFinanceiro();
       }
@@ -15164,10 +15259,54 @@
       case "salvar-configuracao-boleto": {
         await chamarApi("/financeiro/boletos/configuracao", {
           method: "PUT",
-          body: { provedor: dados.get("provedor"), ambiente: dados.get("ambiente"), token_api: dados.get("token_api") || undefined },
+          body: {
+            banco_codigo: dados.get("banco_codigo") || null, ambiente: dados.get("ambiente"),
+            agencia: dados.get("agencia") || null, digito_agencia: dados.get("digito_agencia") || null,
+            conta: dados.get("conta") || null, digito_conta: dados.get("digito_conta") || null,
+            carteira: dados.get("carteira") || null, convenio: dados.get("convenio") || null,
+            codigo_cedente: dados.get("codigo_cedente") || null,
+          },
         });
         definirFlash("ok", "Configuração de boleto salva.");
         return renderConfiguracaoBoleto();
+      }
+      case "gerar-remessa-cnab": {
+        const idsSelecionados = Array.from(form.querySelectorAll("[data-remessa-boleto]:checked"))
+          .map((el) => Number(el.dataset.remessaBoleto));
+        if (idsSelecionados.length === 0) {
+          definirFlash("erro", "Selecione ao menos um boleto para incluir na remessa.");
+          return;
+        }
+        const resultado = await chamarApi("/financeiro/boletos/remessa/gerar", {
+          method: "POST", body: { boleto_ids: idsSelecionados },
+        });
+        const blob = new Blob([resultado.conteudo], { type: "text/plain;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = resultado.nome_arquivo;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        definirFlash("ok", `Remessa gerada (${resultado.quantidade_titulos} título(s), ${fmtMoeda(resultado.valor_total)}) — arquivo baixado.`);
+        return renderRemessaCnab();
+      }
+      case "processar-retorno-cnab": {
+        const arquivo = dados.get("arquivo");
+        if (!arquivo || !arquivo.size) {
+          definirFlash("erro", "Selecione o arquivo de retorno.");
+          return;
+        }
+        const conteudo = await arquivo.text();
+        const resultado = await chamarApi("/financeiro/boletos/retorno/processar", {
+          method: "POST", body: { conteudo, nome_arquivo: arquivo.name },
+        });
+        definirFlash(
+          "ok",
+          `Retorno processado: ${resultado.quantidade_titulos_lidos} título(s) lido(s), ${resultado.quantidade_baixas_geradas} baixa(s) registrada(s).`
+        );
+        return renderRetornoCnab();
       }
       case "cancelar-nota": {
         await chamarApi(`/fiscal/notas/${form.dataset.id}/cancelar`, {

@@ -417,9 +417,9 @@ PERMISSOES_PADRAO = [
     # separado — gerar/cancelar boleto é claramente uma ação do dia a dia
     # do Financeiro, não um domínio de negócio à parte como o Fiscal
     # (NF-e) da Fase 70, que tem empresa emitente, regime tributário etc.
-    ("financeiro", "gerar_boleto", "Gerar um boleto bancário de verdade para uma conta a receber, via provedor terceirizado", 0),
-    ("financeiro", "cancelar_boleto", "Cancelar um boleto ainda pendente (não pago)", 0),
-    ("financeiro", "configurar_boleto", "Configurar o provedor de emissão de boleto (token de API, ambiente sandbox/produção)", 0),
+    ("financeiro", "gerar_boleto", "Gerar um boleto bancário (CNAB 240) para uma conta a receber e incluí-lo numa remessa", 0),
+    ("financeiro", "cancelar_boleto", "Cancelar um boleto ainda pendente ou já remetido ao banco (não pago)", 0),
+    ("financeiro", "configurar_boleto", "Configurar os dados bancários de cobrança (banco, agência, conta, carteira, convênio)", 0),
     # ---- Fase 75 (Etapas de Processo Configuráveis + Painel de Chão de
     # Fábrica em Tempo Real) ----
     # Reaproveita o módulo "producao" já existente (mesmo raciocínio da
