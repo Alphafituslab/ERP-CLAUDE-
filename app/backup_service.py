@@ -90,6 +90,56 @@ def _enviar_para_nuvem(config, nome_arquivo, dados_backup):
     return chave
 
 
+def _cliente_s3_nuvem(config):
+    try:
+        import boto3
+    except ImportError:
+        raise RuntimeError(
+            "A biblioteca 'boto3' não está instalada neste ambiente Python — necessária para acessar a "
+            "nuvem. Rode 'pip install -r requirements.txt' novamente (ou reabra o iniciar.bat) e tente de novo."
+        )
+    if not config.get("nuvem_endpoint_url") or not config.get("nuvem_bucket"):
+        raise ValueError("Configure ao menos nuvem_endpoint_url e nuvem_bucket antes de acessar a nuvem.")
+    return boto3.client(
+        "s3",
+        endpoint_url=config["nuvem_endpoint_url"],
+        region_name=config.get("nuvem_regiao") or "us-east-1",
+        aws_access_key_id=config.get("nuvem_access_key") or None,
+        aws_secret_access_key=config.get("nuvem_secret_key") or None,
+    )
+
+
+def listar_backups_nuvem(config):
+    """Pedido do usuário (2026-09-01) — pra alimentar o botão 'Puxar cópia
+    mais recente da nuvem agora': lista os backups já enviados (mesmo
+    prefixo usado por `_enviar_para_nuvem`), do mais recente pro mais
+    antigo. Só precisa de permissão de LEITURA (ListBucket/GetObject) —
+    de propósito, essa é a MESMA credencial restrita usada pra enviar,
+    que nunca tem permissão de apagar (ver nota de segurança na Fase do
+    'segundo servidor' — a chave usada aqui não consegue destruir
+    backups antigos mesmo se for comprometida)."""
+    cliente = _cliente_s3_nuvem(config)
+    prefixo = (config.get("nuvem_prefixo") or "").strip().strip("/")
+    prefixo_busca = f"{prefixo}/" if prefixo else ""
+    resposta = cliente.list_objects_v2(Bucket=config["nuvem_bucket"], Prefix=prefixo_busca)
+    objetos = [
+        {"chave": obj["Key"], "tamanho_bytes": obj["Size"], "modificado_em": obj["LastModified"].isoformat()}
+        for obj in resposta.get("Contents", [])
+        # Só arquivos .db — a pasta pode ter outras coisas no futuro
+        # (ex.: memorial-tecnico/, protocolo-estabilidade/, já vistas no
+        # bucket) e não faz sentido oferecer isso como "restaurar".
+        if obj["Key"].endswith(".db")
+    ]
+    objetos.sort(key=lambda o: o["modificado_em"], reverse=True)
+    return objetos
+
+
+def baixar_backup_nuvem(config, chave):
+    cliente = _cliente_s3_nuvem(config)
+    resposta = cliente.get_object(Bucket=config["nuvem_bucket"], Key=chave)
+    return resposta["Body"].read()
+
+
 def _enviar_para_email(config_smtp, config, nome_arquivo, dados_backup):
     """Recebe `config_smtp` JÁ CARREGADA (não uma conexão de banco) de
     propósito: esta função roda dentro de uma thread separada (ver

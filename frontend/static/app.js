@@ -6561,8 +6561,23 @@
           Alphafitus OS for iniciado (nunca com o servidor já rodando, para nunca correr o risco de corromper o
           banco). Antes de trocar, uma cópia de segurança do banco atual é guardada automaticamente.
         </p>
+
+        <div style="border:1px solid var(--borda, #333);border-radius:8px;padding:12px;margin-bottom:14px;">
+          <strong>Puxar direto da nuvem</strong>
+          <p class="texto-suave" style="margin:4px 0 8px;">
+            Pensado pra um segundo computador (servidor reserva): baixa e agenda a restauração da cópia mais
+            recente já enviada pra nuvem, sem precisar baixar/subir arquivo na mão. Só funciona se o envio pra
+            nuvem estiver configurado e ativo (Backups > Configuração).
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button type="button" class="botao" data-acao="puxar-backup-mais-recente-nuvem">☁ Puxar cópia mais recente da nuvem agora</button>
+            <button type="button" class="botao secundario" data-acao="listar-backups-nuvem">Ver outras versões na nuvem</button>
+          </div>
+          <div data-lista-backups-nuvem style="margin-top:10px;"></div>
+        </div>
+
         <form data-form="restaurar-backup">
-          <div class="campo"><label>Arquivo de backup (.db)</label>
+          <div class="campo"><label>Ou envie um arquivo de backup (.db) manualmente</label>
             <input type="file" name="arquivo" accept=".db,application/octet-stream" required></div>
           <button type="submit" class="botao perigo">Enviar e agendar restauração</button>
         </form>
@@ -14613,6 +14628,40 @@
         if (!confirm("Cancelar a restauração pendente? O arquivo enviado será descartado.")) return;
         await chamarApi("/sistema/backup/restauracao-pendente", { method: "DELETE" });
         definirFlash("ok", "Restauração pendente cancelada.");
+        return renderMemorialBackups();
+      }
+      case "puxar-backup-mais-recente-nuvem": {
+        if (!confirm("Puxar e agendar a restauração da cópia MAIS RECENTE já enviada pra nuvem? A troca só acontece no próximo reinício do sistema.")) return;
+        const resp = await chamarApi("/sistema/backup/nuvem/restaurar", { method: "POST", body: {} });
+        definirFlash("ok", resp.mensagem || "Backup da nuvem baixado e restauração agendada.");
+        return renderMemorialBackups();
+      }
+      case "listar-backups-nuvem": {
+        const area = app.querySelector("[data-lista-backups-nuvem]");
+        if (!area) return;
+        area.innerHTML = '<p class="texto-suave">Carregando…</p>';
+        try {
+          const objetos = await chamarApi("/sistema/backup/nuvem/listar");
+          area.innerHTML = objetos.length
+            ? `<table><thead><tr><th>Arquivo</th><th>Data</th><th>Tamanho</th><th></th></tr></thead><tbody>
+                ${objetos.map((o) => `<tr>
+                  <td class="mono" style="font-size:12px;">${escapeHtml(o.chave)}</td>
+                  <td class="texto-suave">${fmtData(o.modificado_em)}</td>
+                  <td class="texto-suave">${(o.tamanho_bytes / 1024 / 1024).toFixed(1)} MB</td>
+                  <td><button type="button" class="botao secundario pequeno" data-acao="puxar-backup-especifico-nuvem" data-chave="${escapeHtml(o.chave)}">Restaurar esta</button></td>
+                </tr>`).join("")}
+              </tbody></table>`
+            : '<p class="texto-suave">Nenhum backup encontrado na nuvem ainda.</p>';
+        } catch (e) {
+          area.innerHTML = `<p class="mensagem-erro">${escapeHtml(e.message || "Não foi possível listar os backups na nuvem.")}</p>`;
+        }
+        return;
+      }
+      case "puxar-backup-especifico-nuvem": {
+        const chave = alvo.dataset.chave;
+        if (!confirm(`Puxar e agendar a restauração de "${chave}"? A troca só acontece no próximo reinício do sistema.`)) return;
+        const resp = await chamarApi("/sistema/backup/nuvem/restaurar", { method: "POST", body: { chave } });
+        definirFlash("ok", resp.mensagem || "Backup da nuvem baixado e restauração agendada.");
         return renderMemorialBackups();
       }
       case "selecionar-lote-rastreabilidade":

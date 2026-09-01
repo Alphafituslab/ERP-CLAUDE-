@@ -568,3 +568,88 @@ def cancelar_restauracao_pendente():
         acao="restauracao_de_backup_cancelada", ip=client_ip(), dispositivo=client_device(),
     )
     return jsonify({"restauracao_pendente": False})
+
+
+# ---- "Puxar da nuvem" (pedido do usuário, 2026-09-01) ----
+#
+# Até aqui, restaurar a partir do backup na nuvem era manual em 2 passos
+# (baixar o arquivo de dentro do MinIO na mão, depois subir pela tela de
+# Restauração acima). Isso é o mesmo mecanismo — só que o download do
+# objeto na nuvem acontece no SERVIDOR (usando a MESMA credencial já
+# configurada em Backups, que desde este pedido é uma chave restrita a
+# ler/gravar, nunca a apagar), sem a pessoa precisar baixar/subir arquivo
+# nenhum na mão. Pensado especificamente pra um "segundo servidor" (PC
+# reserva) puxar a cópia mais atual da nuvem com um clique.
+
+@bp.get("/backup/nuvem/listar")
+@requires_permission("sistema", "restaurar_backup")
+def listar_backups_da_nuvem():
+    conn = get_db()
+    config = backup_service.obter_configuracao(conn)
+    if not config.get("nuvem_ativo"):
+        raise ApiError("O envio de backup para a nuvem não está configurado/ativo (Sistema > Backups).", status=400)
+    try:
+        objetos = backup_service.listar_backups_nuvem(config)
+    except Exception as erro:
+        raise ApiError(f"Não foi possível listar os backups na nuvem: {erro}", status=502)
+    return jsonify(objetos)
+
+
+@bp.post("/backup/nuvem/restaurar")
+@requires_permission("sistema", "restaurar_backup")
+def restaurar_da_nuvem():
+    """Corpo opcional: {"chave": "..."} pra escolher um backup específico
+    (ver /backup/nuvem/listar); sem informar, pega automaticamente o mais
+    recente. Mesmo efeito de `restaurar_backup()` acima (deixa pronto pro
+    próximo reinício) — só muda de onde os bytes vêm."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    config = backup_service.obter_configuracao(conn)
+    if not config.get("nuvem_ativo"):
+        raise ApiError("O envio de backup para a nuvem não está configurado/ativo (Sistema > Backups).", status=400)
+
+    dados = request.get_json(silent=True) or {}
+    chave = dados.get("chave")
+    if not chave:
+        try:
+            objetos = backup_service.listar_backups_nuvem(config)
+        except Exception as erro:
+            raise ApiError(f"Não foi possível listar os backups na nuvem: {erro}", status=502)
+        if not objetos:
+            raise ApiError("Nenhum backup encontrado na nuvem ainda.", status=404)
+        chave = objetos[0]["chave"]
+
+    try:
+        dados_backup = backup_service.baixar_backup_nuvem(config, chave)
+    except Exception as erro:
+        raise ApiError(f"Não foi possível baixar o backup '{chave}' da nuvem: {erro}", status=502)
+
+    descritor, caminho_tmp = tempfile.mkstemp(suffix=".db", prefix="alphafitus_restaurar_nuvem_")
+    os.close(descritor)
+    try:
+        with open(caminho_tmp, "wb") as f:
+            f.write(dados_backup)
+        if os.path.getsize(caminho_tmp) > TAMANHO_MAXIMO_RESTAURACAO_BYTES:
+            raise ApiError("Arquivo maior que o limite permitido para restauração (500 MB).", status=400)
+        _validar_arquivo_backup(caminho_tmp)
+
+        caminho_pendente = db_module.caminho_restauracao_pendente()
+        import shutil
+        shutil.copy2(caminho_tmp, caminho_pendente)
+    finally:
+        if os.path.exists(caminho_tmp):
+            os.remove(caminho_tmp)
+
+    audit.registrar(
+        conn, tabela="sistema_backup", registro_id=None, usuario_id=usuario_atual["id"],
+        acao="restauracao_de_backup_da_nuvem_agendada", valor_novo={"chave_nuvem": chave},
+        ip=client_ip(), dispositivo=client_device(),
+    )
+    return jsonify({
+        "restauracao_pendente": True,
+        "chave_nuvem": chave,
+        "mensagem": (
+            f"Backup '{chave}' baixado da nuvem e validado. A restauração será concluída na PRÓXIMA VEZ "
+            "que o Alphafitus OS for iniciado (feche e abra o sistema de novo para concluir)."
+        ),
+    }), 202
