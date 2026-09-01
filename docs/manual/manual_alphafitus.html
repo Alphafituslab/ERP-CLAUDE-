@@ -175,9 +175,9 @@ ul.lista-simples li { margin-bottom: 6px; }
       <h1>Alphafitus OS</h1>
       <p>Guia completo de todos os módulos do sistema: para que cada um serve, quando usar, e a ordem recomendada de operação — do primeiro cadastro até o produto faturado e entregue.</p>
       <div class="cabecalho-meta">
-        <span>Manual v1.1</span>
-        <span>Sistema v123.5</span>
-        <span>Atualizado em 31/08/2026</span>
+        <span>Manual v1.2</span>
+        <span>Sistema v126.0</span>
+        <span>Atualizado em 01/09/2026</span>
       </div>
     </header>
 
@@ -199,13 +199,14 @@ ul.lista-simples li { margin-bottom: 6px; }
       <li><strong>9. Relatórios e Auditoria</strong>A qualquer momento — custo do produto, rastreabilidade completa de um lote (recall), trilha de auditoria de quem fez o quê.</li>
     </ol>
     <div class="aviso-real">
-      <strong>Estado real do seu sistema hoje:</strong> a maior parte dessa cadeia operacional (Itens, Fornecedores, Lotes, Estoque, Produção) ainda está vazia — o uso até agora se concentrou no <strong>Memorial Técnico</strong> (85 memoriais reais cadastrados) e no início do <strong>Comercial</strong> (1 cliente, 2 pedidos). As seções abaixo explicam cada módulo mesmo assim, com exemplos de como usar quando chegar a hora.
+      <strong>Estado real do seu sistema hoje (01/09):</strong> os cadastros base já estão populados de verdade — <strong>226 clientes, 332 fornecedores, 2.417 itens e 1.629 lotes com saldo</strong>, importados do sistema anterior (Ema) em 31/08. O <strong>Financeiro</strong> também: 442 contas a pagar e 297 a receber em aberto, refletindo o saldo devedor/credor real da empresa naquela data. O que ainda não está em uso operacional é a parte de <strong>fabricação</strong> propriamente dita — Fórmulas, Ordens de Produção e Cotações seguem zeradas — e o Comercial continua com só 2 pedidos de venda lançados. O <strong>Memorial Técnico</strong> continua sendo o módulo mais usado (85 memoriais reais).
     </div>
 
     <h2 id="itens"><span class="num">1</span> Itens</h2>
-    <p class="subtitulo">Menu raiz · Cadastro base · <span class="selo selo-cinza">0 itens cadastrados hoje</span></p>
+    <p class="subtitulo">Menu raiz · Cadastro base · <span class="selo selo-verde">2.417 itens cadastrados hoje</span></p>
     <p>É o catálogo de matérias-primas, embalagens e produtos acabados — a base de tudo que o sistema movimenta. Cada item tem unidade de medida, tipo, e pode ser marcado como <strong>"exige fornecedor homologado"</strong> (só recebe lote de fornecedor aprovado pela Qualidade) e ter um <strong>estoque mínimo</strong> configurado (dispara aviso quando o saldo real cai abaixo dele).</p>
     <div class="exemplo"><strong>Exemplo real:</strong> pra cadastrar "Creatina Monohidratada" como matéria-prima, você define a unidade (kg), marca "exige fornecedor homologado" (já que é um ativo crítico de fórmula) e define estoque mínimo de 50kg — abaixo disso, o item aparece automaticamente no Painel Tempo Real, na coluna "Abaixo do Estoque Mínimo".</div>
+    <div class="aviso-real">Os 2.417 itens de hoje vieram de uma importação do sistema anterior (Ema) — cerca de 40% deles (962 itens) não tinham uma classificação de tipo confiável na origem e entraram como "matéria-prima" por padrão, marcados numa lista separada pra você reclassificar aos poucos pela tela, sem pressa.</div>
 
     <h2 id="empresas"><span class="num">2</span> Empresas <small style="font-weight:400;color:var(--texto-suave);font-size:13px;">(Administração)</small></h2>
     <p class="subtitulo">Dados fiscais da própria empresa — usados na emissão de NF-e.</p>
@@ -213,11 +214,12 @@ ul.lista-simples li { margin-bottom: 6px; }
 
     <h2 id="qualidade"><span class="num">3</span> Qualidade</h2>
     <p class="subtitulo">Fornecedores, Lotes, Desvios e a configuração de tolerâncias — o controle que garante que nada chega ao cliente sem ser aprovado.</p>
-    <h3>Fornecedores</h3>
+    <h3>Fornecedores <span class="selo selo-verde">332 cadastrados hoje</span></h3>
     <p>Cadastro de fornecedores com CNPJ, lead time (prazo de entrega em dias — usado pelo MRP para calcular até quando comprar) e a lista de itens homologados para cada um. Um fornecedor só aparece como opção de recebimento para um item marcado "exige homologação" depois de homologado aqui.</p>
-    <h3>Lotes / Qualidade</h3>
+    <h3>Lotes / Qualidade <span class="selo selo-verde">1.629 lotes com saldo hoje</span></h3>
     <p>Todo lote — de matéria-prima recebida ou de produto acabado produzido — nasce em <strong>quarentena</strong>. Só é liberado para uso/venda depois que o laboratório registra a análise e a Qualidade aprova — por desenho, a mesma pessoa nunca faz as duas coisas (segregação de função).</p>
-    <div class="exemplo"><strong>Fluxo real:</strong> chega uma entrega de embalagens → "Registrar recebimento" cria o lote em quarentena → alguém do Laboratório lança o resultado da análise → alguém da Qualidade aprova (ou reprova, abrindo automaticamente um Desvio) → só então o lote fica disponível no Estoque para consumo.</div>
+    <div class="exemplo"><strong>Fluxo real (recebimento novo):</strong> chega uma entrega de embalagens → "Registrar recebimento" cria o lote em quarentena → alguém do Laboratório lança o resultado da análise → alguém da Qualidade aprova (ou reprova, abrindo automaticamente um Desvio) → só então o lote fica disponível no Estoque para consumo.</div>
+    <div class="aviso-real">Os 1.629 lotes de hoje são <strong>saldo de abertura</strong> importado do sistema anterior — entraram direto como "aprovado" (já eram estoque físico real e usável antes da importação), sem passar pela fila de análise acima. Só um lote recebido DAQUI PRA FRENTE passa pelo fluxo de quarentena normal.</div>
     <h3>Desvios</h3>
     <p>Registro formal de qualquer não-conformidade — um lote reprovado na análise, uma etapa de produção fora do padrão, uma reclamação de cliente. Tem criticidade e status, e fica no histórico permanente do item/lote afetado (rastreabilidade).</p>
     <h3>Configuração de Qualidade</h3>
@@ -265,7 +267,7 @@ ul.lista-simples li { margin-bottom: 6px; }
     <p>Um colaborador solicita (ex.: luvas, máscaras, material de limpeza da linha), alguém aprova, e a saída é registrada — com catálogo próprio de materiais/EPI, separado dos itens de produção/venda.</p>
 
     <h2 id="comercial"><span class="num">9</span> Comercial &amp; Vendas</h2>
-    <p class="subtitulo">Do primeiro contato com o cliente até a nota fiscal emitida. <span class="selo selo-verde">1 cliente, 2 pedidos já reais</span></p>
+    <p class="subtitulo">Do primeiro contato com o cliente até a nota fiscal emitida. <span class="selo selo-verde">226 clientes, 2 pedidos de venda lançados</span></p>
     <table>
       <thead><tr><th>Tela</th><th>Para que serve</th></tr></thead>
       <tbody>
@@ -279,17 +281,20 @@ ul.lista-simples li { margin-bottom: 6px; }
         <tr><td>Transportadoras</td><td>Cadastro de quem coleta/entrega — aparece no Painel Tempo Real ("Expedido / Aguardando Coleta").</td></tr>
       </tbody>
     </table>
-    <div class="exemplo"><strong>Cliente real cadastrado:</strong> "alphanutrition" já está no sistema, com 2 pedidos novos lançados — ainda sem histórico de compra recorrente (aparece em "Clientes sem Atendimento" no Painel Executivo até o primeiro faturamento).</div>
+    <div class="exemplo"><strong>Clientes reais:</strong> "alphanutrition" (o primeiro cadastrado) tem 2 pedidos lançados — ainda sem histórico de compra recorrente (aparece em "Clientes sem Atendimento" no Painel Executivo até o primeiro faturamento). Os outros 225 clientes vieram da importação do sistema anterior — cadastro completo (CNPJ/CPF, endereço, contato), mas ainda sem nenhum pedido lançado aqui dentro.</div>
 
     <h2 id="financeiro"><span class="num">10</span> Financeiro</h2>
-    <p class="subtitulo">Contas a pagar/receber, conciliação bancária e o resultado consolidado.</p>
+    <p class="subtitulo">Contas a pagar/receber, conciliação bancária e o resultado consolidado. <span class="selo selo-verde">442 contas a pagar (R$ 1,50M) · 297 a receber (R$ 1,31M) em aberto</span></p>
     <ul class="lista-simples">
       <li><strong>Financeiro</strong> — lançamentos de contas a pagar (fornecedor) e a receber (cliente), com baixa de pagamento/recebimento.</li>
       <li><strong>Conciliação Bancária</strong> — confere o extrato do banco contra o que foi lançado, item por item.</li>
       <li><strong>DRE Simplificado</strong> — Demonstrativo de Resultado, montado a partir dos lançamentos + custeio real de produção.</li>
-      <li><strong>Configuração de Boleto</strong> — dados bancários usados pra emitir boleto de cobrança.</li>
+      <li><strong>Configuração de Boleto</strong> — dados do convênio de cobrança com o banco (Sicredi ou Unicred).</li>
+      <li><strong>Remessa CNAB</strong> — gera o arquivo de boletos pendentes pra você baixar e subir no internet banking do banco.</li>
+      <li><strong>Retorno CNAB</strong> — lê o arquivo que o banco devolve e dá baixa automática nos títulos que ele confirmou como pagos.</li>
     </ul>
     <div class="aviso-real">Recebimentos e pagamentos acima de R$ 1.000 exigem <strong>dupla aprovação</strong> (uma segunda pessoa confirma antes de valer) — trava de segurança, não é bug se pedir uma segunda confirmação.</div>
+    <div class="aviso-real">As 442 contas a pagar e 297 a receber de hoje são o <strong>saldo em aberto</strong> importado do sistema anterior (Ema) — o boleto agora funciona sem gateway terceirizado: o sistema gera o arquivo CNAB 240 direto para Sicredi/Unicred (nenhuma chamada de API a banco nenhum). Antes de mandar a primeira remessa de verdade, é preciso cadastrar a Empresa (seção 2) e validar o layout do arquivo contra o manual técnico que o banco fornece.</div>
 
     <h2 id="relatorios"><span class="num">11</span> Relatórios &amp; Custos</h2>
     <ul class="lista-simples">
@@ -329,7 +334,7 @@ ul.lista-simples li { margin-bottom: 6px; }
     <p>O <strong>Painel Tempo Real</strong> mostra, em colunas, onde cada pedido/ordem está agora na cadeia (Aguardando Aprovação Financeira → Separação → Compras → Quarentena → Produção → Expedição) — atualiza sozinho a cada poucos segundos. O <strong>Painel Executivo</strong> é a visão consolidada (BI) por mês/ano: vendas, funil de pedidos, desempenho por vendedor, produção em andamento.</p>
 
     <div class="rodape">
-      Manual Alphafitus OS — v1.0 · Sistema v123.4 · Gerado a partir do sistema real em produção, navegado e conferido tela por tela em 31/08/2026.
+      Manual Alphafitus OS — v1.2 · Sistema v126.0 · Gerado a partir do sistema real em produção, navegado e conferido tela por tela em 31/08/2026, atualizado em 01/09/2026 com a importação de dados-mestre e o novo boleto via CNAB.
     </div>
   </main>
 </div>
