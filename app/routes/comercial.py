@@ -857,6 +857,19 @@ def listar_pedidos():
     conn = get_db()
     status = request.args.get("status")
     cliente_id = request.args.get("cliente_id", type=int)
+    # Fase 131 — tela própria de Pedidos de Venda, com filtros que a
+    # mini-tabela dentro de Comercial nunca teve: tipo (terceirização/
+    # marca própria) e "faturado" (existe NF-e AUTORIZADA vinculada —
+    # 'sim'/'nao', qualquer outro valor é ignorado, mesmo raciocínio de
+    # nunca quebrar com um parâmetro inesperado).
+    tipo_pedido = request.args.get("tipo_pedido")
+    faturado = request.args.get("faturado")
+    # Pedido do usuário (2026-09-01) — filtro por período, além dos que já
+    # existiam: compara só a DATA de `criado_em` (que é timestamp ISO
+    # completo), então "de 01/09 até 01/09" pega o dia inteiro, não só o
+    # instante exato.
+    data_de = request.args.get("data_de")
+    data_ate = request.args.get("data_ate")
     clausulas, params = [], []
     if status:
         clausulas.append("pv.status = ?")
@@ -864,11 +877,24 @@ def listar_pedidos():
     if cliente_id:
         clausulas.append("pv.cliente_id = ?")
         params.append(cliente_id)
+    if tipo_pedido:
+        clausulas.append("pv.tipo_pedido = ?")
+        params.append(tipo_pedido)
+    if faturado in ("sim", "nao"):
+        existe_nfe_autorizada = "EXISTS (SELECT 1 FROM notas_fiscais nf WHERE nf.pedido_id = pv.id AND nf.status = 'autorizada')"
+        clausulas.append(existe_nfe_autorizada if faturado == "sim" else f"NOT {existe_nfe_autorizada}")
+    if data_de:
+        clausulas.append("DATE(pv.criado_em) >= DATE(?)")
+        params.append(data_de)
+    if data_ate:
+        clausulas.append("DATE(pv.criado_em) <= DATE(?)")
+        params.append(data_ate)
     where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
     rows = conn.execute(
         f"""
         SELECT pv.*, c.razao_social AS cliente_razao_social,
-               (SELECT COALESCE(SUM(quantidade * preco_unitario), 0) FROM pedido_venda_itens WHERE pedido_id = pv.id) AS valor_total
+               (SELECT COALESCE(SUM(quantidade * preco_unitario), 0) FROM pedido_venda_itens WHERE pedido_id = pv.id) AS valor_total,
+               EXISTS (SELECT 1 FROM notas_fiscais nf WHERE nf.pedido_id = pv.id AND nf.status = 'autorizada') AS faturado
         FROM pedidos_venda pv JOIN clientes c ON c.id = pv.cliente_id
         {where} ORDER BY pv.id DESC
         """,
@@ -903,6 +929,13 @@ def criar_pedido():
     # Vendas, só que aqui é explícito no corpo da resposta pro operador
     # ver o que foi assumido.
     condicao_pagamento_id = dados.get("condicao_pagamento_id")
+    # Fase 131 — opcional: terceirização (fabricação sob encomenda) ou
+    # marca própria (produto com a marca do próprio cliente). Sem
+    # obrigar no cadastro — pedido antigo/importado sem essa informação
+    # continua existindo normalmente, só não aparece nos filtros por tipo.
+    tipo_pedido = dados.get("tipo_pedido")
+    if tipo_pedido is not None and tipo_pedido not in ("terceirizacao", "marca_propria"):
+        raise ApiError("tipo_pedido deve ser 'terceirizacao' ou 'marca_propria' (ou omitido).", status=400)
     conn = get_db()
 
     if not cliente_id:
@@ -922,8 +955,8 @@ def criar_pedido():
 
     numero = _gerar_numero_pedido()
     cur = conn.execute(
-        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, condicao_pagamento_id, criado_por) VALUES (?, ?, ?, ?, ?)",
-        (numero, cliente_id, empresa_id, condicao_pagamento_id, usuario_atual["id"]),
+        "INSERT INTO pedidos_venda (numero, cliente_id, empresa_id, condicao_pagamento_id, tipo_pedido, criado_por) VALUES (?, ?, ?, ?, ?, ?)",
+        (numero, cliente_id, empresa_id, condicao_pagamento_id, tipo_pedido, usuario_atual["id"]),
     )
     pedido_id = cur.lastrowid
 
@@ -953,6 +986,28 @@ def criar_pedido():
                      acao="pedido_criado", valor_novo={"numero": numero, "cliente_id": cliente_id, "itens": itens},
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(_pedido_detalhado(conn, pedido_id)), 201
+
+
+@bp.put("/pedidos/<int:pedido_id>/tipo")
+@requires_permission("comercial", "criar_pedido")
+def definir_tipo_pedido(pedido_id):
+    """Fase 131 — classificar (ou reclassificar) terceirização/marca
+    própria em QUALQUER status do pedido, inclusive já cancelado/expedido
+    — é só uma etiqueta de classificação, não uma transição de fluxo, não
+    faz sentido travar isso ao status do pedido."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    tipo_pedido = dados.get("tipo_pedido")
+    if tipo_pedido not in ("terceirizacao", "marca_propria", None):
+        raise ApiError("tipo_pedido deve ser 'terceirizacao', 'marca_propria' ou null (limpar).", status=400)
+    conn = get_db()
+    anterior = _pedido_ou_404(conn, pedido_id)
+    conn.execute("UPDATE pedidos_venda SET tipo_pedido = ? WHERE id = ?", (tipo_pedido, pedido_id))
+    novo = _pedido_ou_404(conn, pedido_id)
+    audit.registrar(conn, tabela="pedidos_venda", registro_id=pedido_id, usuario_id=usuario_atual["id"],
+                     acao="pedido_tipo_definido", valor_anterior={"tipo_pedido": anterior.get("tipo_pedido")},
+                     valor_novo={"tipo_pedido": tipo_pedido}, ip=client_ip(), dispositivo=client_device())
+    return jsonify(novo)
 
 
 @bp.post("/pedidos/<int:pedido_id>/duplicar")

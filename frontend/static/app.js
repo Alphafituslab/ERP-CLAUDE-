@@ -441,6 +441,7 @@
           case "fiscal-configuracao-sped": return renderConfiguracaoSped();
           case "transportadoras": return renderTransportadoras();
           case "pagamentos": return renderPagamentos();
+          case "pedidos-venda": return renderPedidosVenda();
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "financeiro-remessa-cnab": return renderRemessaCnab();
           case "financeiro-retorno-cnab": return renderRetornoCnab();
@@ -600,6 +601,7 @@
       tipo: "grupo", chave: "grupo-comercial", nome: "Comercial & Vendas",
       itens: [
         { rota: "#/comercial", chave: "comercial", label: "Comercial (CRM)", permissao: ["comercial", "visualizar"], apelidos: ["clientes", "cliente"] },
+        { rota: "#/pedidos-venda", chave: "pedidos-venda", label: "Pedidos de Venda", permissao: ["comercial", "visualizar"], apelidos: ["orcamentos", "orcamento", "faturados", "faturado"] },
         // Fase 97 — tela única para lançar e faturar pedidos sem alternar
         // entre Comercial e Fiscal a cada etapa.
         { rota: "#/lancar-faturar", chave: "lancar-faturar", label: "Lançar & Faturar Pedidos", permissao: ["comercial", "criar_pedido"] },
@@ -612,9 +614,6 @@
         { rota: "#/fiscal", chave: "fiscal", label: "Notas Fiscais (NF-e)", permissao: ["fiscal", "visualizar"] },
         // Fase 78 — SPED Fiscal (1/5).
         { rota: "#/fiscal-entrada", chave: "fiscal-entrada", label: "Notas Fiscais de Entrada", permissao: ["fiscal", "visualizar"] },
-        { rota: "#/fiscal-configuracao", chave: "fiscal-configuracao", label: "Configuração NF-e", permissao: ["fiscal", "configurar"] },
-        { rota: "#/fiscal-configuracao-sped", chave: "fiscal-configuracao-sped", label: "Configuração Fiscal (SPED)", permissao: ["fiscal", "configurar_sped"] },
-        { rota: "#/transportadoras", chave: "transportadoras", label: "Transportadoras", permissao: ["comercial", "gerenciar_coleta"] },
       ],
     },
     {
@@ -652,6 +651,12 @@
         { rota: "#/empresas", chave: "empresas", label: "Empresas", permissao: ["empresas", "visualizar"] },
         { rota: "#/auditoria", chave: "auditoria", label: "Auditoria", permissao: ["auditoria", "visualizar"] },
         { rota: "#/terminais", chave: "terminais", label: "Terminais", permissao: ["terminais", "visualizar"] },
+        // Pedido do usuário (2026-09-01): essas 3 telas viviam dentro de
+        // "Comercial & Vendas" mas são configuração/cadastro de apoio, não
+        // rotina comercial do dia a dia — movidas pra Administração.
+        { rota: "#/fiscal-configuracao", chave: "fiscal-configuracao", label: "Configuração NF-e", permissao: ["fiscal", "configurar"] },
+        { rota: "#/fiscal-configuracao-sped", chave: "fiscal-configuracao-sped", label: "Configuração Fiscal (SPED)", permissao: ["fiscal", "configurar_sped"] },
+        { rota: "#/transportadoras", chave: "transportadoras", label: "Transportadoras", permissao: ["comercial", "gerenciar_coleta"] },
         // Fase 123 (pedido do usuário) — manual do sistema, hospedado na
         // página de downloads (mesmo lugar que já mantém a versão mais
         // atual do instalador) — sempre a versão mais recente, sem
@@ -1076,6 +1081,79 @@
 
   function fecharModais() {
     document.querySelectorAll(".fundo-modal").forEach((m) => m.remove());
+  }
+
+  // Fase 131 — menu de contexto (botão direito) reaproveitável — hoje só
+  // usado na lista de clientes ("iniciar pedido"/"editar dados"/"tabela
+  // de preço"/"prazo de pagamento" sem precisar abrir a linha inteira),
+  // mas escrito genérico o bastante pra servir outra lista no futuro.
+  function fecharMenuContexto() {
+    const existente = document.querySelector(".menu-contexto");
+    if (existente) existente.remove();
+  }
+
+  function abrirMenuContexto(x, y, itens) {
+    fecharMenuContexto();
+    const menu = document.createElement("div");
+    menu.className = "menu-contexto";
+    menu.style.cssText = `position:fixed;left:${x}px;top:${y}px;z-index:1000;background:var(--superficie,#161f2c);
+      border:1px solid var(--borda,#26313f);border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.35);
+      padding:6px;min-width:220px;`;
+    menu.innerHTML = itens
+      .map((it, i) => `<button type="button" data-indice-item-contexto="${i}" style="display:block;width:100%;text-align:left;
+        background:none;border:none;padding:9px 12px;border-radius:6px;cursor:pointer;font-size:13.5px;color:inherit;">${escapeHtml(it.rotulo)}</button>`)
+      .join("");
+    document.body.appendChild(menu);
+    // Nunca deixa o menu nascer fora da tela (botão direito perto da borda).
+    const retangulo = menu.getBoundingClientRect();
+    if (retangulo.right > window.innerWidth) menu.style.left = `${window.innerWidth - retangulo.width - 8}px`;
+    if (retangulo.bottom > window.innerHeight) menu.style.top = `${window.innerHeight - retangulo.height - 8}px`;
+
+    menu.addEventListener("click", (e) => {
+      const botao = e.target.closest("[data-indice-item-contexto]");
+      if (!botao) return;
+      fecharMenuContexto();
+      itens[Number(botao.dataset.indiceItemContexto)].acao();
+    });
+    setTimeout(() => {
+      document.addEventListener("click", fecharMenuContexto, { once: true });
+      document.addEventListener("contextmenu", fecharMenuContexto, { once: true });
+    }, 0);
+  }
+
+  async function abrirMenuContextoCliente(x, y, cliente) {
+    const podeCadastrarCliente = temPermissao("comercial", "cadastrar_cliente");
+    const podeCriarPedido = temPermissao("comercial", "criar_pedido");
+    const itens = [];
+    if (podeCriarPedido) {
+      itens.push({ rotulo: `🛒 Iniciar pedido para ${cliente.razao_social}`, acao: () => modalNovoPedido(null, cliente) });
+    }
+    if (podeCadastrarCliente) {
+      itens.push({ rotulo: "✏️ Editar dados do cliente", acao: () => abrirEdicaoClienteCompleta(cliente.id) });
+      itens.push({ rotulo: "💲 Alterar tabela de preço", acao: () => abrirEdicaoClienteCompleta(cliente.id) });
+      itens.push({ rotulo: "📅 Alterar prazo/método de pagamento", acao: () => abrirEdicaoClienteCompleta(cliente.id) });
+    }
+    itens.push({ rotulo: "📊 Ver desempenho", acao: async () => {
+      const desempenho = await chamarApi(`/comercial/clientes/${cliente.id}/desempenho`);
+      modalDesempenhoCliente(cliente.razao_social, desempenho);
+    } });
+    if (itens.length) abrirMenuContexto(x, y, itens);
+  }
+
+  // Reaproveitado pelo menu de contexto e pelo clique-vindo-da-lupa —
+  // um único lugar que sabe montar a edição completa do cliente (dados +
+  // tabela de preço + método/condição padrão), sempre com o mesmo
+  // conjunto de dados carregado antes de abrir o modal.
+  async function abrirEdicaoClienteCompleta(clienteId) {
+    const cliente = await chamarApi(`/comercial/clientes/${clienteId}`);
+    if (temPermissao("tabelas_preco", "visualizar")) {
+      state.cache.tabelasPrecoParaCliente = await chamarApi("/tabelas-preco");
+    }
+    const [metodosParaCliente, condicoesParaCliente] = await Promise.all([
+      chamarApi(`/comercial/metodos-pagamento?ativos=1&cliente_id=${clienteId}`),
+      chamarApi(`/comercial/condicoes-pagamento?ativos=1&cliente_id=${clienteId}`),
+    ]);
+    modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente);
   }
 
   // =======================================================================
@@ -10114,6 +10192,113 @@
   // de Vendas (ver vendas_app.py::FORMAS_PAGAMENTO_VALIDAS); pedidos
   // criados pela tela de desktop não têm esse campo preenchido.
   const ROTULOS_FORMA_PAGAMENTO = { pix: "Pix", boleto: "Boleto", cartao: "Cartão", dinheiro: "Dinheiro / A combinar" };
+
+  // =======================================================================
+  // Fase 131 — Pedidos de Venda: tela própria, separada de Comercial, com
+  // filtro por status (o usuário chama de "orçamento"/"aprovado"/
+  // "cancelado" — são os status rascunho/confirmado+expedido/cancelado
+  // que já existiam desde a Fase 5), cliente, tipo (terceirização/marca
+  // própria — Fase 131) e faturado (tem NF-e autorizada vinculada).
+  // =======================================================================
+  const ROTULOS_TIPO_PEDIDO = { terceirizacao: "Terceirização", marca_propria: "Marca Própria" };
+
+  function seloTipoPedido(tipo) {
+    if (!tipo) return '<span class="texto-suave">—</span>';
+    return `<span class="selo azul">${escapeHtml(ROTULOS_TIPO_PEDIDO[tipo] || tipo)}</span>`;
+  }
+
+  async function renderPedidosVenda() {
+    app.innerHTML = '<div class="carregando">Carregando pedidos…</div>';
+    const [clientes] = await Promise.all([chamarApi("/comercial/clientes")]);
+    state.cache.clientesParaFiltroPedidos = clientes;
+
+    const filtros = state.filtrosPedidosVenda || {};
+    const query = new URLSearchParams();
+    if (filtros.status) query.set("status", filtros.status);
+    if (filtros.cliente_id) query.set("cliente_id", filtros.cliente_id);
+    if (filtros.tipo_pedido) query.set("tipo_pedido", filtros.tipo_pedido);
+    if (filtros.faturado) query.set("faturado", filtros.faturado);
+    if (filtros.data_de) query.set("data_de", filtros.data_de);
+    if (filtros.data_ate) query.set("data_ate", filtros.data_ate);
+    const pedidos = await chamarApi(`/comercial/pedidos${query.toString() ? "?" + query.toString() : ""}`);
+
+    const opcoesClientes = clientes
+      .map((c) => `<option value="${c.id}" ${String(filtros.cliente_id) === String(c.id) ? "selected" : ""}>${escapeHtml(c.razao_social)}</option>`)
+      .join("");
+
+    const linhas = pedidos.map((p) => `<tr>
+      <td class="mono"><a href="#/pedido/${p.id}">${escapeHtml(p.numero)}</a></td>
+      <td>${escapeHtml(p.cliente_razao_social)}</td>
+      <td>${seloTipoPedido(p.tipo_pedido)}</td>
+      <td>${seloPedido(p.status)}</td>
+      <td>${p.faturado ? '<span class="selo ativo">Faturado</span>' : '<span class="selo inativo">Não faturado</span>'}</td>
+      <td>R$ ${Number(p.valor_total || 0).toFixed(2)}</td>
+      <td class="texto-suave">${fmtData(p.criado_em)}</td>
+      <td><button class="botao secundario pequeno" data-acao="ver-pedido" data-id="${p.id}">Abrir</button></td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Pedidos de Venda <span class="texto-suave" style="font-weight:400;font-size:13px;">(${pedidos.length})</span></h2>
+       <div class="cartao">
+         <form id="filtros-pedidos-venda" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+           <div class="campo" style="margin:0;"><label>Status</label>
+             <select name="status">
+               <option value="">Todos</option>
+               <option value="rascunho" ${filtros.status === "rascunho" ? "selected" : ""}>Orçamento (rascunho)</option>
+               <option value="confirmado" ${filtros.status === "confirmado" ? "selected" : ""}>Aprovado (confirmado)</option>
+               <option value="expedido" ${filtros.status === "expedido" ? "selected" : ""}>Expedido</option>
+               <option value="cancelado" ${filtros.status === "cancelado" ? "selected" : ""}>Cancelado</option>
+             </select>
+           </div>
+           <div class="campo" style="margin:0;"><label>Cliente</label>
+             <select name="cliente_id"><option value="">Todos</option>${opcoesClientes}</select>
+           </div>
+           <div class="campo" style="margin:0;"><label>Tipo</label>
+             <select name="tipo_pedido">
+               <option value="">Todos</option>
+               <option value="terceirizacao" ${filtros.tipo_pedido === "terceirizacao" ? "selected" : ""}>Terceirização</option>
+               <option value="marca_propria" ${filtros.tipo_pedido === "marca_propria" ? "selected" : ""}>Marca Própria</option>
+             </select>
+           </div>
+           <div class="campo" style="margin:0;"><label>Faturado</label>
+             <select name="faturado">
+               <option value="">Todos</option>
+               <option value="sim" ${filtros.faturado === "sim" ? "selected" : ""}>Faturados</option>
+               <option value="nao" ${filtros.faturado === "nao" ? "selected" : ""}>Não faturados</option>
+             </select>
+           </div>
+           <div class="campo" style="margin:0;"><label>De</label>
+             <input type="date" name="data_de" value="${filtros.data_de || ""}">
+           </div>
+           <div class="campo" style="margin:0;"><label>Até</label>
+             <input type="date" name="data_ate" value="${filtros.data_ate || ""}">
+           </div>
+           <button type="button" class="botao secundario pequeno" data-acao="limpar-filtros-pedidos-venda">Limpar filtros</button>
+         </form>
+       </div>
+       <div class="cartao">
+         <table>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Tipo</th><th>Status</th><th>Faturado</th><th>Valor</th><th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="8" class="texto-suave">Nenhum pedido encontrado para este filtro.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "pedidos-venda"
+    );
+
+    const formFiltros = document.getElementById("filtros-pedidos-venda");
+    formFiltros.addEventListener("change", () => {
+      const dados = new FormData(formFiltros);
+      state.filtrosPedidosVenda = {
+        status: dados.get("status") || null,
+        cliente_id: dados.get("cliente_id") || null,
+        tipo_pedido: dados.get("tipo_pedido") || null,
+        faturado: dados.get("faturado") || null,
+        data_de: dados.get("data_de") || null,
+        data_ate: dados.get("data_ate") || null,
+      };
+      renderPedidosVenda();
+    });
+  }
   function rotuloFormaPagamento(valor) {
     return ROTULOS_FORMA_PAGAMENTO[valor] || valor;
   }
@@ -10142,8 +10327,8 @@
 
   async function renderComercial() {
     app.innerHTML = '<div class="carregando">Carregando comercial…</div>';
-    const [clientes, pedidos, itens] = await Promise.all([
-      chamarApi("/comercial/clientes"), chamarApi("/comercial/pedidos"), chamarApi("/itens"),
+    const [clientes, itens] = await Promise.all([
+      chamarApi("/comercial/clientes"), chamarApi("/itens"),
     ]);
     state.cache.clientes = clientes;
     state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
@@ -10155,7 +10340,7 @@
     const podeAprovarCliente = temPermissao("comercial", "aprovar_pedido_acima_limite_credito");
 
     function linhaCliente(c) {
-      return `<tr>
+      return `<tr data-linha-cliente="${c.id}" oncontextmenu="return false;">
         <td>${escapeHtml(c.razao_social)}</td>
         <td class="mono">${escapeHtml(c.cnpj)}</td>
         <td class="texto-suave">${escapeHtml(c.endereco || "—")}</td>
@@ -10170,17 +10355,6 @@
         </td>
       </tr>`;
     }
-    const linhasClientes = clientes.map(linhaCliente).join("");
-
-    const linhasPedidos = pedidos
-      .map((p) => `<tr>
-        <td class="mono"><a href="#/pedido/${p.id}">${escapeHtml(p.numero)}</a></td>
-        <td>${escapeHtml(p.cliente_razao_social)}</td>
-        <td>${seloPedido(p.status)}</td>
-        <td class="texto-suave">${fmtData(p.criado_em)}</td>
-        <td><button class="botao secundario pequeno" data-acao="ver-pedido" data-id="${p.id}">Abrir</button></td>
-      </tr>`)
-      .join("");
 
     renderShell(
       `<h2>Comercial (CRM)</h2>
@@ -10197,48 +10371,153 @@
 
        <div class="cartao">
          <div class="barra-acoes">
-           <h3 style="margin:0;">Clientes <span class="texto-suave" style="font-weight:400;font-size:12.5px;" data-clientes-contador>(${clientes.length})</span></h3>
+           <h3 style="margin:0;">Clientes <span class="texto-suave" style="font-weight:400;font-size:12.5px;">(${clientes.length} cadastrados)</span></h3>
            ${podeCadastrarCliente ? `<button class="botao secundario pequeno" data-acao="novo-cliente">+ Novo cliente</button>` : ""}
          </div>
-         <div class="campo" style="margin-bottom:10px;">
-           <input type="search" placeholder="Procurar por razão social, nome fantasia ou CNPJ…" data-busca-clientes autocomplete="off">
+         <div class="campo" style="margin-bottom:6px;display:flex;gap:8px;align-items:center;">
+           <input type="search" placeholder="Procurar por razão social, nome fantasia ou CNPJ… (ignora acento)" data-busca-clientes autocomplete="off" style="flex:1;">
+           <button type="button" class="botao secundario pequeno" data-acao="alternar-ver-todos-clientes" style="flex-shrink:0;">Ver todos</button>
          </div>
+         <p class="texto-suave" style="font-size:12px;margin:0 0 8px;">Clique com o botão direito num cliente da lista pra ações rápidas (novo pedido, editar dados/tabela/prazo).</p>
          <table>
            <thead><tr><th>Razão social</th><th>CNPJ</th><th>Endereço</th><th>Limite de crédito</th><th>Financeiro</th><th>Status</th><th>Ações</th></tr></thead>
-           <tbody data-tabela-clientes>${linhasClientes || '<tr><td colspan="7" class="texto-suave">Nenhum cliente cadastrado.</td></tr>'}</tbody>
+           <tbody data-tabela-clientes><tr><td colspan="7" class="texto-suave">Digite acima pra buscar, ou clique em "Ver todos".</td></tr></tbody>
          </table>
        </div>
 
        <div class="cartao">
          <div class="barra-acoes">
-           <h3 style="margin:0;">Pedidos de Venda</h3>
-           ${podeCriarPedido ? `<button class="botao" data-acao="novo-pedido" ${clientes.filter((c) => c.status === "ativo").length === 0 ? "disabled title='Cadastre um cliente ativo primeiro'" : ""}>+ Novo pedido</button>` : ""}
+           <h3 style="margin:0;" data-titulo-pedidos-cliente>Pedidos de Venda</h3>
+           <div style="display:flex;gap:8px;">
+             <a class="botao secundario pequeno" href="#/pedidos-venda">Ver todos e filtrar →</a>
+             ${podeCriarPedido ? `<button class="botao" data-acao="novo-pedido" ${clientes.filter((c) => c.status === "ativo").length === 0 ? "disabled title='Cadastre um cliente ativo primeiro'" : ""}>+ Novo pedido</button>` : ""}
+           </div>
          </div>
          ${podeCriarPedido && clientes.filter((c) => c.status === "ativo").length === 0 ? '<p class="texto-suave">Nenhum cliente ativo cadastrado ainda — cadastre um cliente antes de criar um pedido.</p>' : ""}
-         <table>
-           <thead><tr><th>Número</th><th>Cliente</th><th>Status</th><th>Criado em</th><th></th></tr></thead>
-           <tbody>${linhasPedidos || '<tr><td colspan="5" class="texto-suave">Nenhum pedido de venda registrado.</td></tr>'}</tbody>
-         </table>
+         <div data-painel-pedidos-cliente>
+           <p class="texto-suave">Clique num cliente na lista de "Clientes" acima pra ver aqui SÓ os pedidos dele, com filtro por status e período. A lista completa de todos os clientes, com filtro por cliente/tipo/faturado, está em <a href="#/pedidos-venda">Pedidos de Venda</a>.</p>
+         </div>
        </div>`,
       "comercial"
     );
 
     const campoBuscaClientes = app.querySelector("[data-busca-clientes]");
     const tabelaClientesBody = app.querySelector("[data-tabela-clientes]");
-    const contadorClientes = app.querySelector("[data-clientes-contador]");
-    if (campoBuscaClientes) {
-      campoBuscaClientes.addEventListener("input", () => {
-        const termo = campoBuscaClientes.value.trim().toLowerCase();
-        const filtrados = !termo ? clientes : clientes.filter((c) =>
-          (c.razao_social || "").toLowerCase().includes(termo) ||
-          (c.nome_fantasia || "").toLowerCase().includes(termo) ||
-          (c.cnpj || "").toLowerCase().includes(termo)
+    const botaoVerTodosClientes = app.querySelector('[data-acao="alternar-ver-todos-clientes"]');
+    let verTodosClientes = false;
+
+    function atualizarListaClientes() {
+      const termo = _normalizarBuscaGlobal(campoBuscaClientes.value);
+      let filtrados;
+      if (termo) {
+        filtrados = clientes.filter((c) =>
+          _normalizarBuscaGlobal(c.razao_social).includes(termo) ||
+          _normalizarBuscaGlobal(c.nome_fantasia || "").includes(termo) ||
+          (c.cnpj || "").includes(termo)
         );
-        tabelaClientesBody.innerHTML = filtrados.map(linhaCliente).join("") ||
-          '<tr><td colspan="7" class="texto-suave">Nenhum cliente encontrado para esta busca.</td></tr>';
-        if (contadorClientes) contadorClientes.textContent = `(${filtrados.length})`;
+      } else if (verTodosClientes) {
+        filtrados = clientes;
+      } else {
+        tabelaClientesBody.innerHTML = '<tr><td colspan="7" class="texto-suave">Digite acima pra buscar, ou clique em "Ver todos".</td></tr>';
+        return;
+      }
+      tabelaClientesBody.innerHTML = filtrados.map(linhaCliente).join("") ||
+        '<tr><td colspan="7" class="texto-suave">Nenhum cliente encontrado para esta busca.</td></tr>';
+    }
+    atualizarListaClientes();
+    campoBuscaClientes.addEventListener("input", atualizarListaClientes);
+    botaoVerTodosClientes.addEventListener("click", () => {
+      verTodosClientes = !verTodosClientes;
+      botaoVerTodosClientes.textContent = verTodosClientes ? "Ocultar todos" : "Ver todos";
+      atualizarListaClientes();
+    });
+
+    tabelaClientesBody.addEventListener("contextmenu", (e) => {
+      const linha = e.target.closest("[data-linha-cliente]");
+      if (!linha) return;
+      e.preventDefault();
+      const cliente = clientes.find((c) => c.id === Number(linha.dataset.linhaCliente));
+      if (cliente) abrirMenuContextoCliente(e.clientX, e.clientY, cliente);
+    });
+
+    // Pedido do usuário (2026-09-01) — clicar (botão esquerdo, fora dos
+    // botões de Ação) num cliente da lista SELECIONA ele pro painel de
+    // "Pedidos de Venda" logo abaixo, que passa a mostrar só os pedidos
+    // DESTE cliente (com filtro por status/período) em vez do total geral
+    // do sistema.
+    const painelPedidosCliente = app.querySelector("[data-painel-pedidos-cliente]");
+    const tituloPedidosCliente = app.querySelector("[data-titulo-pedidos-cliente]");
+    let clienteSelecionadoPedidos = null;
+    let filtrosPedidosCliente = { status: "", data_de: "", data_ate: "" };
+
+    async function renderPainelPedidosCliente() {
+      if (!clienteSelecionadoPedidos) {
+        tituloPedidosCliente.textContent = "Pedidos de Venda";
+        painelPedidosCliente.innerHTML = `<p class="texto-suave">Clique num cliente na lista de "Clientes" acima pra ver aqui SÓ os pedidos dele, com filtro por status e período. A lista completa de todos os clientes, com filtro por cliente/tipo/faturado, está em <a href="#/pedidos-venda">Pedidos de Venda</a>.</p>`;
+        return;
+      }
+      const cliente = clienteSelecionadoPedidos;
+      tituloPedidosCliente.textContent = `Pedidos de Venda — ${cliente.razao_social}`;
+      painelPedidosCliente.innerHTML = '<p class="texto-suave">Carregando pedidos deste cliente…</p>';
+      const query = new URLSearchParams({ cliente_id: cliente.id });
+      if (filtrosPedidosCliente.status) query.set("status", filtrosPedidosCliente.status);
+      if (filtrosPedidosCliente.data_de) query.set("data_de", filtrosPedidosCliente.data_de);
+      if (filtrosPedidosCliente.data_ate) query.set("data_ate", filtrosPedidosCliente.data_ate);
+      const pedidosDoCliente = await chamarApi(`/comercial/pedidos?${query.toString()}`).catch(() => []);
+      const linhas = pedidosDoCliente.map((p) => `<tr>
+        <td class="mono"><a href="#/pedido/${p.id}">${escapeHtml(p.numero)}</a></td>
+        <td>${seloTipoPedido(p.tipo_pedido)}</td>
+        <td>${seloPedido(p.status)}</td>
+        <td>${p.faturado ? '<span class="selo ativo">Faturado</span>' : '<span class="selo inativo">Não faturado</span>'}</td>
+        <td>R$ ${Number(p.valor_total || 0).toFixed(2)}</td>
+        <td class="texto-suave">${fmtData(p.criado_em)}</td>
+        <td><button class="botao secundario pequeno" data-acao="ver-pedido" data-id="${p.id}">Abrir</button></td>
+      </tr>`).join("");
+      painelPedidosCliente.innerHTML = `
+        <form data-filtros-pedidos-cliente style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;margin-bottom:10px;">
+          <div class="campo" style="margin:0;"><label>Status</label>
+            <select name="status">
+              <option value="">Todos</option>
+              <option value="rascunho" ${filtrosPedidosCliente.status === "rascunho" ? "selected" : ""}>Orçamento (rascunho)</option>
+              <option value="confirmado" ${filtrosPedidosCliente.status === "confirmado" ? "selected" : ""}>Aprovado (confirmado)</option>
+              <option value="expedido" ${filtrosPedidosCliente.status === "expedido" ? "selected" : ""}>Expedido</option>
+              <option value="cancelado" ${filtrosPedidosCliente.status === "cancelado" ? "selected" : ""}>Cancelado</option>
+            </select>
+          </div>
+          <div class="campo" style="margin:0;"><label>De</label><input type="date" name="data_de" value="${filtrosPedidosCliente.data_de}"></div>
+          <div class="campo" style="margin:0;"><label>Até</label><input type="date" name="data_ate" value="${filtrosPedidosCliente.data_ate}"></div>
+          <button type="button" class="botao secundario pequeno" data-acao="limpar-selecao-cliente-pedidos">✕ Ver outro cliente</button>
+        </form>
+        <table>
+          <thead><tr><th>Número</th><th>Tipo</th><th>Status</th><th>Faturado</th><th>Valor</th><th>Criado em</th><th></th></tr></thead>
+          <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum pedido deste cliente para este filtro.</td></tr>'}</tbody>
+        </table>`;
+      painelPedidosCliente.querySelector("[data-filtros-pedidos-cliente]").addEventListener("change", (e) => {
+        const dados = new FormData(e.currentTarget);
+        filtrosPedidosCliente = {
+          status: dados.get("status") || "",
+          data_de: dados.get("data_de") || "",
+          data_ate: dados.get("data_ate") || "",
+        };
+        renderPainelPedidosCliente();
+      });
+      painelPedidosCliente.querySelector('[data-acao="limpar-selecao-cliente-pedidos"]').addEventListener("click", () => {
+        clienteSelecionadoPedidos = null;
+        filtrosPedidosCliente = { status: "", data_de: "", data_ate: "" };
+        renderPainelPedidosCliente();
       });
     }
+
+    tabelaClientesBody.addEventListener("click", (e) => {
+      if (e.target.closest("button")) return; // botões de Ação (Desempenho/Editar/Aprovar/Reprovar) continuam com seu próprio comportamento
+      const linha = e.target.closest("[data-linha-cliente]");
+      if (!linha) return;
+      const cliente = clientes.find((c) => c.id === Number(linha.dataset.linhaCliente));
+      if (!cliente) return;
+      clienteSelecionadoPedidos = cliente;
+      filtrosPedidosCliente = { status: "", data_de: "", data_ate: "" };
+      renderPainelPedidosCliente();
+    });
 
     // Fase 129 — veio de um clique num resultado de cliente na lupa de
     // pesquisa global: abre a edição dele direto, sem precisar procurar
@@ -10246,17 +10525,7 @@
     if (state.clienteParaAbrirAoEntrarComercial) {
       const idParaAbrir = state.clienteParaAbrirAoEntrarComercial;
       state.clienteParaAbrirAoEntrarComercial = null;
-      const clienteParaAbrir = clientes.find((c) => c.id === idParaAbrir);
-      if (clienteParaAbrir) {
-        if (temPermissao("tabelas_preco", "visualizar")) {
-          state.cache.tabelasPrecoParaCliente = await chamarApi("/tabelas-preco");
-        }
-        const [metodosParaCliente, condicoesParaCliente] = await Promise.all([
-          chamarApi(`/comercial/metodos-pagamento?ativos=1&cliente_id=${idParaAbrir}`),
-          chamarApi(`/comercial/condicoes-pagamento?ativos=1&cliente_id=${idParaAbrir}`),
-        ]);
-        modalEditarCliente(clienteParaAbrir, metodosParaCliente, condicoesParaCliente);
-      }
+      await abrirEdicaoClienteCompleta(idParaAbrir);
     }
   }
 
@@ -11081,7 +11350,11 @@
     }
   }
 
-  function modalNovoPedido(origem) {
+  // `clientePreSelecionado` (Fase 131 — menu de contexto do cliente em
+  // Comercial, "Iniciar pedido") pula a etapa de busca: o campo já chega
+  // preenchido e a mesma lógica do `onCliente` de baixo roda na hora,
+  // sem precisar digitar/escolher o cliente de novo.
+  function modalNovoPedido(origem, clientePreSelecionado) {
     const wrap = abrirModal(`
       <h3>Novo pedido de venda</h3>
       ${(state.cache.itensVendaveis || []).length === 0 ? '<p class="mensagem-erro">Nenhum item do tipo "produto_acabado" cadastrado ainda — cadastre um em Itens antes de vender.</p>' : ""}
@@ -11109,21 +11382,29 @@
     let itemEscolhido = null;
     const campoEmpresa = wrap.querySelector('select[name="empresa_id"]');
 
+    const aoEscolherCliente = async (cliente) => {
+      tabelaPrecoDoCliente = temPermissao("comercial", "visualizar")
+        ? await chamarApi(`/comercial/clientes/${cliente.id}/tabela-preco`).catch(() => null)
+        : null;
+      _mostrarRiscoCliente(wrap, cliente);
+      await _renderizarSeletorPagamento(wrap, cliente, tabelaPrecoDoCliente);
+      if (itemEscolhido) _preencherPrecoEMargem(wrap, itemEscolhido, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
+    };
+
     _ligarBuscaClienteEItemPedido(wrap, {
       comCliente: true,
-      onCliente: async (cliente) => {
-        tabelaPrecoDoCliente = temPermissao("comercial", "visualizar")
-          ? await chamarApi(`/comercial/clientes/${cliente.id}/tabela-preco`).catch(() => null)
-          : null;
-        _mostrarRiscoCliente(wrap, cliente);
-        await _renderizarSeletorPagamento(wrap, cliente, tabelaPrecoDoCliente);
-        if (itemEscolhido) _preencherPrecoEMargem(wrap, itemEscolhido, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
-      },
+      onCliente: aoEscolherCliente,
       onItem: (item) => {
         itemEscolhido = item;
         _preencherPrecoEMargem(wrap, item, tabelaPrecoDoCliente, campoEmpresa ? campoEmpresa.value : null);
       },
     });
+
+    if (clientePreSelecionado) {
+      wrap.querySelector("#busca-cliente-pedido").value = clientePreSelecionado.razao_social;
+      wrap.querySelector("#cliente-id-pedido").value = clientePreSelecionado.id;
+      aoEscolherCliente(clientePreSelecionado);
+    }
   }
 
   // Fase 128 — método (Boleto/PIX/Cartão...) + condição (prazo) na hora
@@ -15101,18 +15382,9 @@
       case "novo-cliente":
         modalNovoCliente();
         return;
-      case "editar-cliente": {
-        const cliente = await chamarApi(`/comercial/clientes/${alvo.dataset.id}`);
-        if (temPermissao("tabelas_preco", "visualizar")) {
-          state.cache.tabelasPrecoParaCliente = await chamarApi("/tabelas-preco");
-        }
-        const [metodosParaCliente, condicoesParaCliente] = await Promise.all([
-          chamarApi(`/comercial/metodos-pagamento?ativos=1&cliente_id=${cliente.id}`),
-          chamarApi(`/comercial/condicoes-pagamento?ativos=1&cliente_id=${cliente.id}`),
-        ]);
-        modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente);
+      case "editar-cliente":
+        await abrirEdicaoClienteCompleta(Number(alvo.dataset.id));
         return;
-      }
       // ---- Fase 127: Métodos & Condições de Pagamento ----
       case "novo-metodo-pagamento":
         state.cache.clientesParaPagamento = state.cache.clientesParaPagamento || await chamarApi("/comercial/clientes");

@@ -159,6 +159,7 @@ SCHEMA_FILES = [
     "schema_fase127.sql",  # Fase 127 — Catálogo de métodos e condições de pagamento (cliente padrão + pedido de venda)
     "schema_fase128.sql",  # Fase 128 — tabela_preco_condicoes: cada tabela de preço configura seus próprios método+prazo
     "schema_fase130.sql",  # Fase 130 — Backup: destinos Local, Google Drive e aviso por WhatsApp
+    "schema_fase131.sql",  # Fase 131 — Pedidos de Venda: tela própria com filtros + tipo_pedido (terceirização/marca própria)
 ]
 
 
