@@ -535,6 +535,14 @@ PERMISSOES_PADRAO = [
     # "comercial.configurar_comercial" (config de baixo risco/frequência,
     # não do dia a dia de vendas).
     ("comercial", "configurar_pagamento", "Cadastrar, editar e ativar/desativar métodos e condições de pagamento", 0),
+
+    # Fase 134 — Terceirização Premium (Fase A: fundação de dados). "visualizar"/
+    # "criar" cobrem o uso do dia a dia (comercial montando um projeto pra um
+    # cliente); "configurar_embalagem" é o cadastro do catálogo de pote/tampa/
+    # cápsula (baixa frequência, mesma régua de "comercial.configurar_pagamento").
+    ("terceirizacao", "visualizar", "Ver projetos de terceirização", 0),
+    ("terceirizacao", "criar", "Criar e editar projetos de terceirização (fórmula, embalagem, briefing)", 0),
+    ("terceirizacao", "configurar_embalagem", "Cadastrar e editar o catálogo de potes/tampas/cápsulas", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
@@ -720,6 +728,11 @@ PERFIS_PADRAO = [
         # Fase 99 — mesmo perfil que monta o pedido decide os preços
         # praticados por tabela.
         "tabelas_preco.visualizar", "tabelas_preco.gerenciar",
+        # Fase 134 — mesmo perfil que já cuida do cliente monta o projeto de
+        # terceirização dele. "configurar_embalagem" (cadastro do catálogo
+        # de pote/tampa/cápsula) fica de propósito fora daqui, só no
+        # Administrador — mesma régua de "fiscal.configurar" acima.
+        "terceirizacao.visualizar", "terceirizacao.criar",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",

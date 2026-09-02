@@ -442,6 +442,8 @@
           case "transportadoras": return renderTransportadoras();
           case "pagamentos": return renderPagamentos();
           case "pedidos-venda": return renderPedidosVenda();
+          case "terceirizacao": return param ? renderTerceirizacaoDetalhe(Number(param)) : renderTerceirizacoes();
+          case "terceirizacao-embalagens": return renderTerceirizacaoEmbalagens();
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "financeiro-remessa-cnab": return renderRemessaCnab();
           case "financeiro-retorno-cnab": return renderRetornoCnab();
@@ -614,6 +616,18 @@
         { rota: "#/fiscal", chave: "fiscal", label: "Notas Fiscais (NF-e)", permissao: ["fiscal", "visualizar"] },
         // Fase 78 — SPED Fiscal (1/5).
         { rota: "#/fiscal-entrada", chave: "fiscal-entrada", label: "Notas Fiscais de Entrada", permissao: ["fiscal", "visualizar"] },
+      ],
+    },
+    // Fase 134 — Terceirização Premium (Fase A: fundação de dados). Grupo
+    // próprio, de propósito, em vez de dentro de "Comercial & Vendas" — é
+    // um fluxo diferente (projeto de white-label por cliente, não venda
+    // recorrente) que vai crescer bastante nas próximas fases (documento,
+    // portal do cliente, assinatura).
+    {
+      tipo: "grupo", chave: "grupo-terceirizacao", nome: "Terceirização Premium",
+      itens: [
+        { rota: "#/terceirizacao", chave: "terceirizacao", label: "Terceirizações", permissao: ["terceirizacao", "visualizar"], apelidos: ["terceirização", "white label", "projetos"] },
+        { rota: "#/terceirizacao-embalagens", chave: "terceirizacao-embalagens", label: "Catálogo de Embalagem", permissao: ["terceirizacao", "configurar_embalagem"], apelidos: ["pote", "tampa", "capsula", "cápsula"] },
       ],
     },
     {
@@ -10348,6 +10362,557 @@
     return ROTULOS_FORMA_PAGAMENTO[valor] || valor;
   }
 
+  // =======================================================================
+  // Fase 134 — Terceirização Premium (Fase A: fundação de dados). Módulo
+  // novo — cliente escolhe fórmula já cadastrada (com tabela nutricional/
+  // ingredientes puxados automaticamente do Memorial Técnico, quando
+  // houver um aprovado), personaliza embalagem (pote/tampa/cápsula/
+  // quantidade) e preenche um briefing. Documento/aprovação/portal do
+  // cliente/assinatura entram em fases seguintes — esta é só a base de
+  // uso interno.
+  // =======================================================================
+  const ROTULOS_STATUS_TERCEIRIZACAO = {
+    rascunho: ["inativo", "Rascunho"], aguardando_cliente: ["amarelo", "Aguardando cliente"],
+    em_preenchimento: ["amarelo", "Em preenchimento"], aguardando_revisao: ["azul", "Aguardando revisão"],
+    aguardando_aprovacao: ["azul", "Aguardando aprovação"], aguardando_assinatura: ["azul", "Aguardando assinatura"],
+    assinado: ["ativo", "Assinado"], em_desenvolvimento: ["azul", "Em desenvolvimento"],
+    arte_em_desenvolvimento: ["azul", "Arte em desenvolvimento"], arte_em_aprovacao: ["amarelo", "Arte em aprovação"],
+    em_producao: ["azul", "Em produção"], concluido: ["ativo", "Concluído"], cancelado: ["bloqueado", "Cancelado"],
+  };
+  function seloStatusTerceirizacao(status) {
+    const par = ROTULOS_STATUS_TERCEIRIZACAO[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+  const ESTILOS_VISUAIS_TERCEIRIZACAO = [
+    "Luxuoso", "Premium", "Minimalista", "Natural", "Esportivo", "Clínico", "Farmacêutico",
+    "Clean", "Feminino", "Masculino", "Tecnológico", "Jovem", "Elegante", "Sofisticado",
+  ];
+
+  async function renderTerceirizacoes() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const filtros = state.filtrosTerceirizacao || {};
+    const query = new URLSearchParams();
+    if (filtros.status) query.set("status", filtros.status);
+    if (filtros.cliente_id) query.set("cliente_id", filtros.cliente_id);
+    const [projetos, clientes] = await Promise.all([
+      chamarApi(`/terceirizacao/projetos${query.toString() ? "?" + query.toString() : ""}`),
+      chamarApi("/comercial/clientes"),
+    ]);
+    state.cache.clientesParaTerceirizacao = clientes;
+    const podeCriar = temPermissao("terceirizacao", "criar");
+
+    const opcoesClientes = clientes
+      .map((c) => `<option value="${c.id}" ${String(filtros.cliente_id) === String(c.id) ? "selected" : ""}>${escapeHtml(c.razao_social)}</option>`)
+      .join("");
+    const linhas = projetos.map((p) => `<tr>
+      <td class="mono"><a href="#/terceirizacao/${p.id}">${escapeHtml(p.numero)}</a></td>
+      <td>${escapeHtml(p.cliente_razao_social)}</td>
+      <td>${p.item_descricao ? escapeHtml(p.item_descricao) : '<span class="texto-suave">— sem fórmula ainda</span>'}</td>
+      <td>${p.responsavel_nome ? escapeHtml(p.responsavel_nome) : '<span class="texto-suave">—</span>'}</td>
+      <td>${seloStatusTerceirizacao(p.status)}</td>
+      <td class="texto-suave">${fmtData(p.criado_em)}</td>
+      <td><a class="botao secundario pequeno" href="#/terceirizacao/${p.id}">Abrir</a></td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Terceirização Premium <span class="texto-suave" style="font-weight:400;font-size:13px;">(${projetos.length})</span></h2>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <form id="filtros-terceirizacao" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;flex:1;">
+             <div class="campo" style="margin:0;"><label>Status</label>
+               <select name="status">
+                 <option value="">Todos</option>
+                 ${Object.entries(ROTULOS_STATUS_TERCEIRIZACAO).map(([v, [, rotulo]]) => `<option value="${v}" ${filtros.status === v ? "selected" : ""}>${escapeHtml(rotulo)}</option>`).join("")}
+               </select>
+             </div>
+             <div class="campo" style="margin:0;"><label>Cliente</label>
+               <select name="cliente_id"><option value="">Todos</option>${opcoesClientes}</select>
+             </div>
+           </form>
+           ${podeCriar ? '<button class="botao" data-acao="novo-projeto-terceirizacao">+ Novo projeto</button>' : ""}
+         </div>
+       </div>
+       <div class="cartao">
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Produto</th><th>Responsável</th><th>Status</th><th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum projeto encontrado para este filtro.</td></tr>'}</tbody>
+         </table>
+         </div>
+       </div>`,
+      "terceirizacao"
+    );
+
+    document.getElementById("filtros-terceirizacao").addEventListener("change", (e) => {
+      const dados = new FormData(e.currentTarget);
+      state.filtrosTerceirizacao = { status: dados.get("status") || null, cliente_id: dados.get("cliente_id") || null };
+      renderTerceirizacoes();
+    });
+  }
+
+  function modalNovoProjetoTerceirizacao() {
+    const clientes = (state.cache.clientesParaTerceirizacao || []).filter((c) => c.status === "ativo");
+    const wrap = abrirModal(`
+      <h3>Novo projeto de terceirização</h3>
+      <form data-form="criar-projeto-terceirizacao">
+        <div class="campo"><label>Cliente</label>
+          <input type="text" id="busca-cliente-terceirizacao" placeholder="Digite a razão social…" autocomplete="off" required>
+          <input type="hidden" name="cliente_id" id="cliente-id-terceirizacao" required>
+          <div id="resultados-busca-cliente-terceirizacao" class="lista-busca-resultados"></div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar projeto</button>
+        </div>
+      </form>`);
+    const campoBusca = wrap.querySelector("#busca-cliente-terceirizacao");
+    const listaResultados = wrap.querySelector("#resultados-busca-cliente-terceirizacao");
+    campoBusca.addEventListener("input", () => {
+      const termo = _normalizarBuscaGlobal(campoBusca.value);
+      if (!termo) { listaResultados.innerHTML = ""; return; }
+      const encontrados = clientes.filter((c) => _normalizarBuscaGlobal(c.razao_social).includes(termo)).slice(0, 8);
+      listaResultados.innerHTML = encontrados.length
+        ? encontrados.map((c) => `<button type="button" class="item-busca-resultado" data-id="${c.id}" data-rotulo="${escapeHtml(c.razao_social)}">${escapeHtml(c.razao_social)}</button>`).join("")
+        : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
+    });
+    listaResultados.addEventListener("click", (e) => {
+      const botao = e.target.closest(".item-busca-resultado");
+      if (!botao) return;
+      campoBusca.value = botao.dataset.rotulo;
+      wrap.querySelector("#cliente-id-terceirizacao").value = botao.dataset.id;
+      listaResultados.innerHTML = "";
+    });
+  }
+
+  async function renderTerceirizacaoDetalhe(projetoId) {
+    app.innerHTML = '<div class="carregando">Carregando projeto…</div>';
+    const projeto = await chamarApi(`/terceirizacao/projetos/${projetoId}`);
+    const podeEditar = temPermissao("terceirizacao", "criar") && projeto.status === "rascunho";
+
+    const [potes, arquivos] = await Promise.all([
+      chamarApi("/terceirizacao/potes"),
+      chamarApi(`/terceirizacao/projetos/${projetoId}/arquivos`),
+    ]);
+    let tampas = [];
+    if (projeto.pote_id) {
+      tampas = await chamarApi(`/terceirizacao/potes/${projeto.pote_id}/tampas-compativeis`);
+    }
+    const capsulas = await chamarApi("/terceirizacao/capsulas");
+
+    let nutricao = null;
+    if (projeto.item_id) {
+      nutricao = await chamarApi(`/terceirizacao/formulas-disponiveis/${projeto.item_id}/nutricao`).catch(() => null);
+    }
+
+    const briefing = projeto.briefing || {};
+    const estiloAtual = briefing.estilo_visual ? JSON.parse(briefing.estilo_visual) : [];
+    const coresAtuais = briefing.cores_preferidas ? JSON.parse(briefing.cores_preferidas) : [];
+    const marcasAtuais = briefing.marcas_referencia ? JSON.parse(briefing.marcas_referencia) : [];
+
+    function cartaoEmbalagem(lista, selecionadoId, campoNome, tituloVazio) {
+      if (!lista.length) return `<p class="texto-suave">${escapeHtml(tituloVazio)}</p>`;
+      return `<div style="display:flex;gap:10px;flex-wrap:wrap;">
+        ${lista.map((o) => `
+          <button type="button" class="botao-embalagem-opcao ${String(o.id) === String(selecionadoId) ? "selecionado" : ""}"
+            data-campo="${campoNome}" data-id="${o.id}"
+            style="border:2px solid ${String(o.id) === String(selecionadoId) ? "var(--cor-primaria, #4ade80)" : "var(--borda, #333)"};border-radius:8px;padding:8px;background:none;cursor:pointer;width:110px;text-align:center;">
+            ${o.imagem ? `<img src="${o.imagem}" style="width:70px;height:70px;object-fit:contain;display:block;margin:0 auto 6px;">` : '<div style="width:70px;height:70px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;color:var(--texto-suave,#888);font-size:11px;">sem foto</div>'}
+            <div style="font-size:12px;color:var(--texto,#eee);">${escapeHtml(o.nome)}</div>
+            <div style="font-size:11px;color:var(--texto-suave,#888);">${escapeHtml(o.cor || o.cor_cabeca || "")}</div>
+          </button>`).join("")}
+      </div>`;
+    }
+
+    renderShell(
+      `<div class="barra-acoes">
+        <h2 style="margin:0;">${escapeHtml(projeto.numero)} ${seloStatusTerceirizacao(projeto.status)}</h2>
+        <div style="display:flex;gap:8px;">
+          <a class="botao secundario pequeno" href="#/terceirizacao">← Todos os projetos</a>
+          ${podeEditar ? '<button class="botao perigo pequeno" data-acao="cancelar-projeto-terceirizacao" data-id="' + projeto.id + '">Cancelar projeto</button>' : ""}
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Dados da empresa (cliente)</h3>
+        <p><strong>${escapeHtml(projeto.cliente.razao_social)}</strong> — <span class="mono">${escapeHtml(projeto.cliente.cnpj || "")}</span></p>
+        <p class="texto-suave">Pra editar os dados do cliente, use a tela de <a href="#/comercial">Comercial</a> — este projeto sempre reflete o cadastro mais atual.</p>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Fórmula</h3>
+        ${podeEditar ? `
+          <div class="campo"><label>Buscar fórmula (produto acabado já cadastrado)</label>
+            <input type="text" id="busca-formula-terceirizacao" placeholder="Digite o nome ou código…" autocomplete="off">
+            <div id="resultados-busca-formula-terceirizacao" class="lista-busca-resultados"></div>
+          </div>` : ""}
+        ${projeto.item ? `
+          <p><strong>${escapeHtml(projeto.item.descricao)}</strong> <span class="texto-suave mono">${escapeHtml(projeto.item.codigo)}</span></p>
+          ${nutricao ? (
+            nutricao.vinculado_a_memorial && nutricao.memorial_aprovado_encontrado ? `
+              <p class="dica">Tabela nutricional e ingredientes do Memorial Técnico ${escapeHtml(nutricao.memorial_codigo)}:</p>
+              ${nutricao.tabela_nutricional && nutricao.tabela_nutricional.tipo === "estruturado" ? `
+                <table><thead><tr><th>Nutriente</th><th>Quantidade</th><th>Unidade</th></tr></thead>
+                <tbody>${nutricao.tabela_nutricional.linhas.map((l) => `<tr><td>${escapeHtml(l.nutriente || "")}</td><td>${escapeHtml(String(l.quantidade ?? ""))}</td><td>${escapeHtml(l.unidade || "")}</td></tr>`).join("")}</tbody></table>
+              ` : ""}
+              ${nutricao.lista_ingredientes ? `<p><strong>Ingredientes:</strong> ${escapeHtml(nutricao.lista_ingredientes)}</p>` : ""}
+            ` : `<p class="texto-suave">${escapeHtml(nutricao.mensagem)}</p>`
+          ) : ""}
+          ${podeEditar ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-solicitar-alteracao-formula" data-id="${projeto.id}">Solicitar alteração da fórmula</button>` : ""}
+        ` : '<p class="texto-suave">Nenhuma fórmula escolhida ainda.</p>'}
+        ${projeto.solicitacao_alteracao_formula ? `<p class="mensagem-erro" style="margin-top:10px;">Alteração solicitada: ${escapeHtml(projeto.solicitacao_alteracao_formula)}</p>` : ""}
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Personalização da embalagem</h3>
+        <div class="campo"><label>Pote</label></div>
+        ${cartaoEmbalagem(potes, projeto.pote_id, "pote_id", "Nenhum pote cadastrado ainda — cadastre em Catálogo de Embalagem.")}
+        <div class="campo" style="margin-top:14px;"><label>Tampa ${projeto.pote_id ? "(compatíveis com o pote escolhido)" : "(escolha um pote primeiro)"}</label></div>
+        ${projeto.pote_id ? cartaoEmbalagem(tampas, projeto.tampa_id, "tampa_id", "Nenhuma tampa compatível cadastrada.") : '<p class="texto-suave">Escolha um pote primeiro.</p>'}
+        <div class="campo" style="margin-top:14px;"><label>Cápsula</label></div>
+        ${cartaoEmbalagem(capsulas.map((c) => ({ ...c, cor: c.cor_cabeca })), projeto.capsula_id, "capsula_id", "Nenhuma cápsula cadastrada ainda.")}
+        <div style="display:flex;gap:10px;margin-top:14px;">
+          <div class="campo" style="margin:0;"><label>Quantidade por pote</label><input type="number" id="terceirizacao-quantidade" value="${projeto.quantidade_por_pote ?? ""}" ${podeEditar ? "" : "disabled"}></div>
+          <div class="campo" style="margin:0;"><label>Unidade</label>
+            <select id="terceirizacao-unidade" ${podeEditar ? "" : "disabled"}>
+              <option value="">—</option>
+              <option value="capsulas" ${projeto.unidade_quantidade === "capsulas" ? "selected" : ""}>Cápsulas</option>
+              <option value="gramas" ${projeto.unidade_quantidade === "gramas" ? "selected" : ""}>Gramas</option>
+            </select>
+          </div>
+          ${podeEditar ? '<button type="button" class="botao secundario" data-acao="salvar-quantidade-embalagem" style="align-self:end;">Salvar quantidade</button>' : ""}
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Briefing do projeto</h3>
+        <form id="form-briefing-terceirizacao" ${podeEditar ? "" : "class=\"desabilitado\""}>
+          <div class="campo"><label>Qual é a ideia do projeto?</label><textarea name="ideia_projeto" rows="2" ${podeEditar ? "" : "disabled"}>${escapeHtml(briefing.ideia_projeto || "")}</textarea></div>
+          <div class="campo"><label>Público-alvo</label><textarea name="publico_alvo" rows="2" ${podeEditar ? "" : "disabled"}>${escapeHtml(briefing.publico_alvo || "")}</textarea></div>
+          <div class="campo"><label>Posicionamento</label><textarea name="posicionamento" rows="2" ${podeEditar ? "" : "disabled"}>${escapeHtml(briefing.posicionamento || "")}</textarea></div>
+          <div class="campo"><label>Que sensação deseja transmitir?</label><textarea name="sensacao_desejada" rows="2" ${podeEditar ? "" : "disabled"}>${escapeHtml(briefing.sensacao_desejada || "")}</textarea></div>
+          <div class="campo"><label>Estilo visual (múltipla escolha)</label>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+              ${ESTILOS_VISUAIS_TERCEIRIZACAO.map((e) => `
+                <label class="selo ${estiloAtual.includes(e) ? "azul" : "inativo"}" style="cursor:pointer;">
+                  <input type="checkbox" name="estilo_visual" value="${e}" ${estiloAtual.includes(e) ? "checked" : ""} ${podeEditar ? "" : "disabled"} style="margin-right:4px;">${e}
+                </label>`).join("")}
+            </div>
+          </div>
+          <div class="campo"><label>Cores preferidas (uma por linha, HEX)</label><textarea name="cores_preferidas" rows="2" placeholder="#000000" ${podeEditar ? "" : "disabled"}>${coresAtuais.join("\n")}</textarea></div>
+          <div id="marcas-referencia-terceirizacao">
+            <label>Marcas ou produtos que inspiram você</label>
+            ${marcasAtuais.map((m, idx) => `
+              <div style="display:flex;gap:8px;margin-bottom:6px;" data-linha-marca>
+                <input type="text" placeholder="Nome" value="${escapeHtml(m.nome || "")}" data-campo-marca="nome" ${podeEditar ? "" : "disabled"}>
+                <input type="text" placeholder="Site/Instagram" value="${escapeHtml(m.site || "")}" data-campo-marca="site" ${podeEditar ? "" : "disabled"}>
+                ${podeEditar ? `<button type="button" class="botao secundario pequeno" data-acao="remover-linha-marca">✕</button>` : ""}
+              </div>`).join("")}
+          </div>
+          ${podeEditar ? '<button type="button" class="botao secundario pequeno" data-acao="adicionar-linha-marca">+ Adicionar marca de referência</button>' : ""}
+          ${podeEditar ? '<div class="rodape-modal" style="padding:0;"><button type="button" class="botao" data-acao="salvar-briefing-terceirizacao">Salvar briefing</button></div>' : ""}
+        </form>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Arquivos e referências</h3>
+        ${podeEditar ? `
+          <form id="form-upload-arquivo-terceirizacao" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:14px;">
+            <div class="campo" style="margin:0;"><label>Arquivo (JPG, PNG, WEBP ou PDF)</label><input type="file" name="arquivo" accept=".jpg,.jpeg,.png,.webp,.pdf" required></div>
+            <div class="campo" style="margin:0;"><label>Categoria</label>
+              <select name="categoria">
+                <option value="referencia">Referência</option>
+                <option value="embalagem">Embalagem</option>
+                <option value="rotulo">Rótulo</option>
+                <option value="cor">Cor</option>
+                <option value="estilo">Estilo</option>
+                <option value="logotipo">Logotipo</option>
+                <option value="concorrente">Concorrente</option>
+                <option value="outro">Outro</option>
+              </select>
+            </div>
+            <div class="campo" style="margin:0;"><label>Visibilidade</label>
+              <select name="visibilidade">
+                <option value="compartilhado">Compartilhado</option>
+                <option value="interno">Interno (só a equipe vê)</option>
+              </select>
+            </div>
+            <button type="submit" class="botao secundario">Enviar</button>
+          </form>` : ""}
+        <table>
+          <thead><tr><th>Nome</th><th>Categoria</th><th>Visibilidade</th><th>Tamanho</th><th>Enviado em</th><th></th></tr></thead>
+          <tbody>${arquivos.map((a) => `<tr>
+            <td>${escapeHtml(a.nome)}</td>
+            <td class="texto-suave">${escapeHtml(a.categoria)}</td>
+            <td>${a.visibilidade === "interno" ? '<span class="selo bloqueado">Interno</span>' : '<span class="selo ativo">Compartilhado</span>'}</td>
+            <td class="texto-suave">${(a.tamanho / 1024).toFixed(0)} KB</td>
+            <td class="texto-suave">${fmtData(a.criado_em)}</td>
+            <td style="display:flex;gap:6px;">
+              <button class="botao secundario pequeno" data-acao="baixar-arquivo-terceirizacao" data-id="${a.id}" data-nome="${escapeHtml(a.nome_arquivo)}">Baixar</button>
+              ${podeEditar ? `<button class="botao perigo pequeno" data-acao="excluir-arquivo-terceirizacao" data-id="${a.id}">✕</button>` : ""}
+            </td>
+          </tr>`).join("") || '<tr><td colspan="6" class="texto-suave">Nenhum arquivo enviado ainda.</td></tr>'}</tbody>
+        </table>
+      </div>`,
+      "terceirizacao"
+    );
+
+    if (podeEditar) {
+      const campoBuscaFormula = document.getElementById("busca-formula-terceirizacao");
+      const listaResultadosFormula = document.getElementById("resultados-busca-formula-terceirizacao");
+      let timeoutBusca = null;
+      campoBuscaFormula.addEventListener("input", () => {
+        clearTimeout(timeoutBusca);
+        const termo = campoBuscaFormula.value.trim();
+        if (termo.length < 2) { listaResultadosFormula.innerHTML = ""; return; }
+        timeoutBusca = setTimeout(async () => {
+          const encontrados = await chamarApi(`/terceirizacao/formulas-disponiveis?busca=${encodeURIComponent(termo)}`);
+          listaResultadosFormula.innerHTML = encontrados.length
+            ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-id="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</button>`).join("")
+            : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
+        }, 250);
+      });
+      listaResultadosFormula.addEventListener("click", async (e) => {
+        const botao = e.target.closest(".item-busca-resultado");
+        if (!botao) return;
+        await chamarApi(`/terceirizacao/projetos/${projetoId}/formula`, { method: "PUT", body: { item_id: Number(botao.dataset.id) } });
+        renderTerceirizacaoDetalhe(projetoId);
+      });
+
+      app.querySelectorAll(".botao-embalagem-opcao").forEach((botao) => {
+        botao.addEventListener("click", async () => {
+          const campo = botao.dataset.campo;
+          const id = Number(botao.dataset.id);
+          const corpo = {
+            pote_id: projeto.pote_id, tampa_id: projeto.tampa_id, capsula_id: projeto.capsula_id,
+            quantidade_por_pote: projeto.quantidade_por_pote, unidade_quantidade: projeto.unidade_quantidade,
+          };
+          corpo[campo] = id;
+          // Trocar de pote invalida a tampa escolhida antes (pode não ser
+          // mais compatível) — deixa o usuário escolher de novo.
+          if (campo === "pote_id") corpo.tampa_id = null;
+          try {
+            await chamarApi(`/terceirizacao/projetos/${projetoId}/embalagem`, { method: "PUT", body: corpo });
+            renderTerceirizacaoDetalhe(projetoId);
+          } catch (erro) {
+            definirFlash("erro", erro.message || "Não foi possível salvar a embalagem.");
+            renderTerceirizacaoDetalhe(projetoId);
+          }
+        });
+      });
+
+      const botaoSalvarQtd = document.querySelector('[data-acao="salvar-quantidade-embalagem"]');
+      if (botaoSalvarQtd) {
+        botaoSalvarQtd.addEventListener("click", async () => {
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/embalagem`, {
+            method: "PUT",
+            body: {
+              pote_id: projeto.pote_id, tampa_id: projeto.tampa_id, capsula_id: projeto.capsula_id,
+              quantidade_por_pote: document.getElementById("terceirizacao-quantidade").value ? Number(document.getElementById("terceirizacao-quantidade").value) : null,
+              unidade_quantidade: document.getElementById("terceirizacao-unidade").value || null,
+            },
+          });
+          definirFlash("ok", "Quantidade salva.");
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+      }
+
+      const containerMarcas = document.getElementById("marcas-referencia-terceirizacao");
+      const botaoAddMarca = document.querySelector('[data-acao="adicionar-linha-marca"]');
+      if (botaoAddMarca) {
+        botaoAddMarca.addEventListener("click", () => {
+          const linha = document.createElement("div");
+          linha.style.cssText = "display:flex;gap:8px;margin-bottom:6px;";
+          linha.setAttribute("data-linha-marca", "");
+          linha.innerHTML = `
+            <input type="text" placeholder="Nome" data-campo-marca="nome">
+            <input type="text" placeholder="Site/Instagram" data-campo-marca="site">
+            <button type="button" class="botao secundario pequeno" data-acao="remover-linha-marca">✕</button>`;
+          containerMarcas.appendChild(linha);
+        });
+      }
+      app.addEventListener("click", (e) => {
+        if (e.target.closest('[data-acao="remover-linha-marca"]')) {
+          e.target.closest("[data-linha-marca]").remove();
+        }
+      });
+
+      const botaoSalvarBriefing = document.querySelector('[data-acao="salvar-briefing-terceirizacao"]');
+      if (botaoSalvarBriefing) {
+        botaoSalvarBriefing.addEventListener("click", async () => {
+          const form = document.getElementById("form-briefing-terceirizacao");
+          const dados = new FormData(form);
+          const estilos = dados.getAll("estilo_visual");
+          const cores = (dados.get("cores_preferidas") || "").split("\n").map((s) => s.trim()).filter(Boolean);
+          const marcas = [...containerMarcas.querySelectorAll("[data-linha-marca]")].map((linha) => ({
+            nome: linha.querySelector('[data-campo-marca="nome"]').value.trim(),
+            site: linha.querySelector('[data-campo-marca="site"]').value.trim(),
+          })).filter((m) => m.nome || m.site);
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/briefing`, {
+            method: "PUT",
+            body: {
+              ideia_projeto: dados.get("ideia_projeto"), publico_alvo: dados.get("publico_alvo"),
+              posicionamento: dados.get("posicionamento"), sensacao_desejada: dados.get("sensacao_desejada"),
+              estilo_visual: estilos, cores_preferidas: cores, marcas_referencia: marcas,
+            },
+          });
+          definirFlash("ok", "Briefing salvo.");
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+      }
+
+      const formUpload = document.getElementById("form-upload-arquivo-terceirizacao");
+      if (formUpload) {
+        formUpload.addEventListener("submit", async (e) => {
+          e.preventDefault();
+          const dados = new FormData(formUpload);
+          const arquivo = dados.get("arquivo");
+          if (!arquivo || !arquivo.size) { definirFlash("erro", "Escolha um arquivo."); return; }
+          const dataUrl = await lerArquivoComoBase64(arquivo);
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/arquivos`, {
+            method: "POST",
+            body: {
+              nome_arquivo: arquivo.name, tipo_mime: arquivo.type, dados: dataUrl,
+              categoria: dados.get("categoria"), visibilidade: dados.get("visibilidade"),
+            },
+          });
+          definirFlash("ok", "Arquivo enviado.");
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+      }
+    }
+
+    app.querySelectorAll('[data-acao="excluir-arquivo-terceirizacao"]').forEach((botao) => {
+      botao.addEventListener("click", async () => {
+        if (!confirm("Excluir este arquivo?")) return;
+        await chamarApi(`/terceirizacao/projetos/${projetoId}/arquivos/${botao.dataset.id}`, { method: "DELETE" });
+        renderTerceirizacaoDetalhe(projetoId);
+      });
+    });
+  }
+
+  function modalSolicitarAlteracaoFormula(projetoId) {
+    abrirModal(`
+      <h3>Solicitar alteração da fórmula</h3>
+      <form data-form="solicitar-alteracao-formula" data-id="${projetoId}">
+        <div class="campo"><label>Descreva a alteração desejada</label><textarea name="texto" rows="4" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Enviar solicitação</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCancelarProjetoTerceirizacao(projetoId) {
+    abrirModal(`
+      <h3>Cancelar projeto</h3>
+      <form data-form="cancelar-projeto-terceirizacao" data-id="${projetoId}">
+        <div class="campo"><label>Motivo</label><textarea name="motivo" rows="3" required></textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Voltar</button>
+          <button type="submit" class="botao perigo">Cancelar projeto</button>
+        </div>
+      </form>`);
+  }
+
+  // ---- Catálogo de embalagem (pote/tampa/cápsula) — Fase 134 ----
+
+  async function renderTerceirizacaoEmbalagens() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const [potes, tampas, capsulas] = await Promise.all([
+      chamarApi("/terceirizacao/potes?incluir_inativos=1"),
+      chamarApi("/terceirizacao/tampas?incluir_inativos=1"),
+      chamarApi("/terceirizacao/capsulas?incluir_inativos=1"),
+    ]);
+    state.cache.catalogoEmbalagem = { pote: potes, tampa: tampas, capsula: capsulas };
+    const podeConfigurar = temPermissao("terceirizacao", "configurar_embalagem");
+
+    function secaoCatalogo(titulo, tipo, lista, colunas) {
+      const linhas = lista.map((o) => `<tr>
+        <td>${o.imagem ? `<img src="${o.imagem}" style="width:40px;height:40px;object-fit:contain;">` : "—"}</td>
+        <td class="mono">${escapeHtml(o.codigo)}</td>
+        <td>${escapeHtml(o.nome)}</td>
+        ${colunas.map((c) => `<td class="texto-suave">${escapeHtml(o[c] || "")}</td>`).join("")}
+        <td>${o.ativo ? '<span class="selo ativo">Ativo</span>' : '<span class="selo inativo">Inativo</span>'}</td>
+        <td>${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="editar-embalagem" data-tipo="${tipo}" data-id="${o.id}">Editar</button>` : ""}
+        ${podeConfigurar && tipo === "pote" ? `<button class="botao secundario pequeno" data-acao="editar-compatibilidade-pote" data-id="${o.id}">Tampas compatíveis</button>` : ""}</td>
+      </tr>`).join("");
+      return `<div class="cartao">
+        <div class="barra-acoes">
+          <h3 style="margin:0;">${escapeHtml(titulo)}</h3>
+          ${podeConfigurar ? `<button class="botao secundario pequeno" data-acao="novo-embalagem" data-tipo="${tipo}">+ Novo</button>` : ""}
+        </div>
+        <table><thead><tr><th>Foto</th><th>Código</th><th>Nome</th>${colunas.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}<th>Status</th><th></th></tr></thead>
+        <tbody>${linhas || `<tr><td colspan="${5 + colunas.length}" class="texto-suave">Nenhum registro ainda.</td></tr>`}</tbody></table>
+      </div>`;
+    }
+
+    renderShell(
+      `<h2>Catálogo de Embalagem</h2>
+       ${secaoCatalogo("Potes", "pote", potes, ["cor", "material"])}
+       ${secaoCatalogo("Tampas", "tampa", tampas, ["cor", "modelo"])}
+       ${secaoCatalogo("Cápsulas", "capsula", capsulas, ["cor_cabeca", "cor_corpo", "material"])}`,
+      "terceirizacao-embalagens"
+    );
+  }
+
+  const CAMPOS_EMBALAGEM_POR_TIPO = {
+    pote: [
+      { nome: "cor", label: "Cor", tipo: "text", obrigatorio: true },
+      { nome: "material", label: "Material", tipo: "text" },
+      { nome: "capacidade_ml", label: "Capacidade (mL)", tipo: "number" },
+      { nome: "capacidade_capsulas", label: "Capacidade (cápsulas)", tipo: "number" },
+    ],
+    tampa: [
+      { nome: "cor", label: "Cor", tipo: "text", obrigatorio: true },
+      { nome: "modelo", label: "Modelo", tipo: "text" },
+    ],
+    capsula: [
+      { nome: "cor_cabeca", label: "Cor da cabeça", tipo: "text", obrigatorio: true },
+      { nome: "cor_corpo", label: "Cor do corpo", tipo: "text", obrigatorio: true },
+      { nome: "material", label: "Material", tipo: "text" },
+    ],
+  };
+  const ENDPOINT_POR_TIPO_EMBALAGEM = { pote: "potes", tampa: "tampas", capsula: "capsulas" };
+
+  function modalEmbalagem(tipo, registro) {
+    const campos = CAMPOS_EMBALAGEM_POR_TIPO[tipo];
+    const wrap = abrirModal(`
+      <h3>${registro ? "Editar" : "Novo"} ${tipo === "pote" ? "pote" : tipo === "tampa" ? "tampa" : "cápsula"}</h3>
+      <form data-form="salvar-embalagem" data-tipo="${tipo}" data-id="${registro ? registro.id : ""}">
+        ${!registro ? `<div class="campo"><label>Código (único)</label><input name="codigo" required></div>` : ""}
+        <div class="campo"><label>Nome</label><input name="nome" value="${registro ? escapeHtml(registro.nome) : ""}" required></div>
+        ${campos.map((c) => `<div class="campo"><label>${escapeHtml(c.label)}</label><input name="${c.nome}" type="${c.tipo}" value="${registro && registro[c.nome] != null ? escapeHtml(String(registro[c.nome])) : ""}" ${c.obrigatorio ? "required" : ""}></div>`).join("")}
+        <div class="campo"><label>Foto</label><input type="file" name="imagem" accept="image/jpeg,image/png,image/webp">
+          ${registro && registro.imagem ? `<img src="${registro.imagem}" style="width:80px;height:80px;object-fit:contain;margin-top:6px;">` : ""}
+        </div>
+        ${registro ? `<div class="campo"><label><input type="checkbox" name="ativo" ${registro.ativo ? "checked" : ""}> Ativo</label></div>` : ""}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCompatibilidadePote(pote, todasTampas) {
+    abrirModal(`
+      <h3>Tampas compatíveis com "${escapeHtml(pote.nome)}"</h3>
+      <p class="texto-suave">Nenhuma marcada = compatível com todas as tampas ativas.</p>
+      <form data-form="salvar-compatibilidade-pote" data-id="${pote.id}">
+        ${todasTampas.map((t) => `<label style="display:block;margin-bottom:6px;"><input type="checkbox" name="tampa_ids" value="${t.id}"> ${escapeHtml(t.nome)} (${escapeHtml(t.cor)})</label>`).join("")}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+    chamarApi(`/terceirizacao/potes/${pote.id}/tampas-compativeis`).then((compativeis) => {
+      const idsCompativeis = new Set(compativeis.map((t) => t.id));
+      document.querySelectorAll('form[data-form="salvar-compatibilidade-pote"] input[name="tampa_ids"]').forEach((cb) => {
+        if (idsCompativeis.size === todasTampas.length) return; // "todas" = nenhuma marcada
+        cb.checked = idsCompativeis.has(Number(cb.value));
+      });
+    });
+  }
+
   // Fase 102 — aprovação financeira do CADASTRO do cliente (diferente da
   // aprovação de cada pedido, Fase 83): decide se o cliente já está apto
   // a comprar.
@@ -15520,6 +16085,40 @@
       case "novo-pedido":
         modalNovoPedido();
         return;
+      // ---- Fase 134 — Terceirização Premium ----
+      case "novo-projeto-terceirizacao":
+        modalNovoProjetoTerceirizacao();
+        return;
+      case "cancelar-projeto-terceirizacao":
+        modalCancelarProjetoTerceirizacao(Number(alvo.dataset.id));
+        return;
+      case "abrir-solicitar-alteracao-formula":
+        modalSolicitarAlteracaoFormula(Number(alvo.dataset.id));
+        return;
+      case "novo-embalagem":
+        modalEmbalagem(alvo.dataset.tipo, null);
+        return;
+      case "editar-embalagem": {
+        const tipo = alvo.dataset.tipo;
+        const lista = (state.cache.catalogoEmbalagem && state.cache.catalogoEmbalagem[tipo]) || [];
+        const registro = lista.find((o) => o.id === Number(alvo.dataset.id));
+        modalEmbalagem(tipo, registro);
+        return;
+      }
+      case "baixar-arquivo-terceirizacao": {
+        // Rota exige Authorization (Bearer) — não dá pra usar <a href>
+        // direto (mesmo raciocínio de `baixarArquivo`, Fase 10).
+        const projetoIdAtual = Number(location.hash.split("/")[2]);
+        await baixarArquivo(`/terceirizacao/projetos/${projetoIdAtual}/arquivos/${alvo.dataset.id}/download`, alvo.dataset.nome);
+        return;
+      }
+      case "editar-compatibilidade-pote": {
+        const potesCache = (state.cache.catalogoEmbalagem && state.cache.catalogoEmbalagem.pote) || [];
+        const tampasCache = (state.cache.catalogoEmbalagem && state.cache.catalogoEmbalagem.tampa) || [];
+        const pote = potesCache.find((p) => p.id === Number(alvo.dataset.id));
+        modalCompatibilidadePote(pote, tampasCache.filter((t) => t.ativo));
+        return;
+      }
       case "ver-pedido":
         return navegarPara(`#/pedido/${alvo.dataset.id}`);
       case "adicionar-item-pedido": {
@@ -17396,6 +17995,64 @@
         fecharModais();
         definirFlash("ok", "Cliente reprovado — pedidos dele não podem mais ser confirmados até ser aprovado.");
         return renderComercial();
+      }
+      // ---- Fase 134 — Terceirização Premium ----
+      case "criar-projeto-terceirizacao": {
+        if (!dados.get("cliente_id")) throw new Error("Busque e selecione um cliente.");
+        const projeto = await chamarApi("/terceirizacao/projetos", {
+          method: "POST", body: { cliente_id: Number(dados.get("cliente_id")) },
+        });
+        fecharModais();
+        return navegarPara(`#/terceirizacao/${projeto.id}`);
+      }
+      case "cancelar-projeto-terceirizacao": {
+        await chamarApi(`/terceirizacao/projetos/${form.dataset.id}/cancelar`, { method: "POST", body: { motivo: dados.get("motivo") } });
+        fecharModais();
+        definirFlash("ok", "Projeto cancelado.");
+        return renderTerceirizacaoDetalhe(Number(form.dataset.id));
+      }
+      case "solicitar-alteracao-formula": {
+        await chamarApi(`/terceirizacao/projetos/${form.dataset.id}/solicitar-alteracao-formula`, {
+          method: "PUT", body: { texto: dados.get("texto") },
+        });
+        fecharModais();
+        definirFlash("ok", "Solicitação enviada.");
+        return renderTerceirizacaoDetalhe(Number(form.dataset.id));
+      }
+      case "salvar-embalagem": {
+        const tipoEmbalagem = form.dataset.tipo;
+        const idEmbalagem = form.dataset.id;
+        const camposExtra = {
+          pote: ["cor", "material", "capacidade_ml", "capacidade_capsulas"],
+          tampa: ["cor", "modelo"],
+          capsula: ["cor_cabeca", "cor_corpo", "material"],
+        }[tipoEmbalagem];
+        const corpo = { nome: dados.get("nome") };
+        camposExtra.forEach((c) => { corpo[c] = dados.get(c) || null; });
+        const arquivoImagem = dados.get("imagem");
+        if (arquivoImagem && arquivoImagem.size) {
+          corpo.imagem = await lerArquivoComoBase64(arquivoImagem);
+        }
+        const endpointEmbalagem = ENDPOINT_POR_TIPO_EMBALAGEM[tipoEmbalagem];
+        if (idEmbalagem) {
+          corpo.ativo = dados.get("ativo") ? 1 : 0;
+          await chamarApi(`/terceirizacao/${endpointEmbalagem}/${idEmbalagem}`, { method: "PUT", body: corpo });
+        } else {
+          corpo.codigo = dados.get("codigo");
+          await chamarApi(`/terceirizacao/${endpointEmbalagem}`, { method: "POST", body: corpo });
+        }
+        fecharModais();
+        definirFlash("ok", "Salvo.");
+        return renderTerceirizacaoEmbalagens();
+      }
+      case "salvar-compatibilidade-pote": {
+        const tampaIds = dados.getAll("tampa_ids").map(Number);
+        await chamarApi(`/terceirizacao/potes/${form.dataset.id}/tampas-compativeis`, {
+          method: "PUT", body: { tampa_ids: tampaIds },
+        });
+        fecharModais();
+        definirFlash("ok", "Compatibilidade salva.");
+        return renderTerceirizacaoEmbalagens();
       }
       case "criar-pedido": {
         // Fase 99 — cliente_id/item_id agora vêm de campos ocultos
