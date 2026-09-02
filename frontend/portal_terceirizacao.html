@@ -322,12 +322,59 @@
           </div>
         </div>
       ` : ""}
+
+      ${projeto.status === "aguardando_assinatura" ? `
+        <div class="cartao" id="cartao-assinar" style="text-align:center;">
+          <h2>Assinatura eletrônica</h2>
+          <p class="texto-suave" style="margin-bottom:16px;">Sua especificação já passou pela análise interna da Alphafitus e está pronta. Pra formalizar, assine eletronicamente abaixo — isso gera um documento definitivo com data, hora e um código de verificação únicos, e a partir daqui os dados ficam travados (qualquer mudança precisa de uma nova versão).</p>
+          <div style="text-align:left;max-width:420px;margin:0 auto;">
+            <div class="campo"><label>Seu nome completo</label><input type="text" id="assinatura2-nome"></div>
+            <div class="campo"><label>Seu CPF</label><input type="text" id="assinatura2-cpf" placeholder="000.000.000-00"></div>
+            <div class="campo"><label>Seu e-mail (opcional)</label><input type="text" id="assinatura2-email"></div>
+          </div>
+          <button type="button" class="botao" id="btn-assinar" style="margin-top:10px;">Assinar eletronicamente →</button>
+        </div>
+      ` : ""}
+
+      ${projeto.assinatura_eletronica ? `
+        <div class="cartao" style="text-align:center;">
+          <h2>Documento assinado</h2>
+          <p>Assinado eletronicamente por <strong>${escapeHtml(projeto.assinatura_eletronica.assinante_nome)}</strong> em ${new Date(projeto.assinatura_eletronica.assinado_em).toLocaleString("pt-BR")}.</p>
+          <p class="texto-suave" style="word-break:break-all;">Código de verificação (hash SHA-256): ${escapeHtml(projeto.assinatura_eletronica.hash_pdf_sha256)}</p>
+        </div>
+      ` : ""}
     `;
 
     // preview do mockup (blob, sem precisar de auth aqui — token já valida)
     fetch(`${API}/${token}/mockup.png`).then((r) => r.blob()).then((b) => {
       document.getElementById("mockup-img").src = URL.createObjectURL(b);
     }).catch(() => {});
+
+    // Fase 140 — o botão de assinatura de verdade fica FORA do `editavel`
+    // (que só cobre aguardando_cliente/em_preenchimento) — sem isso, o
+    // early-return logo abaixo pularia esse listener inteiro sempre que
+    // o projeto chegasse em 'aguardando_assinatura'.
+    const btnAssinar = document.getElementById("btn-assinar");
+    if (btnAssinar) {
+      btnAssinar.addEventListener("click", async () => {
+        const nome = document.getElementById("assinatura2-nome").value.trim();
+        const cpf = document.getElementById("assinatura2-cpf").value.trim();
+        const email = document.getElementById("assinatura2-email").value.trim();
+        if (!nome) { alert("Informe seu nome."); return; }
+        if (cpf.replace(/\D/g, "").length !== 11) { alert("Informe um CPF válido."); return; }
+        if (!confirm("Confirma a assinatura eletrônica deste documento? Depois disso os dados ficam travados.")) return;
+        try {
+          btnAssinar.disabled = true;
+          btnAssinar.textContent = "Assinando…";
+          await chamar(`/${token}/assinar`, { method: "POST", body: { nome, cpf, email } });
+          renderizar();
+        } catch (erro) {
+          alert(erro.message || "Não foi possível assinar.");
+          btnAssinar.disabled = false;
+          btnAssinar.textContent = "Assinar eletronicamente →";
+        }
+      });
+    }
 
     if (!editavel) return; // resto da função só liga eventos de edição
 

@@ -28,6 +28,7 @@ resto do sistema:
 import base64
 import binascii
 import datetime
+import hashlib
 import json
 import re
 import secrets
@@ -92,7 +93,20 @@ def _projeto_do_portal(conn, projeto_id):
         "arquivos": [dict(a) for a in arquivos],
         "assinatura_cliente_nome": p.get("assinatura_cliente_nome"),
         "assinatura_cliente_em": p.get("assinatura_cliente_em"),
+        # Fase 140 — assinatura eletrônica de verdade desta versão (se já
+        # foi assinada); None enquanto `status` ainda não chegou em
+        # 'assinado' pela primeira vez nesta versão.
+        "assinatura_eletronica": _assinatura_eletronica_atual(conn, projeto_id, p["versao"]),
     }
+
+
+def _assinatura_eletronica_atual(conn, projeto_id, versao):
+    linha = conn.execute(
+        "SELECT assinante_nome, assinante_email, assinado_em, hash_pdf_sha256 "
+        "FROM terceirizacao_versoes WHERE projeto_id = ? AND versao = ?",
+        (projeto_id, versao),
+    ).fetchone()
+    return dict(linha) if linha else None
 
 
 def _exigir_editavel(conn, projeto_id):
@@ -368,5 +382,94 @@ def concluir_portal(token):
         notificacoes_service.notificar_usuarios_com_permissao(
             conn, modulo="terceirizacao", acao="criar", tipo="terceirizacao_cliente_concluiu",
             mensagem=f"O cliente concluiu o preenchimento do projeto {projeto['numero']} — pronto para revisão interna.",
+        )
+    return jsonify(_projeto_do_portal(conn, projeto_id))
+
+
+@bp.post("/<token>/assinar")
+def assinar_portal(token):
+    """Fase 140 (Fase D do plano) — a assinatura eletrônica DE VERDADE,
+    diferente da confirmação leve de `concluir_portal` acima (que
+    acontece bem antes no fluxo, só pra avisar a equipe que o cliente
+    terminou de preencher). Esta só fica disponível quando o projeto
+    chega em 'aguardando_assinatura' — depois que TODOS os departamentos
+    já aprovaram internamente (ver decidir_aprovacao em terceirizacao.py)
+    — e captura CPF além de nome/e-mail, IP e navegador, gera o PDF final
+    NA HORA, calcula o hash SHA-256 dele, e grava tudo (dados + PDF +
+    hash) como um snapshot permanente em terceirizacao_versoes — depois
+    disso o projeto vira somente-leitura até alguém abrir uma nova versão
+    de propósito (POST /projetos/<id>/nova-versao, só uso interno)."""
+    conn, link = _resolver_link_ou_404(token)
+    projeto_id = link["projeto_id"]
+    projeto = conn.execute("SELECT * FROM terceirizacao_projetos WHERE id = ?", (projeto_id,)).fetchone()
+    if projeto["status"] != "aguardando_assinatura":
+        raise ApiError(
+            "Este projeto não está aguardando assinatura no momento — "
+            "ou ainda não passou pela aprovação interna, ou já foi assinado.",
+            status=409, codigo="nao_aguardando_assinatura",
+        )
+
+    dados = request.get_json(silent=True) or {}
+    nome = (dados.get("nome") or "").strip()
+    email = (dados.get("email") or "").strip()
+    cpf = re.sub(r"\D", "", dados.get("cpf") or "")
+    if not nome:
+        raise ApiError("Informe seu nome para assinar.", status=400)
+    if len(cpf) != 11:
+        raise ApiError("Informe um CPF válido (11 dígitos) para assinar.", status=400)
+
+    projeto_detalhado = tc._projeto_detalhado(conn, projeto_id)
+    nutricao = tc._nutricao_para_item(conn, projeto_detalhado["item_id"]) if projeto_detalhado.get("item_id") else None
+    pdf_bytes = tc._gerar_pdf_dossie(projeto_detalhado, nutricao)
+    hash_pdf = hashlib.sha256(pdf_bytes).hexdigest()
+    agora = _now_iso()
+    navegador = (request.headers.get("User-Agent") or "")[:500]
+    versao_atual = projeto["versao"]
+
+    snapshot = {"projeto": projeto_detalhado, "nutricao": nutricao}
+    conn.execute(
+        """
+        INSERT INTO terceirizacao_versoes
+            (projeto_id, versao, snapshot_json, hash_pdf_sha256, pdf_dados, pdf_tamanho,
+             assinante_nome, assinante_email, assinante_cpf, assinante_ip, assinante_navegador, assinado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            projeto_id, versao_atual, json.dumps(snapshot, ensure_ascii=False, default=str),
+            hash_pdf, base64.b64encode(pdf_bytes).decode(), len(pdf_bytes),
+            nome, email or None, cpf, client_ip(), navegador, agora,
+        ),
+    )
+    conn.execute("UPDATE terceirizacao_projetos SET status = 'assinado', atualizado_em = ? WHERE id = ?", (agora, projeto_id))
+
+    # Mesmo padrão de "salva no cadastro do cliente pra auditoria" que
+    # concluir_portal já usa — nunca deixa a assinatura em si falhar por
+    # causa disso.
+    try:
+        conn.execute(
+            "INSERT INTO clientes_documentos (cliente_id, nome, nome_arquivo, tipo_mime, dados, tamanho, criado_por) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                projeto["cliente_id"], f"Terceirização {projeto['numero']} — assinado eletronicamente (v{versao_atual})",
+                f"Terceirizacao_{projeto['numero']}_v{versao_atual}_assinado.pdf", "application/pdf",
+                base64.b64encode(pdf_bytes).decode(), len(pdf_bytes), link["criado_por"],
+            ),
+        )
+    except Exception:
+        pass
+
+    audit.registrar(
+        conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=link["criado_por"],
+        acao="assinado_eletronicamente", valor_novo={"versao": versao_atual, "hash_pdf_sha256": hash_pdf, "nome": nome},
+        ip=client_ip(), dispositivo=client_device(),
+    )
+    if projeto["responsavel_id"]:
+        notificacoes_service.criar(
+            conn, usuario_id=projeto["responsavel_id"], tipo="terceirizacao_assinado",
+            mensagem=f"Projeto {projeto['numero']} foi assinado eletronicamente por {nome} — hash {hash_pdf[:12]}…",
+        )
+    else:
+        notificacoes_service.notificar_usuarios_com_permissao(
+            conn, modulo="terceirizacao", acao="criar", tipo="terceirizacao_assinado",
+            mensagem=f"Projeto {projeto['numero']} foi assinado eletronicamente por {nome}.",
         )
     return jsonify(_projeto_do_portal(conn, projeto_id))

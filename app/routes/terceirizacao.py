@@ -663,7 +663,16 @@ def cancelar_projeto(projeto_id):
 def salvar_briefing(projeto_id):
     usuario_atual = g.usuario_atual
     conn = get_db()
-    _projeto_ou_404(conn, projeto_id)
+    projeto = _projeto_ou_404(conn, projeto_id)
+    # Fase 140 — mesmo congelamento que definir_formula_projeto/
+    # definir_embalagem_projeto já aplicam (só faltava aqui): uma vez que
+    # o projeto saiu de rascunho — enviado pra revisão/aprovação/
+    # assinatura — os cartões de briefing (inclusive quem assina e
+    # condição comercial, adicionados na Fase 139) também precisam parar
+    # de aceitar edição silenciosa. Sem isso a "assinatura eletrônica" da
+    # Fase D não significa nada: dado assinado podia mudar por baixo.
+    if projeto["status"] != "rascunho":
+        raise ApiError("Só é possível alterar o briefing enquanto o projeto está em rascunho.", status=400)
     dados = request.get_json(silent=True) or {}
 
     def _json_lista(valor):
@@ -1033,6 +1042,89 @@ def decidir_aprovacao(projeto_id, departamento):
                     conn, usuario_id=projeto["responsavel_id"], tipo="terceirizacao_aprovado",
                     mensagem=f"Projeto {projeto['numero']} foi aprovado por todos os departamentos — pronto para assinatura.",
                 )
+    return jsonify(_projeto_detalhado(conn, projeto_id))
+
+
+# =============================================================================
+# Fase 140 (Fase D do plano) — versões assinadas + congelamento
+# =============================================================================
+
+def _versao_resumo(row):
+    d = dict(row)
+    d.pop("snapshot_json", None)
+    d.pop("pdf_dados", None)
+    return d
+
+
+@bp.get("/projetos/<int:projeto_id>/versoes")
+@requires_permission("terceirizacao", "visualizar")
+def listar_versoes_projeto(projeto_id):
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    linhas = conn.execute(
+        "SELECT * FROM terceirizacao_versoes WHERE projeto_id = ? ORDER BY versao DESC", (projeto_id,)
+    ).fetchall()
+    return jsonify([_versao_resumo(r) for r in linhas])
+
+
+def _versao_ou_404(conn, projeto_id, versao):
+    row = conn.execute(
+        "SELECT * FROM terceirizacao_versoes WHERE projeto_id = ? AND versao = ?", (projeto_id, versao)
+    ).fetchone()
+    if row is None:
+        raise ApiError("Versão assinada não encontrada.", status=404)
+    return dict(row)
+
+
+@bp.get("/projetos/<int:projeto_id>/versoes/<int:versao>")
+@requires_permission("terceirizacao", "visualizar")
+def obter_versao_projeto(projeto_id, versao):
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    linha = _versao_ou_404(conn, projeto_id, versao)
+    linha["snapshot"] = json.loads(linha.pop("snapshot_json"))
+    linha.pop("pdf_dados", None)
+    return jsonify(linha)
+
+
+@bp.get("/projetos/<int:projeto_id>/versoes/<int:versao>/documento.pdf")
+@requires_permission("terceirizacao", "visualizar")
+def baixar_documento_versao(projeto_id, versao):
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    linha = _versao_ou_404(conn, projeto_id, versao)
+    try:
+        pdf_bytes = base64.b64decode(linha["pdf_dados"], validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError("PDF da versão assinada corrompido.", status=500)
+    return Response(
+        pdf_bytes, mimetype="application/pdf",
+        headers={"Content-Disposition": f"inline; filename=\"Terceirizacao_{projeto['numero']}_v{versao}_assinado.pdf\""},
+    )
+
+
+@bp.post("/projetos/<int:projeto_id>/nova-versao")
+@requires_permission("terceirizacao", "criar")
+def iniciar_nova_versao(projeto_id):
+    """Depois de assinado, o projeto vira somente-leitura (ver checagens
+    de status == 'rascunho' em definir_formula_projeto/definir_embalagem_
+    projeto/salvar_briefing) — pra mudar qualquer coisa depois disso é
+    preciso abrir explicitamente uma V2 nova. A versão assinada anterior
+    (dados + PDF + hash) continua intacta pra sempre em
+    terceirizacao_versoes — nunca é sobrescrita, só uma nova é criada na
+    hora de assinar de novo."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    if projeto["status"] != "assinado":
+        raise ApiError("Só é possível abrir uma nova versão de um projeto já assinado.", status=400)
+    nova_versao = projeto["versao"] + 1
+    conn.execute(
+        "UPDATE terceirizacao_projetos SET versao = ?, status = 'rascunho', atualizado_em = ? WHERE id = ?",
+        (nova_versao, _now_iso(), projeto_id),
+    )
+    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+                     acao="nova_versao_iniciada", valor_novo={"versao": nova_versao}, ip=client_ip(), dispositivo=client_device())
     return jsonify(_projeto_detalhado(conn, projeto_id))
 
 

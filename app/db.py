@@ -166,6 +166,7 @@ SCHEMA_FILES = [
     "schema_fase136.sql",  # Fase 136 — Terceirização Premium (Fase C): link seguro + portal do cliente
     "schema_fase137.sql",  # Fase 137 — Terceirização Premium: ajustes (nome do Memorial, reordenação, prévia + confirmação do cliente)
     "schema_fase139.sql",  # Fase 139 — Terceirização Premium: ficha cadastral (dados fiscais do cliente + quem assina/condição comercial por projeto)
+    "schema_fase140.sql",  # Fase 140 — Terceirização Premium (Fase D): assinatura eletrônica de verdade + congelamento de versão
 ]
 
 

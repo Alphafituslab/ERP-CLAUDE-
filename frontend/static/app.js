@@ -10538,11 +10538,12 @@
     const projeto = await chamarApi(`/terceirizacao/projetos/${projetoId}`);
     const podeEditar = temPermissao("terceirizacao", "criar") && projeto.status === "rascunho";
 
-    const [potes, arquivos, aprovacoes, linkCliente] = await Promise.all([
+    const [potes, arquivos, aprovacoes, linkCliente, versoes] = await Promise.all([
       chamarApi("/terceirizacao/potes"),
       chamarApi(`/terceirizacao/projetos/${projetoId}/arquivos`),
       chamarApi(`/terceirizacao/projetos/${projetoId}/aprovacoes`),
       chamarApi(`/terceirizacao/projetos/${projetoId}/link-cliente`),
+      chamarApi(`/terceirizacao/projetos/${projetoId}/versoes`),
     ]);
     const podeEnviarParaAprovacao = temPermissao("terceirizacao", "criar") && ["rascunho", "aguardando_revisao"].includes(projeto.status);
     let tampas = [];
@@ -10788,6 +10789,27 @@
                 </tr>`;
               }).join("")}</tbody>
             </table>`}
+      </div>
+
+      <div class="cartao">
+        <div class="barra-acoes">
+          <h3 style="margin:0;">Versões assinadas</h3>
+          ${temPermissao("terceirizacao", "criar") && projeto.status === "assinado" ? `<button type="button" class="botao secundario pequeno" data-acao="nova-versao-terceirizacao" data-id="${projeto.id}">Iniciar nova versão</button>` : ""}
+        </div>
+        <p class="texto-suave">A assinatura eletrônica de verdade acontece pelo portal do cliente, quando o projeto chega em "Aguardando assinatura" (depois que todos os departamentos aprovarem). Cada versão assinada fica registrada aqui pra sempre — hash SHA-256 do PDF exato assinado, nunca sobrescrito.</p>
+        ${versoes.length === 0 ? '<p class="texto-suave">Nenhuma versão assinada ainda.</p>' : `
+          <table>
+            <thead><tr><th>Versão</th><th>Assinado por</th><th>CPF</th><th>Quando</th><th>Hash (verificação)</th><th></th></tr></thead>
+            <tbody>${versoes.map((v) => `
+              <tr>
+                <td>V${v.versao}</td>
+                <td>${escapeHtml(v.assinante_nome)}${v.assinante_email ? `<br><span class="texto-suave" style="font-size:12px;">${escapeHtml(v.assinante_email)}</span>` : ""}</td>
+                <td class="mono">${escapeHtml(v.assinante_cpf || "")}</td>
+                <td class="texto-suave">${fmtData(v.assinado_em)}</td>
+                <td class="mono texto-suave" style="font-size:11px;word-break:break-all;max-width:180px;">${escapeHtml(v.hash_pdf_sha256)}</td>
+                <td><button class="botao secundario pequeno" data-acao="baixar-versao-terceirizacao" data-id="${projeto.id}" data-versao="${v.versao}">PDF</button></td>
+              </tr>`).join("")}</tbody>
+          </table>`}
       </div>
 
       <div class="cartao">
@@ -16424,6 +16446,24 @@
           definirFlash("erro", erro.message || "Não foi possível abrir o Dossiê.");
         }
         return;
+      }
+      case "baixar-versao-terceirizacao": {
+        try {
+          await abrirBinarioEmNovaAba(`/terceirizacao/projetos/${alvo.dataset.id}/versoes/${alvo.dataset.versao}/documento.pdf`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir o PDF assinado.");
+        }
+        return;
+      }
+      case "nova-versao-terceirizacao": {
+        if (!confirm("Isso abre uma nova versão (V+1) deste projeto pra edição — a versão assinada atual continua guardada pra sempre, intacta. Continuar?")) return;
+        try {
+          await chamarApi(`/terceirizacao/projetos/${alvo.dataset.id}/nova-versao`, { method: "POST" });
+          definirFlash("ok", "Nova versão iniciada — o projeto voltou pra rascunho.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível iniciar uma nova versão.");
+        }
+        return renderTerceirizacaoDetalhe(Number(alvo.dataset.id));
       }
       case "gerar-link-cliente": {
         const enviarWhatsapp = alvo.dataset.whatsapp === "1";
