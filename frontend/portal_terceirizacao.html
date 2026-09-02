@@ -200,17 +200,20 @@
       <h1 class="titulo-projeto">${escapeHtml(projeto.numero)} <span class="selo-status">${editavel ? "Preenchimento aberto" : "Enviado — em análise"}</span></h1>
       <p class="subtitulo-projeto">${escapeHtml(projeto.cliente.razao_social)}</p>
 
-      ${!editavel ? `<div class="aviso">Seu projeto já foi enviado para a Alphafitus e está em análise interna. Se precisar alterar algo, entre em contato com seu vendedor.</div>` : ""}
+      ${!editavel ? `<div class="aviso">Seu projeto já foi enviado para a Alphafitus e está em análise interna. Se precisar alterar algo, entre em contato com seu vendedor.${projeto.assinatura_cliente_nome ? `<br>Confirmado por ${escapeHtml(projeto.assinatura_cliente_nome)}.` : ""}</div>` : ""}
 
       <div class="cartao">
         <h2>Preview do Projeto</h2>
         <img class="mockup-preview" id="mockup-img" alt="Preview do produto">
+        <div style="margin-top:12px;">
+          <a href="${API}/${token}/documento.pdf" target="_blank" class="botao-secundario" style="text-decoration:none;display:inline-block;">📄 Ver documento completo (PDF)</a>
+        </div>
       </div>
 
       <div class="cartao">
         <h2>Fórmula</h2>
         ${projeto.item ? `
-          <p><strong>${escapeHtml(projeto.item.descricao)}</strong></p>
+          <p><strong>${escapeHtml(projeto.item.nome_memorial || projeto.item.descricao)}</strong></p>
           ${projeto.nutricao && projeto.nutricao.vinculado_a_memorial && projeto.nutricao.memorial_aprovado_encontrado ? `
             ${projeto.nutricao.tabela_nutricional && projeto.nutricao.tabela_nutricional.tipo === "estruturado" ? `
               <table><thead><tr><th>Nutriente</th><th>Quantidade</th><th>Unidade</th></tr></thead>
@@ -286,9 +289,20 @@
       </div>
 
       ${editavel ? `
-        <div class="cartao" style="text-align:center;">
-          <p class="texto-suave" style="margin-bottom:16px;">Quando terminar de preencher tudo, clique abaixo para enviar para a equipe Alphafitus.</p>
-          <button type="button" class="botao" id="btn-concluir">Concluir e Enviar →</button>
+        <div class="cartao" id="cartao-concluir" style="text-align:center;">
+          <div id="passo-revisar">
+            <p class="texto-suave" style="margin-bottom:16px;">Reveja o preview e o documento completo acima. Quando estiver tudo certo, clique abaixo.</p>
+            <button type="button" class="botao" id="btn-concluir">Está tudo certo, confirmar →</button>
+          </div>
+          <div id="passo-assinatura" hidden style="text-align:left;">
+            <p style="text-align:center;margin-top:0;">Pra confirmar, digite seu nome e e-mail abaixo — isso serve como sua confirmação de que revisou e aprovou tudo o que está aqui.</p>
+            <div class="campo"><label>Seu nome completo</label><input type="text" id="assinatura-nome"></div>
+            <div class="campo"><label>Seu e-mail (opcional)</label><input type="text" id="assinatura-email"></div>
+            <div class="rodape-acoes">
+              <button type="button" class="botao-secundario" id="btn-cancelar-assinatura">Voltar</button>
+              <button type="button" class="botao" id="btn-confirmar-assinatura">Confirmar e Enviar →</button>
+            </div>
+          </div>
         </div>
       ` : ""}
     `;
@@ -409,10 +423,21 @@
 
     const btnConcluir = document.getElementById("btn-concluir");
     if (btnConcluir) {
-      btnConcluir.addEventListener("click", async () => {
-        if (!confirm("Confirmar envio? Depois de enviado, você não poderá mais editar por aqui.")) return;
+      btnConcluir.addEventListener("click", () => {
+        document.getElementById("passo-revisar").hidden = true;
+        document.getElementById("passo-assinatura").hidden = false;
+        document.getElementById("assinatura-nome").focus();
+      });
+      document.getElementById("btn-cancelar-assinatura").addEventListener("click", () => {
+        document.getElementById("passo-assinatura").hidden = true;
+        document.getElementById("passo-revisar").hidden = false;
+      });
+      document.getElementById("btn-confirmar-assinatura").addEventListener("click", async () => {
+        const nome = document.getElementById("assinatura-nome").value.trim();
+        const email = document.getElementById("assinatura-email").value.trim();
+        if (!nome) { alert("Digite seu nome para confirmar."); return; }
         try {
-          await chamar(`/${token}/concluir`, { method: "POST" });
+          await chamar(`/${token}/concluir`, { method: "POST", body: { nome, email } });
           renderizar();
         } catch (erro) {
           alert(erro.message || "Não foi possível concluir.");

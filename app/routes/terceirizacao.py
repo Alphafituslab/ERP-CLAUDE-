@@ -97,7 +97,10 @@ def _projeto_detalhado(conn, projeto_id):
     p = _projeto_ou_404(conn, projeto_id)
     p["cliente"] = _cliente_ou_404(conn, p["cliente_id"])
     if p["item_id"]:
-        item = conn.execute("SELECT * FROM itens WHERE id = ?", (p["item_id"],)).fetchone()
+        item = conn.execute(
+            "SELECT i.*, mp.nome AS nome_memorial FROM itens i LEFT JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id WHERE i.id = ?",
+            (p["item_id"],),
+        ).fetchone()
         p["item"] = dict(item) if item else None
     if p["pote_id"]:
         row = conn.execute("SELECT * FROM terceirizacao_potes WHERE id = ?", (p["pote_id"],)).fetchone()
@@ -254,18 +257,27 @@ def definir_tampas_compativeis(pote_id):
 def listar_formulas_disponiveis():
     """Itens do tipo produto_acabado — o que o cliente pode escolher pra
     terceirizar. Busca por nome/código/categoria (mesmo padrão de busca já
-    usado em `comercial.listar_clientes`)."""
+    usado em `comercial.listar_clientes`) — pedido do usuário (2026-09-02):
+    também busca e MOSTRA o nome cadastrado no Memorial Técnico
+    (`memorial_produtos.nome`, via `itens.memorial_produto_id`) quando o
+    item já estiver vinculado a um, porque é esse o nome que o
+    Comercial/P&D reconhece de verdade — `itens.descricao` às vezes é só
+    um nome técnico interno."""
     conn = get_db()
     busca = (request.args.get("busca") or "").strip()
     params = ["produto_acabado"]
     where_busca = ""
     if busca:
-        where_busca = "AND (descricao LIKE ? OR codigo LIKE ? OR categoria LIKE ?)"
+        where_busca = "AND (i.descricao LIKE ? OR i.codigo LIKE ? OR i.categoria LIKE ? OR mp.nome LIKE ?)"
         termo = f"%{busca}%"
-        params += [termo, termo, termo]
+        params += [termo, termo, termo, termo]
     rows = conn.execute(
-        f"SELECT id, codigo, descricao, categoria, imagem, unidade_medida, memorial_produto_id "
-        f"FROM itens WHERE tipo = ? {where_busca} AND status = 'ativo' ORDER BY descricao LIMIT 30",
+        f"""
+        SELECT i.id, i.codigo, i.descricao, i.categoria, i.imagem, i.unidade_medida, i.memorial_produto_id,
+               mp.nome AS nome_memorial
+        FROM itens i LEFT JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id
+        WHERE i.tipo = ? {where_busca} AND i.status = 'ativo' ORDER BY i.descricao LIMIT 30
+        """,
         params,
     ).fetchall()
     return jsonify([dict(r) for r in rows])

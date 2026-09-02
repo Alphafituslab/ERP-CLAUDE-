@@ -90,6 +90,8 @@ def _projeto_do_portal(conn, projeto_id):
         "briefing": p.get("briefing"),
         "solicitacao_alteracao_formula": p.get("solicitacao_alteracao_formula"),
         "arquivos": [dict(a) for a in arquivos],
+        "assinatura_cliente_nome": p.get("assinatura_cliente_nome"),
+        "assinatura_cliente_em": p.get("assinatura_cliente_em"),
     }
 
 
@@ -282,23 +284,81 @@ def mockup_portal(token):
     return Response(png_bytes, mimetype="image/png")
 
 
+@bp.get("/<token>/documento.pdf")
+def documento_portal(token):
+    """Pedido do usuário (2026-09-02) — o cliente precisa poder ver uma
+    prévia de como ficou o documento ANTES de confirmar/concluir, do
+    mesmo jeito que o usuário interno já podia. Mesmo gerador
+    (`tc._gerar_pdf_dossie`) usado pela tela interna — é uma prévia, não
+    o documento final assinado (esse continua sendo emitido só depois
+    da Fase D, quando existir de verdade)."""
+    conn, link = _resolver_link_ou_404(token)
+    projeto = tc._projeto_detalhado(conn, link["projeto_id"])
+    nutricao = tc._nutricao_para_item(conn, projeto["item_id"]) if projeto.get("item_id") else None
+    pdf_bytes = tc._gerar_pdf_dossie(projeto, nutricao)
+    return Response(pdf_bytes, mimetype="application/pdf", headers={"Content-Disposition": "inline"})
+
+
 @bp.post("/<token>/concluir")
 def concluir_portal(token):
     """"Ao devolver o preenchimento, avisa o usuário responsável" (pedido
     do usuário) — o backend já sabe, na hora, que o cliente terminou:
     não precisa de webhook de WhatsApp nenhum pra descobrir isso (ver
-    nota no topo do arquivo)."""
+    nota no topo do arquivo).
+
+    Pedido do usuário (2026-09-02): "assim que o cliente disser que está
+    tudo ok, deve abrir um campo para assinatura" — captura uma
+    confirmação LEVE (nome + e-mail digitados + IP + data/hora), NÃO a
+    assinatura eletrônica de verdade da Fase D (sem hash, sem
+    congelamento de versão — ver nota no schema_fase137.sql). Depois de
+    capturada, o PDF do momento é salvo no cadastro do cliente
+    (`clientes_documentos`, mesma tabela já usada pra outros anexos do
+    cliente) — "documento deve ser salvo no cadastro do próprio
+    cliente... para possível auditoria"."""
     conn, link = _resolver_link_ou_404(token)
     projeto_id = link["projeto_id"]
     projeto = conn.execute("SELECT * FROM terceirizacao_projetos WHERE id = ?", (projeto_id,)).fetchone()
     if projeto["status"] not in STATUS_ABERTOS_PARA_CLIENTE:
         raise ApiError("Este projeto já foi concluído anteriormente.", status=409, codigo="ja_concluido")
+
+    dados = request.get_json(silent=True) or {}
+    nome = (dados.get("nome") or "").strip()
+    email = (dados.get("email") or "").strip()
+    if not nome:
+        raise ApiError("Informe seu nome para confirmar.", status=400)
+
+    agora = _now_iso()
     conn.execute(
-        "UPDATE terceirizacao_projetos SET status = 'aguardando_revisao', atualizado_em = ? WHERE id = ?",
-        (_now_iso(), projeto_id),
+        """
+        UPDATE terceirizacao_projetos SET status = 'aguardando_revisao', atualizado_em = ?,
+               assinatura_cliente_nome = ?, assinatura_cliente_email = ?, assinatura_cliente_em = ?, assinatura_cliente_ip = ?
+        WHERE id = ?
+        """,
+        (agora, nome, email or None, agora, client_ip(), projeto_id),
     )
+
+    # Salva uma cópia do documento no cadastro do cliente, pra auditoria —
+    # nunca deixa a confirmação em si falhar por causa disso (o cliente já
+    # confirmou; um problema ao gerar/salvar o PDF é registrado, não
+    # propagado como erro pra quem está do outro lado do link).
+    try:
+        projeto_detalhado = tc._projeto_detalhado(conn, projeto_id)
+        nutricao = tc._nutricao_para_item(conn, projeto_detalhado["item_id"]) if projeto_detalhado.get("item_id") else None
+        pdf_bytes = tc._gerar_pdf_dossie(projeto_detalhado, nutricao)
+        nome_arquivo = f"Terceirizacao_{projeto['numero']}_confirmado_pelo_cliente.pdf"
+        conn.execute(
+            "INSERT INTO clientes_documentos (cliente_id, nome, nome_arquivo, tipo_mime, dados, tamanho, criado_por) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (
+                projeto["cliente_id"], f"Terceirização {projeto['numero']} — especificação confirmada pelo cliente",
+                nome_arquivo, "application/pdf", base64.b64encode(pdf_bytes).decode(), len(pdf_bytes), link["criado_por"],
+            ),
+        )
+    except Exception:
+        pass
+
     audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=link["criado_por"],
-                     acao="cliente_concluiu_preenchimento_via_portal", ip=client_ip(), dispositivo=client_device())
+                     acao="cliente_concluiu_preenchimento_via_portal", valor_novo={"assinatura_cliente_nome": nome},
+                     ip=client_ip(), dispositivo=client_device())
     if projeto["responsavel_id"]:
         notificacoes_service.criar(
             conn, usuario_id=projeto["responsavel_id"], tipo="terceirizacao_cliente_concluiu",

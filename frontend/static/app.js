@@ -10576,7 +10576,7 @@
             <div id="resultados-busca-formula-terceirizacao" class="lista-busca-resultados"></div>
           </div>` : ""}
         ${projeto.item ? `
-          <p><strong>${escapeHtml(projeto.item.descricao)}</strong> <span class="texto-suave mono">${escapeHtml(projeto.item.codigo)}</span></p>
+          <p><strong>${escapeHtml(projeto.item.nome_memorial || projeto.item.descricao)}</strong> <span class="texto-suave mono">${escapeHtml(projeto.item.codigo)}</span>${projeto.item.nome_memorial ? `<br><span class="texto-suave" style="font-size:12px;">Nome interno: ${escapeHtml(projeto.item.descricao)}</span>` : ""}</p>
           ${nutricao ? (
             nutricao.vinculado_a_memorial && nutricao.memorial_aprovado_encontrado ? `
               <p class="dica">Tabela nutricional e ingredientes do Memorial Técnico ${escapeHtml(nutricao.memorial_codigo)}:</p>
@@ -10611,32 +10611,6 @@
           </div>
           ${podeEditar ? '<button type="button" class="botao secundario" data-acao="salvar-quantidade-embalagem" style="align-self:end;">Salvar quantidade</button>' : ""}
         </div>
-      </div>
-
-      <div class="cartao">
-        <h3 style="margin-top:0;">Portal do cliente</h3>
-        <p class="texto-suave">Link seguro (sem senha) para o cliente personalizar a embalagem, preencher o briefing e enviar de volta — enviado por WhatsApp direto pro telefone cadastrado dele.</p>
-        ${linkCliente.ativo ? `
-          <p>${linkCliente.expirado ? '<span class="selo bloqueado">Expirado</span>' : '<span class="selo ativo">Ativo</span>'}
-             ${linkCliente.enviado_via_whatsapp ? " — já enviado por WhatsApp" : ""}
-             ${linkCliente.ultimo_acesso_em ? ` — último acesso ${fmtData(linkCliente.ultimo_acesso_em)}` : " — cliente ainda não abriu"}
-             ${!linkCliente.expirado ? ` — expira em ${fmtData(linkCliente.expira_em)}` : ""}</p>
-          <div class="campo" style="display:flex;gap:8px;align-items:center;">
-            <input type="text" readonly value="${escapeHtml(linkCliente.url)}" style="flex:1;font-size:12px;" onclick="this.select()">
-          </div>
-          ${temPermissao("terceirizacao", "criar") ? `
-            <div style="display:flex;gap:8px;">
-              <button type="button" class="botao secundario pequeno" data-acao="reenviar-link-cliente-whatsapp" data-id="${projeto.id}">Reenviar por WhatsApp</button>
-              <button type="button" class="botao perigo pequeno" data-acao="revogar-link-cliente" data-id="${projeto.id}">Revogar link</button>
-            </div>` : ""}
-        ` : `
-          <p class="texto-suave">Nenhum link ativo ainda.</p>
-          ${temPermissao("terceirizacao", "criar") ? `
-            <div style="display:flex;gap:8px;">
-              <button type="button" class="botao" data-acao="gerar-link-cliente" data-id="${projeto.id}" data-whatsapp="1">Gerar e enviar por WhatsApp</button>
-              <button type="button" class="botao secundario" data-acao="gerar-link-cliente" data-id="${projeto.id}" data-whatsapp="0">Só gerar link (copiar manualmente)</button>
-            </div>` : ""}
-        `}
       </div>
 
       <div class="cartao">
@@ -10744,6 +10718,33 @@
         <h3 style="margin-top:0;">Documento & Preview</h3>
         <div id="mockup-terceirizacao-container" style="margin-bottom:12px;"><p class="texto-suave">Carregando preview…</p></div>
         <button type="button" class="botao secundario" data-acao="abrir-dossie-terceirizacao" data-id="${projeto.id}">📄 Ver Dossiê de Desenvolvimento (PDF)</button>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Portal do cliente</h3>
+        <p class="texto-suave">Link seguro (sem senha) para o cliente ver a prévia, personalizar a embalagem, preencher o briefing e confirmar — enviado por WhatsApp direto pro telefone cadastrado dele.</p>
+        ${projeto.assinatura_cliente_nome ? `<p class="dica">✓ Confirmado pelo cliente (${escapeHtml(projeto.assinatura_cliente_nome)}) em ${fmtData(projeto.assinatura_cliente_em)}.</p>` : ""}
+        ${linkCliente.ativo ? `
+          <p>${linkCliente.expirado ? '<span class="selo bloqueado">Expirado</span>' : '<span class="selo ativo">Ativo</span>'}
+             ${linkCliente.enviado_via_whatsapp ? " — já enviado por WhatsApp" : ""}
+             ${linkCliente.ultimo_acesso_em ? ` — último acesso ${fmtData(linkCliente.ultimo_acesso_em)}` : " — cliente ainda não abriu"}
+             ${!linkCliente.expirado ? ` — expira em ${fmtData(linkCliente.expira_em)}` : ""}</p>
+          <div class="campo" style="display:flex;gap:8px;align-items:center;">
+            <input type="text" readonly value="${escapeHtml(linkCliente.url)}" style="flex:1;font-size:12px;" onclick="this.select()">
+          </div>
+          ${temPermissao("terceirizacao", "criar") ? `
+            <div style="display:flex;gap:8px;">
+              <button type="button" class="botao secundario pequeno" data-acao="reenviar-link-cliente-whatsapp" data-id="${projeto.id}">Reenviar por WhatsApp</button>
+              <button type="button" class="botao perigo pequeno" data-acao="revogar-link-cliente" data-id="${projeto.id}">Revogar link</button>
+            </div>` : ""}
+        ` : `
+          <p class="texto-suave">Nenhum link ativo ainda.</p>
+          ${temPermissao("terceirizacao", "criar") ? `
+            <div style="display:flex;gap:8px;">
+              <button type="button" class="botao" data-acao="gerar-link-cliente" data-id="${projeto.id}" data-whatsapp="1">Gerar e enviar por WhatsApp</button>
+              <button type="button" class="botao secundario" data-acao="gerar-link-cliente" data-id="${projeto.id}" data-whatsapp="0">Só gerar link (copiar manualmente)</button>
+            </div>` : ""}
+        `}
       </div>`,
       "terceirizacao"
     );
@@ -10779,7 +10780,7 @@
         timeoutBusca = setTimeout(async () => {
           const encontrados = await chamarApi(`/terceirizacao/formulas-disponiveis?busca=${encodeURIComponent(termo)}`);
           listaResultadosFormula.innerHTML = encontrados.length
-            ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-id="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</button>`).join("")
+            ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-id="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.nome_memorial || i.descricao)}${i.nome_memorial ? ` <span class="texto-suave">(${escapeHtml(i.descricao)})</span>` : ""}</button>`).join("")
             : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
         }, 250);
       });
