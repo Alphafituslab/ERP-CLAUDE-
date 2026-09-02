@@ -644,9 +644,9 @@
     // recorrente) que vai crescer bastante nas próximas fases (documento,
     // portal do cliente, assinatura).
     {
-      tipo: "grupo", chave: "grupo-terceirizacao", nome: "Terceirização Premium",
+      tipo: "grupo", chave: "grupo-terceirizacao", nome: "Monte sua linha",
       itens: [
-        { rota: "#/terceirizacao", chave: "terceirizacao", label: "Terceirizações", permissao: ["terceirizacao", "visualizar"], apelidos: ["terceirização", "white label", "projetos"] },
+        { rota: "#/terceirizacao", chave: "terceirizacao", label: "Monte sua linha", permissao: ["terceirizacao", "visualizar"], apelidos: ["terceirização", "terceirizacoes", "white label", "projetos"] },
         { rota: "#/terceirizacao-embalagens", chave: "terceirizacao-embalagens", label: "Catálogo de Embalagem", permissao: ["terceirizacao", "configurar_embalagem"], apelidos: ["pote", "tampa", "capsula", "cápsula"] },
       ],
     },
@@ -10399,6 +10399,28 @@
     arte_em_desenvolvimento: ["azul", "Arte em desenvolvimento"], arte_em_aprovacao: ["amarelo", "Arte em aprovação"],
     em_producao: ["azul", "Em produção"], concluido: ["ativo", "Concluído"], cancelado: ["bloqueado", "Cancelado"],
   };
+  // Pedido do usuário (2026-09-02) — a tabela de Informação Nutricional de
+  // verdade (Porções por embalagem / Porção / nutriente|quantidade|%VD),
+  // igual ao que já sai no rótulo/PDF do Memorial Técnico. Espelha
+  // `_extrair_nutrientes`/`_formatar_tabela_nutricional_padrao`
+  // (app/routes/terceirizacao.py e memorial_pdf_campos.py) — mesmos campos,
+  // sem inventar coluna nenhuma.
+  function renderizarTabelaNutricional(tabela) {
+    if (!tabela) return "";
+    if (tabela.tipo === "texto_livre") {
+      return `<p class="texto-suave" style="white-space:pre-wrap;">${escapeHtml(tabela.conteudo)}</p>`;
+    }
+    if (tabela.tipo !== "estruturado" && tabela.tipo !== "estruturado_alimento") return "";
+    const colunaQtd = tabela.porcao_gramas ? `${tabela.porcao_gramas} g` : "Quantidade";
+    return `
+      ${tabela.porcoes_por_embalagem ? `<p class="texto-suave" style="margin:4px 0;">Porções por embalagem: ${escapeHtml(String(tabela.porcoes_por_embalagem))}</p>` : ""}
+      ${(tabela.porcao_gramas || tabela.descricao_porcao) ? `<p class="texto-suave" style="margin:4px 0;">Porção${tabela.porcao_gramas ? `: ${escapeHtml(String(tabela.porcao_gramas))} g` : ""}${tabela.descricao_porcao ? ` (${escapeHtml(tabela.descricao_porcao)})` : ""}</p>` : ""}
+      <table><thead><tr><th></th><th>${escapeHtml(colunaQtd)}</th><th>%VD*</th></tr></thead>
+      <tbody>${(tabela.linhas || []).map((l) => `<tr><td>${escapeHtml(l.nutriente || "")}</td><td>${escapeHtml(l.quantidade != null ? String(l.quantidade) : "0")}</td><td>${escapeHtml(l.vd || "**")}</td></tr>`).join("")}</tbody></table>
+      ${tabela.rodape_vd ? `<p class="texto-suave" style="font-size:11px;margin-top:4px;">${escapeHtml(tabela.rodape_vd)}</p>` : ""}
+    `;
+  }
+
   function seloStatusTerceirizacao(status) {
     const par = ROTULOS_STATUS_TERCEIRIZACAO[status] || ["inativo", status];
     return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
@@ -10442,7 +10464,7 @@
     </tr>`).join("");
 
     renderShell(
-      `<h2>Terceirização Premium <span class="texto-suave" style="font-weight:400;font-size:13px;">(${projetos.length})</span></h2>
+      `<h2>Monte sua linha <span class="texto-suave" style="font-weight:400;font-size:13px;">(${projetos.length})</span></h2>
        <div class="cartao">
          <div class="barra-acoes">
            <form id="filtros-terceirizacao" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;flex:1;">
@@ -10565,7 +10587,38 @@
       <div class="cartao">
         <h3 style="margin-top:0;">Dados da empresa (cliente)</h3>
         <p><strong>${escapeHtml(projeto.cliente.razao_social)}</strong> — <span class="mono">${escapeHtml(projeto.cliente.cnpj || "")}</span></p>
-        <p class="texto-suave">Pra editar os dados do cliente, use a tela de <a href="#/comercial">Comercial</a> — este projeto sempre reflete o cadastro mais atual.</p>
+        <p class="texto-suave">Endereço, inscrição estadual e outros dados fiscais ficam na tela de <a href="#/comercial">Comercial</a> — os campos abaixo são os que a Ficha Cadastral de Terceirização pede especificamente e ficam salvos direto no cadastro do cliente.</p>
+        <form id="form-empresa-cliente-terceirizacao" ${podeEditar ? "" : "class=\"desabilitado\""}>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div class="campo" style="flex:1;min-width:180px;"><label>CPF (se pessoa física)</label><input type="text" name="cpf" value="${escapeHtml(projeto.cliente.cpf || "")}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:180px;"><label>Data de nascimento (se pessoa física)</label><input type="date" name="data_nascimento" value="${escapeHtml(projeto.cliente.data_nascimento || "")}" ${podeEditar ? "" : "disabled"}></div>
+          </div>
+          <div class="campo"><label>Alvará Sanitário</label><input type="text" name="alvara_sanitario" value="${escapeHtml(projeto.cliente.alvara_sanitario || "")}" ${podeEditar ? "" : "disabled"}></div>
+          <div class="campo"><label>Nome e endereço da pessoa responsável em receber correspondência</label><input type="text" name="responsavel_correspondencia_nome_endereco" value="${escapeHtml(projeto.cliente.responsavel_correspondencia_nome_endereco || "")}" ${podeEditar ? "" : "disabled"}></div>
+          <div class="campo"><label>Telefone e e-mail da pessoa responsável em receber correspondência</label><input type="text" name="responsavel_correspondencia_telefone_email" value="${escapeHtml(projeto.cliente.responsavel_correspondencia_telefone_email || "")}" ${podeEditar ? "" : "disabled"}></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div class="campo" style="flex:1;min-width:180px;"><label>E-mail de contato (financeiro)</label><input type="email" name="email_financeiro" value="${escapeHtml(projeto.cliente.email_financeiro || "")}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:180px;"><label>E-mail para DANFe e XML</label><input type="email" name="email_danfe_xml" value="${escapeHtml(projeto.cliente.email_danfe_xml || "")}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:180px;"><label>CRF (quando aplicado)</label><input type="text" name="crf_numero" value="${escapeHtml(projeto.cliente.crf_numero || "")}" ${podeEditar ? "" : "disabled"}></div>
+          </div>
+          ${podeEditar ? '<div class="rodape-modal" style="padding:0;"><button type="button" class="botao secundario pequeno" data-acao="salvar-empresa-cliente-terceirizacao">Salvar dados da empresa</button></div>' : ""}
+        </form>
+
+        <h3 style="margin-top:20px;">De quem assina</h3>
+        <form id="form-quem-assina-terceirizacao" ${podeEditar ? "" : "class=\"desabilitado\""}>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div class="campo" style="flex:2;min-width:200px;"><label>Nome</label><input type="text" name="assinante_nome" value="${escapeHtml(briefing.assinante_nome || "")}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:150px;"><label>CPF</label><input type="text" name="assinante_cpf" value="${escapeHtml(briefing.assinante_cpf || "")}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:150px;"><label>Data de nascimento</label><input type="date" name="assinante_data_nascimento" value="${escapeHtml(briefing.assinante_data_nascimento || "")}" ${podeEditar ? "" : "disabled"}></div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div class="campo" style="flex:1;min-width:180px;"><label>Telefone celular (WhatsApp)</label><input type="text" name="assinante_telefone_whats" value="${escapeHtml(briefing.assinante_telefone_whats || "")}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:180px;"><label>E-mail (nominal)</label><input type="email" name="assinante_email" value="${escapeHtml(briefing.assinante_email || "")}" ${podeEditar ? "" : "disabled"}></div>
+          </div>
+          <div class="campo"><label>Endereço completo</label><input type="text" name="assinante_endereco" value="${escapeHtml(briefing.assinante_endereco || "")}" ${podeEditar ? "" : "disabled"}></div>
+          <div class="campo"><label>Cidade de domicílio</label><input type="text" name="assinante_cidade_domicilio" value="${escapeHtml(briefing.assinante_cidade_domicilio || "")}" ${podeEditar ? "" : "disabled"}></div>
+          ${podeEditar ? '<div class="rodape-modal" style="padding:0;"><button type="button" class="botao secundario pequeno" data-acao="salvar-quem-assina-terceirizacao">Salvar quem assina</button></div>' : ""}
+        </form>
       </div>
 
       <div class="cartao">
@@ -10580,11 +10633,8 @@
           ${nutricao ? (
             nutricao.vinculado_a_memorial && nutricao.memorial_aprovado_encontrado ? `
               <p class="dica">Tabela nutricional e ingredientes do Memorial Técnico ${escapeHtml(nutricao.memorial_codigo)}:</p>
-              ${nutricao.tabela_nutricional && nutricao.tabela_nutricional.tipo === "estruturado" ? `
-                <table><thead><tr><th>Nutriente</th><th>Quantidade</th><th>Unidade</th></tr></thead>
-                <tbody>${nutricao.tabela_nutricional.linhas.map((l) => `<tr><td>${escapeHtml(l.nutriente || "")}</td><td>${escapeHtml(String(l.quantidade ?? ""))}</td><td>${escapeHtml(l.unidade || "")}</td></tr>`).join("")}</tbody></table>
-              ` : ""}
-              ${nutricao.lista_ingredientes ? `<p><strong>Ingredientes:</strong> ${escapeHtml(nutricao.lista_ingredientes)}</p>` : ""}
+              ${renderizarTabelaNutricional(nutricao.tabela_nutricional)}
+              ${nutricao.lista_ingredientes ? `<p><strong>Lista de Ingredientes:</strong> ${escapeHtml(nutricao.lista_ingredientes)}</p>` : ""}
             ` : `<p class="texto-suave">${escapeHtml(nutricao.mensagem)}</p>`
           ) : ""}
           ${podeEditar ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-solicitar-alteracao-formula" data-id="${projeto.id}">Solicitar alteração da fórmula</button>` : ""}
@@ -10611,6 +10661,32 @@
           </div>
           ${podeEditar ? '<button type="button" class="botao secundario" data-acao="salvar-quantidade-embalagem" style="align-self:end;">Salvar quantidade</button>' : ""}
         </div>
+        <div style="display:flex;gap:10px;margin-top:14px;align-items:end;">
+          <div class="campo" style="margin:0;flex:1;"><label>Cartucho/Pouch</label>
+            <select id="terceirizacao-embalagem-secundaria" ${podeEditar ? "" : "disabled"}>
+              <option value="">—</option>
+              <option value="com_cartucho" ${briefing.embalagem_secundaria === "com_cartucho" ? "selected" : ""}>Com cartucho</option>
+              <option value="pouch" ${briefing.embalagem_secundaria === "pouch" ? "selected" : ""}>Pouch (sem cartucho)</option>
+              <option value="nenhum" ${briefing.embalagem_secundaria === "nenhum" ? "selected" : ""}>Nenhum (pote avulso)</option>
+            </select>
+          </div>
+          ${podeEditar ? '<button type="button" class="botao secundario" data-acao="salvar-embalagem-secundaria-terceirizacao">Salvar</button>' : ""}
+        </div>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Condição comercial</h3>
+        <form id="form-condicao-comercial-terceirizacao" ${podeEditar ? "" : "class=\"desabilitado\""}>
+          <div class="campo"><label>Forma de pagamento</label><input type="text" name="forma_pagamento" placeholder="Ex.: 50% entrada/50% faturamento, ou boleto 14/28, 14/28/42…" value="${escapeHtml(briefing.forma_pagamento || "")}" ${podeEditar ? "" : "disabled"}></div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;">
+            <div class="campo" style="flex:1;min-width:150px;"><label>Prazo de pagamento</label><input type="text" name="prazo_pagamento" placeholder="Ex.: 30/60/90" value="${escapeHtml(briefing.prazo_pagamento || "")}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:150px;"><label>Valor unitário (R$)</label><input type="number" step="0.01" name="valor_unitario" value="${briefing.valor_unitario ?? ""}" ${podeEditar ? "" : "disabled"}></div>
+            <div class="campo" style="flex:1;min-width:150px;"><label>Valor total (R$)</label><input type="number" step="0.01" name="valor_total" value="${briefing.valor_total ?? ""}" ${podeEditar ? "" : "disabled"}></div>
+          </div>
+          <div class="campo"><label>Notificação (observação)</label><input type="text" name="notificacao_observacao" value="${escapeHtml(briefing.notificacao_observacao || "")}" ${podeEditar ? "" : "disabled"}></div>
+          <div class="campo"><label>Excedente de rótulos</label><input type="text" name="excedente_rotulos" value="${escapeHtml(briefing.excedente_rotulos || "")}" ${podeEditar ? "" : "disabled"}></div>
+          ${podeEditar ? '<div class="rodape-modal" style="padding:0;"><button type="button" class="botao secundario pequeno" data-acao="salvar-condicao-comercial-terceirizacao">Salvar condição comercial</button></div>' : ""}
+        </form>
       </div>
 
       <div class="cartao">
@@ -10775,19 +10851,27 @@
       let timeoutBusca = null;
       campoBuscaFormula.addEventListener("input", () => {
         clearTimeout(timeoutBusca);
+        // Pedido do usuário — buscar já a partir de 3 letras.
         const termo = campoBuscaFormula.value.trim();
-        if (termo.length < 2) { listaResultadosFormula.innerHTML = ""; return; }
+        if (termo.length < 3) { listaResultadosFormula.innerHTML = ""; return; }
         timeoutBusca = setTimeout(async () => {
           const encontrados = await chamarApi(`/terceirizacao/formulas-disponiveis?busca=${encodeURIComponent(termo)}`);
           listaResultadosFormula.innerHTML = encontrados.length
-            ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-id="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.nome_memorial || i.descricao)}${i.nome_memorial ? ` <span class="texto-suave">(${escapeHtml(i.descricao)})</span>` : ""}</button>`).join("")
+            ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-origem="${i.origem}" data-id="${i.id ?? ""}" data-memorial-id="${i.memorial_produto_id ?? ""}">
+                ${i.codigo ? `<span class="mono">${escapeHtml(i.codigo)}</span> — ` : ""}${escapeHtml(i.nome_memorial || i.descricao)}
+                ${i.nome_memorial && i.descricao ? ` <span class="texto-suave">(${escapeHtml(i.descricao)})</span>` : ""}
+                ${i.origem === "memorial" ? ' <span class="selo azul" style="font-size:10px;">Memorial Técnico — ainda não é item</span>' : ""}
+              </button>`).join("")
             : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
         }, 250);
       });
       listaResultadosFormula.addEventListener("click", async (e) => {
         const botao = e.target.closest(".item-busca-resultado");
         if (!botao) return;
-        await chamarApi(`/terceirizacao/projetos/${projetoId}/formula`, { method: "PUT", body: { item_id: Number(botao.dataset.id) } });
+        const corpo = botao.dataset.origem === "memorial"
+          ? { memorial_produto_id: Number(botao.dataset.memorialId) }
+          : { item_id: Number(botao.dataset.id) };
+        await chamarApi(`/terceirizacao/projetos/${projetoId}/formula`, { method: "PUT", body: corpo });
         renderTerceirizacaoDetalhe(projetoId);
       });
 
@@ -10825,6 +10909,85 @@
             },
           });
           definirFlash("ok", "Quantidade salva.");
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+      }
+
+      const botaoSalvarEmbalagemSecundaria = document.querySelector('[data-acao="salvar-embalagem-secundaria-terceirizacao"]');
+      if (botaoSalvarEmbalagemSecundaria) {
+        botaoSalvarEmbalagemSecundaria.addEventListener("click", async () => {
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/briefing`, {
+            method: "PUT",
+            body: { embalagem_secundaria: document.getElementById("terceirizacao-embalagem-secundaria").value || null },
+          });
+          definirFlash("ok", "Cartucho/Pouch salvo.");
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+      }
+
+      // Fase 139 — Ficha Cadastral: "Dados da empresa (cliente)" grava
+      // direto no cadastro do cliente (dado permanente, reaproveitado em
+      // qualquer projeto futuro dele); "Quem assina" e "Condição
+      // comercial" gravam no briefing DESTE projeto (podem mudar de
+      // contrato pra contrato). O PUT /briefing agora faz merge com o
+      // que já existia (ver salvar_briefing em terceirizacao.py) — cada
+      // um destes botões manda só os campos do seu próprio cartão, sem
+      // apagar o que os outros cartões já salvaram.
+      const botaoSalvarEmpresaCliente = document.querySelector('[data-acao="salvar-empresa-cliente-terceirizacao"]');
+      if (botaoSalvarEmpresaCliente) {
+        botaoSalvarEmpresaCliente.addEventListener("click", async () => {
+          const dados = new FormData(document.getElementById("form-empresa-cliente-terceirizacao"));
+          await chamarApi(`/comercial/clientes/${projeto.cliente_id}`, {
+            method: "PUT",
+            body: {
+              cpf: dados.get("cpf") || null, data_nascimento: dados.get("data_nascimento") || null,
+              alvara_sanitario: dados.get("alvara_sanitario") || null,
+              responsavel_correspondencia_nome_endereco: dados.get("responsavel_correspondencia_nome_endereco") || null,
+              responsavel_correspondencia_telefone_email: dados.get("responsavel_correspondencia_telefone_email") || null,
+              email_financeiro: dados.get("email_financeiro") || null,
+              email_danfe_xml: dados.get("email_danfe_xml") || null,
+              crf_numero: dados.get("crf_numero") || null,
+            },
+          });
+          definirFlash("ok", "Dados da empresa salvos.");
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+      }
+
+      const botaoSalvarQuemAssina = document.querySelector('[data-acao="salvar-quem-assina-terceirizacao"]');
+      if (botaoSalvarQuemAssina) {
+        botaoSalvarQuemAssina.addEventListener("click", async () => {
+          const dados = new FormData(document.getElementById("form-quem-assina-terceirizacao"));
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/briefing`, {
+            method: "PUT",
+            body: {
+              assinante_nome: dados.get("assinante_nome") || null, assinante_cpf: dados.get("assinante_cpf") || null,
+              assinante_data_nascimento: dados.get("assinante_data_nascimento") || null,
+              assinante_telefone_whats: dados.get("assinante_telefone_whats") || null,
+              assinante_endereco: dados.get("assinante_endereco") || null,
+              assinante_cidade_domicilio: dados.get("assinante_cidade_domicilio") || null,
+              assinante_email: dados.get("assinante_email") || null,
+            },
+          });
+          definirFlash("ok", "Dados de quem assina salvos.");
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+      }
+
+      const botaoSalvarCondicaoComercial = document.querySelector('[data-acao="salvar-condicao-comercial-terceirizacao"]');
+      if (botaoSalvarCondicaoComercial) {
+        botaoSalvarCondicaoComercial.addEventListener("click", async () => {
+          const dados = new FormData(document.getElementById("form-condicao-comercial-terceirizacao"));
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/briefing`, {
+            method: "PUT",
+            body: {
+              forma_pagamento: dados.get("forma_pagamento") || null, prazo_pagamento: dados.get("prazo_pagamento") || null,
+              valor_unitario: dados.get("valor_unitario") || null, valor_total: dados.get("valor_total") || null,
+              notificacao_observacao: dados.get("notificacao_observacao") || null,
+              excedente_rotulos: dados.get("excedente_rotulos") || null,
+            },
+          });
+          definirFlash("ok", "Condição comercial salva.");
           renderTerceirizacaoDetalhe(projetoId);
         });
       }

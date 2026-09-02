@@ -52,7 +52,6 @@ bp = Blueprint("terceirizacao", __name__, url_prefix="/api/v1/terceirizacao")
 
 TIPOS_MIME_ARQUIVOS_PERMITIDOS = ("image/jpeg", "image/png", "image/webp", "application/pdf")
 TAMANHO_MAXIMO_ARQUIVO_BYTES = 10 * 1024 * 1024
-_CALC_MAGIC = "__CALCV1__"
 
 
 def _now_iso():
@@ -255,66 +254,136 @@ def definir_tampas_compativeis(pote_id):
 @bp.get("/formulas-disponiveis")
 @requires_permission("terceirizacao", "visualizar")
 def listar_formulas_disponiveis():
-    """Itens do tipo produto_acabado — o que o cliente pode escolher pra
-    terceirizar. Busca por nome/código/categoria (mesmo padrão de busca já
-    usado em `comercial.listar_clientes`) — pedido do usuário (2026-09-02):
-    também busca e MOSTRA o nome cadastrado no Memorial Técnico
-    (`memorial_produtos.nome`, via `itens.memorial_produto_id`) quando o
-    item já estiver vinculado a um, porque é esse o nome que o
-    Comercial/P&D reconhece de verdade — `itens.descricao` às vezes é só
-    um nome técnico interno."""
+    """Busca por nome/código/categoria (mesmo padrão de busca já usado em
+    `comercial.listar_clientes`), combinando DUAS fontes — achado real
+    (2026-09-02): 91 produtos do Memorial Técnico já existem de verdade
+    no AlphafitusOS (85 memoriais reais), mas quase nenhum tinha
+    `itens.memorial_produto_id` preenchido ainda, então a busca (que só
+    olhava `itens`) não achava a maioria deles.
+      1. `itens` já cadastrados (tipo produto_acabado) — como sempre foi.
+      2. `memorial_produtos` que AINDA não têm nenhum `item` vinculado —
+         aparecem com `origem: "memorial"`; escolher um deles (ver PUT
+         .../formula) cria o `item` correspondente na hora, na primeira
+         vez, e some desta segunda lista depois disso (já aparece na
+         primeira, como qualquer outro item)."""
     conn = get_db()
     busca = (request.args.get("busca") or "").strip()
-    params = ["produto_acabado"]
-    where_busca = ""
+    params_itens = ["produto_acabado"]
+    where_busca_itens = ""
     if busca:
-        where_busca = "AND (i.descricao LIKE ? OR i.codigo LIKE ? OR i.categoria LIKE ? OR mp.nome LIKE ?)"
+        where_busca_itens = "AND (i.descricao LIKE ? OR i.codigo LIKE ? OR i.categoria LIKE ? OR mp.nome LIKE ?)"
         termo = f"%{busca}%"
-        params += [termo, termo, termo, termo]
-    rows = conn.execute(
+        params_itens += [termo, termo, termo, termo]
+    rows_itens = conn.execute(
         f"""
         SELECT i.id, i.codigo, i.descricao, i.categoria, i.imagem, i.unidade_medida, i.memorial_produto_id,
-               mp.nome AS nome_memorial
+               mp.nome AS nome_memorial, 'item' AS origem
         FROM itens i LEFT JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id
-        WHERE i.tipo = ? {where_busca} AND i.status = 'ativo' ORDER BY i.descricao LIMIT 30
+        WHERE i.tipo = ? {where_busca_itens} AND i.status = 'ativo' ORDER BY i.descricao LIMIT 30
         """,
-        params,
+        params_itens,
     ).fetchall()
-    return jsonify([dict(r) for r in rows])
+    resultado = [dict(r) for r in rows_itens]
+
+    vagas_restantes = max(0, 30 - len(resultado))
+    if busca and vagas_restantes:
+        termo = f"%{busca}%"
+        rows_memorial = conn.execute(
+            """
+            SELECT mp.id AS memorial_produto_id, mp.nome AS nome_memorial, mp.categoria
+            FROM memorial_produtos mp
+            WHERE mp.status = 'ativo' AND mp.nome LIKE ?
+              AND NOT EXISTS (SELECT 1 FROM itens i2 WHERE i2.memorial_produto_id = mp.id)
+            ORDER BY mp.nome LIMIT ?
+            """,
+            (termo, vagas_restantes),
+        ).fetchall()
+        for r in rows_memorial:
+            resultado.append({
+                "id": None, "codigo": None, "descricao": None, "categoria": r["categoria"],
+                "imagem": None, "unidade_medida": None, "memorial_produto_id": r["memorial_produto_id"],
+                "nome_memorial": r["nome_memorial"], "origem": "memorial",
+            })
+    return jsonify(resultado)
 
 
 def _extrair_nutrientes(valor_bruto):
-    """`calculos_nutricionais`/`composicao_nutricional` de `memoriais` usam
-    o prefixo mágico `__CALCV1__` + JSON quando vieram da calculadora do
-    Memorial Técnico (ver app/routes/memorial_pdf_campos.py) — texto livre
-    puro quando o memorial é antigo/manual. Aqui só extraímos os campos
-    simples pra exibição (nutriente/quantidade/unidade) — a lógica de
-    faixa de aceitação/%VD completa do PDF do Memorial não é reproduzida
-    aqui de propósito (é uma prévia pro cliente, não o documento técnico
-    oficial, que continua sendo emitido só pelo Memorial Técnico)."""
+    """`memoriais.composicao_nutricional` — a TABELA DE INFORMAÇÃO
+    NUTRICIONAL de verdade, a mesma que sai impressa no rótulo/PDF do
+    Memorial Técnico (achado real, 2026-09-02: a primeira versão desta
+    função lia o campo errado — `calculos_nutricionais`, que é a
+    calculadora de FAIXA DE ACEITAÇÃO/dose de referência usada por P&D,
+    um dado completamente diferente, não a tabela nutricional que o
+    cliente precisa ver). Estrutura real replicada FIELMENTE de
+    `app/routes/memorial_pdf_campos.py::_formatar_tabela_nutricional_
+    padrao` (não inventada): `{"tipoTabela": "padrao", "dadosPadrao":
+    {"porcoesPorEmbalagem", "porcaoGramas", "descricaoPorcao", "linhas":
+    [{"nome", "quantidade", "vd", "ativo"}], "rodapeVD"}}`. A variante
+    "alimento" (declaração por 100g) segue formato ainda não confirmado
+    no próprio Memorial Técnico (comentário do arquivo original) — aqui
+    também não arrisca inventar colunas, só devolve os campos brutos que
+    existirem, igual ao PDF já faz."""
     if not valor_bruto:
         return None
     texto = str(valor_bruto)
-    if not texto.startswith(_CALC_MAGIC):
-        return {"tipo": "texto_livre", "conteudo": texto}
     try:
-        dados = json.loads(texto[len(_CALC_MAGIC):])
+        dados = json.loads(texto)
     except (ValueError, TypeError):
         return {"tipo": "texto_livre", "conteudo": texto}
-    nutrientes = dados.get("nutrientes")
-    if not isinstance(nutrientes, list):
+    if not isinstance(dados, dict):
+        return {"tipo": "texto_livre", "conteudo": texto}
+
+    def _sub_json(bruto):
+        # Achado real, 2026-09-02: `dadosPadrao`/`dadosAlimento` NÃO vêm
+        # como objeto aninhado — vêm como uma STRING contendo JSON (JSON
+        # dentro de JSON, "JSON-em-string" no comentário original de
+        # memorial_pdf_campos.py::formatar_composicao_nutricional, que
+        # tem exatamente este mesmo `_sub_json`). Sem este segundo
+        # `json.loads`, `isinstance(padrao, dict)` dá falso pra TODO
+        # memorial e a tabela nunca aparece — foi isso que aconteceu na
+        # primeira versão desta função.
+        if isinstance(bruto, dict):
+            return bruto
+        if isinstance(bruto, str):
+            try:
+                sub = json.loads(bruto)
+            except (ValueError, TypeError):
+                return None
+            return sub if isinstance(sub, dict) else None
         return None
-    linhas = []
-    for n in nutrientes:
-        if not isinstance(n, dict):
-            continue
-        linhas.append({
-            "nutriente": n.get("nutriente"),
-            "quantidade": n.get("qtdIngrediente"),
-            "unidade": n.get("unidade"),
-            "vd_percentual": n.get("doseMinRef"),
-        })
-    return {"tipo": "estruturado", "linhas": linhas}
+
+    tipo_tabela = dados.get("tipoTabela")
+    if tipo_tabela == "padrao":
+        padrao = _sub_json(dados.get("dadosPadrao"))
+        if not isinstance(padrao, dict):
+            return None
+        linhas_ativas = [l for l in (padrao.get("linhas") or []) if isinstance(l, dict) and l.get("ativo", True)]
+        return {
+            "tipo": "estruturado",
+            "porcoes_por_embalagem": padrao.get("porcoesPorEmbalagem"),
+            "porcao_gramas": padrao.get("porcaoGramas"),
+            "descricao_porcao": padrao.get("descricaoPorcao"),
+            "rodape_vd": padrao.get("rodapeVD"),
+            "linhas": [
+                {"nutriente": l.get("nome"), "quantidade": l.get("quantidade"), "vd": l.get("vd")}
+                for l in linhas_ativas
+            ],
+        }
+    if tipo_tabela == "alimento":
+        alimento = _sub_json(dados.get("dadosAlimento"))
+        if not isinstance(alimento, dict):
+            return None
+        linhas_dados = [l for l in (alimento.get("linhas") or []) if isinstance(l, dict)]
+        return {
+            "tipo": "estruturado_alimento",
+            "grupo_etario": alimento.get("grupoEtario"),
+            "porcoes_por_embalagem": alimento.get("porcoesPorEmbalagem"),
+            "porcao_gramas": alimento.get("porcaoGramas"),
+            "descricao_porcao": alimento.get("descricaoPorcao"),
+            "rodape_vd": alimento.get("rodapeVD"),
+            "linhas": [{"nutriente": l.get("nome"), "quantidade": l.get("quantidade"), "vd": l.get("vd")} for l in linhas_dados],
+        }
+    return {"tipo": "texto_livre", "conteudo": texto}
 
 
 def _nutricao_para_item(conn, item_id):
@@ -352,7 +421,7 @@ def _nutricao_para_item(conn, item_id):
         "memorial_aprovado_encontrado": True,
         "memorial_id": memorial["id"],
         "memorial_codigo": memorial["codigo"],
-        "tabela_nutricional": _extrair_nutrientes(memorial.get("calculos_nutricionais") or memorial.get("composicao_nutricional")),
+        "tabela_nutricional": _extrair_nutrientes(memorial.get("composicao_nutricional")),
         "ingredientes_ativos": memorial.get("ingredientes_ativos"),
         "excipientes": memorial.get("excipientes"),
         "lista_ingredientes": memorial.get("lista_ingredientes"),
@@ -445,6 +514,33 @@ def criar_projeto():
     return jsonify(_projeto_detalhado(conn, projeto_id)), 201
 
 
+def _item_id_para_memorial_produto(conn, usuario_id, memorial_produto_id):
+    """Pedido do usuário (2026-09-02) — achado real: 91 produtos reais do
+    Memorial Técnico já existem no próprio AlphafitusOS (85 memoriais,
+    dados reais), mas NENHUM tinha `itens.memorial_produto_id` preenchido
+    — a busca de fórmula, que só olha `itens`, nunca achava nada. Em vez
+    de exigir um cadastro manual prévio em Itens pra cada um dos 91 antes
+    de poder usar, cria o `item` na hora, na primeira vez que alguém
+    escolhe aquele produto do Memorial — depois disso já fica vinculado
+    de verdade e a busca passa a achar direto por `itens` também."""
+    existente = conn.execute("SELECT id FROM itens WHERE memorial_produto_id = ?", (memorial_produto_id,)).fetchone()
+    if existente:
+        return existente["id"]
+    produto = conn.execute("SELECT * FROM memorial_produtos WHERE id = ?", (memorial_produto_id,)).fetchone()
+    if produto is None:
+        raise ApiError("Produto do Memorial Técnico não encontrado.", status=404)
+    codigo = f"MEM-{memorial_produto_id}"
+    cur = conn.execute(
+        "INSERT INTO itens (codigo, descricao, tipo, unidade_medida, memorial_produto_id, criado_por) VALUES (?, ?, 'produto_acabado', 'UN', ?, ?)",
+        (codigo, produto["nome"], memorial_produto_id, usuario_id),
+    )
+    audit.registrar(conn, tabela="itens", registro_id=cur.lastrowid, usuario_id=usuario_id,
+                     acao="criado_automaticamente_a_partir_do_memorial_tecnico",
+                     valor_novo={"memorial_produto_id": memorial_produto_id, "nome": produto["nome"]},
+                     ip=client_ip(), dispositivo=client_device())
+    return cur.lastrowid
+
+
 @bp.put("/projetos/<int:projeto_id>/formula")
 @requires_permission("terceirizacao", "criar")
 def definir_formula_projeto(projeto_id):
@@ -455,7 +551,10 @@ def definir_formula_projeto(projeto_id):
         raise ApiError("Só é possível alterar a fórmula enquanto o projeto está em rascunho.", status=400)
     dados = request.get_json(silent=True) or {}
     item_id = dados.get("item_id")
-    if item_id is not None and not conn.execute(
+    memorial_produto_id = dados.get("memorial_produto_id")
+    if memorial_produto_id is not None:
+        item_id = _item_id_para_memorial_produto(conn, usuario_atual["id"], memorial_produto_id)
+    elif item_id is not None and not conn.execute(
         "SELECT 1 FROM itens WHERE id = ? AND tipo = 'produto_acabado'", (item_id,)
     ).fetchone():
         raise ApiError("Item não encontrado ou não é um produto acabado.", status=404)
@@ -574,19 +673,69 @@ def salvar_briefing(projeto_id):
             raise ApiError("Campo deve ser uma lista.", status=400)
         return json.dumps(valor, ensure_ascii=False)
 
+    # Fase 139 — campos de "quem assina" + "condição comercial" +
+    # cartucho/pouch, da ficha cadastral real que o usuário enviou. Ver
+    # nota completa em migrations/schema_fase139.sql — dados fiscais da
+    # EMPRESA ficam no cadastro do cliente (CAMPOS_FISCAIS_CLIENTE_
+    # EDITAVEIS em comercial.py), só o que pode mudar a cada contrato
+    # fica aqui no briefing.
+    def _numero_opcional(valor, nome_campo):
+        if valor in (None, ""):
+            return None
+        try:
+            return float(valor)
+        except (TypeError, ValueError):
+            raise ApiError(f"{nome_campo} deve ser numérico.", status=400)
+
+    # Fase 139 — a tela agora tem VÁRIOS cartões com salvamento próprio
+    # (briefing criativo, "quem assina", condição comercial) todos
+    # gravando neste mesmo endpoint — sem isso, salvar um cartão apagaria
+    # o que o outro cartão tinha acabado de gravar. Mesmo padrão de
+    # merge-com-o-anterior que `editar_cliente` já usa em comercial.py:
+    # campo ausente no corpo da requisição = mantém o valor que já tinha,
+    # nunca vira NULL sozinho.
+    anterior = conn.execute("SELECT * FROM terceirizacao_briefings WHERE projeto_id = ?", (projeto_id,)).fetchone()
+    anterior = dict(anterior) if anterior else {}
+
+    def _texto(campo):
+        return dados.get(campo, anterior.get(campo))
+
+    def _lista_json(campo):
+        if campo not in dados:
+            return anterior.get(campo)
+        return _json_lista(dados.get(campo))
+
+    def _numero(campo):
+        if campo not in dados:
+            return anterior.get(campo)
+        return _numero_opcional(dados.get(campo), campo)
+
     existente = conn.execute("SELECT id FROM terceirizacao_briefings WHERE projeto_id = ?", (projeto_id,)).fetchone()
     valores = (
-        dados.get("ideia_projeto"), dados.get("publico_alvo"), dados.get("posicionamento"),
-        dados.get("sensacao_desejada"), _json_lista(dados.get("estilo_visual")),
-        _json_lista(dados.get("cores_preferidas")), _json_lista(dados.get("cores_evitar")),
-        _json_lista(dados.get("marcas_referencia")), _now_iso(),
+        _texto("ideia_projeto"), _texto("publico_alvo"), _texto("posicionamento"),
+        _texto("sensacao_desejada"), _lista_json("estilo_visual"),
+        _lista_json("cores_preferidas"), _lista_json("cores_evitar"),
+        _lista_json("marcas_referencia"),
+        _texto("assinante_nome"), _texto("assinante_cpf"), _texto("assinante_data_nascimento"),
+        _texto("assinante_telefone_whats"), _texto("assinante_endereco"),
+        _texto("assinante_cidade_domicilio"), _texto("assinante_email"),
+        _texto("embalagem_secundaria"),
+        _texto("forma_pagamento"), _texto("prazo_pagamento"),
+        _numero("valor_unitario"), _numero("valor_total"),
+        _texto("notificacao_observacao"), _texto("excedente_rotulos"),
+        _now_iso(),
     )
     if existente:
         conn.execute(
             """
             UPDATE terceirizacao_briefings SET ideia_projeto = ?, publico_alvo = ?, posicionamento = ?,
                 sensacao_desejada = ?, estilo_visual = ?, cores_preferidas = ?, cores_evitar = ?,
-                marcas_referencia = ?, atualizado_em = ?
+                marcas_referencia = ?,
+                assinante_nome = ?, assinante_cpf = ?, assinante_data_nascimento = ?,
+                assinante_telefone_whats = ?, assinante_endereco = ?, assinante_cidade_domicilio = ?,
+                assinante_email = ?, embalagem_secundaria = ?,
+                forma_pagamento = ?, prazo_pagamento = ?, valor_unitario = ?, valor_total = ?,
+                notificacao_observacao = ?, excedente_rotulos = ?, atualizado_em = ?
             WHERE projeto_id = ?
             """,
             (*valores, projeto_id),
@@ -596,8 +745,13 @@ def salvar_briefing(projeto_id):
             """
             INSERT INTO terceirizacao_briefings
                 (projeto_id, ideia_projeto, publico_alvo, posicionamento, sensacao_desejada,
-                 estilo_visual, cores_preferidas, cores_evitar, marcas_referencia, atualizado_em)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 estilo_visual, cores_preferidas, cores_evitar, marcas_referencia,
+                 assinante_nome, assinante_cpf, assinante_data_nascimento,
+                 assinante_telefone_whats, assinante_endereco, assinante_cidade_domicilio,
+                 assinante_email, embalagem_secundaria,
+                 forma_pagamento, prazo_pagamento, valor_unitario, valor_total,
+                 notificacao_observacao, excedente_rotulos, atualizado_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (projeto_id, *valores),
         )
@@ -1057,9 +1211,20 @@ def _gerar_pdf_dossie(projeto, nutricao):
     if nutricao and nutricao.get("vinculado_a_memorial") and nutricao.get("memorial_aprovado_encontrado"):
         elementos.append(Paragraph(f"Do Memorial Técnico {nutricao.get('memorial_codigo')}.", estilo_suave))
         tab_nutri = nutricao.get("tabela_nutricional")
-        if tab_nutri and tab_nutri.get("tipo") == "estruturado" and tab_nutri.get("linhas"):
-            linhas_nutri = [["Nutriente", "Quantidade", "Unidade"]] + [
-                [str(l.get("nutriente") or ""), str(l.get("quantidade") if l.get("quantidade") is not None else ""), str(l.get("unidade") or "")]
+        if tab_nutri and tab_nutri.get("tipo") in ("estruturado", "estruturado_alimento") and tab_nutri.get("linhas"):
+            resumo_porcao = []
+            if tab_nutri.get("porcoes_por_embalagem"):
+                resumo_porcao.append(f"Porções por embalagem: {tab_nutri['porcoes_por_embalagem']}")
+            if tab_nutri.get("porcao_gramas") or tab_nutri.get("descricao_porcao"):
+                rotulo = f"Porção: {tab_nutri['porcao_gramas']} g" if tab_nutri.get("porcao_gramas") else "Porção"
+                if tab_nutri.get("descricao_porcao"):
+                    rotulo += f" ({tab_nutri['descricao_porcao']})"
+                resumo_porcao.append(rotulo)
+            if resumo_porcao:
+                elementos.append(Paragraph(" — ".join(resumo_porcao), estilo_suave))
+            coluna_qtd = f"{tab_nutri['porcao_gramas']} g" if tab_nutri.get("porcao_gramas") else "Quantidade"
+            linhas_nutri = [["", coluna_qtd, "%VD*"]] + [
+                [str(l.get("nutriente") or ""), str(l.get("quantidade") if l.get("quantidade") is not None else "0"), str(l.get("vd") or "**")]
                 for l in tab_nutri["linhas"]
             ]
             tabela_nutri_pdf = Table(linhas_nutri, colWidths=[8 * cm, 4 * cm, 4 * cm])
@@ -1071,9 +1236,13 @@ def _gerar_pdf_dossie(projeto, nutricao):
                 ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
             ]))
             elementos.append(tabela_nutri_pdf)
+            if tab_nutri.get("rodape_vd"):
+                elementos.append(Paragraph(tab_nutri["rodape_vd"], estilo_suave))
+        elif tab_nutri and tab_nutri.get("tipo") == "texto_livre":
+            elementos.append(Paragraph(tab_nutri.get("conteudo") or "", estilo_normal))
         if nutricao.get("lista_ingredientes"):
             elementos.append(Spacer(1, 0.2 * cm))
-            elementos.append(Paragraph(f"<b>Ingredientes:</b> {nutricao['lista_ingredientes']}", estilo_normal))
+            elementos.append(Paragraph(f"<b>Lista de Ingredientes:</b> {nutricao['lista_ingredientes']}", estilo_normal))
     else:
         elementos.append(Paragraph(
             "<i>Este produto ainda não tem um Memorial Técnico aprovado vinculado — tabela nutricional "

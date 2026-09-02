@@ -18,9 +18,16 @@ STATUS_QUE_PERMITEM_EDITAR_ITENS = ("rascunho",)
 STATUS_QUE_PERMITEM_CANCELAR = ("rascunho", "confirmado")
 
 # Fase 70 — ver nota completa em `editar_cliente` abaixo.
+# Fase 139 — os 8 campos finais (cpf..crf_numero) vêm da "Ficha Cadastral -
+# Base para Contratos" (Terceirização Premium/Monte sua linha): dados da
+# empresa que não mudam de um contrato pro outro, então ficam aqui no
+# cadastro permanente do cliente em vez de por projeto.
 CAMPOS_FISCAIS_CLIENTE_EDITAVEIS = (
     "inscricao_estadual", "logradouro", "numero_endereco", "complemento_endereco",
     "bairro", "municipio", "codigo_ibge_municipio", "uf", "cep",
+    "cpf", "data_nascimento", "alvara_sanitario",
+    "responsavel_correspondencia_nome_endereco", "responsavel_correspondencia_telefone_email",
+    "email_financeiro", "email_danfe_xml", "crf_numero",
 )
 
 

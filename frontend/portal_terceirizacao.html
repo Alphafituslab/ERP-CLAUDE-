@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Terceirização Premium — Alphafitus</title>
+<title>Monte Sua Linha — Alphafitus</title>
 <meta name="robots" content="noindex, nofollow">
 <style>
   :root {
@@ -103,7 +103,7 @@
   <div class="marca">
     <div>
       <div class="marca-nome">Alphafitus</div>
-      <div class="marca-sub">Terceirização Premium</div>
+      <div class="marca-sub">Monte Sua Linha</div>
     </div>
   </div>
   <div class="selo-seguro">🔒 Conexão segura e privada</div>
@@ -127,6 +127,26 @@
 
   function escapeHtml(s) {
     return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  // Mesma tabela de Informação Nutricional real (Porções por embalagem/
+  // Porção/nutriente|quantidade|%VD) que a tela interna já mostra — ver
+  // renderizarTabelaNutricional em frontend/static/app.js e
+  // _extrair_nutrientes em app/routes/terceirizacao.py.
+  function renderizarTabelaNutricional(tabela) {
+    if (!tabela) return "";
+    if (tabela.tipo === "texto_livre") {
+      return `<p class="texto-suave" style="white-space:pre-wrap;">${escapeHtml(tabela.conteudo)}</p>`;
+    }
+    if (tabela.tipo !== "estruturado" && tabela.tipo !== "estruturado_alimento") return "";
+    const colunaQtd = tabela.porcao_gramas ? `${tabela.porcao_gramas} g` : "Quantidade";
+    return `
+      ${tabela.porcoes_por_embalagem ? `<p class="texto-suave" style="margin:4px 0;">Porções por embalagem: ${escapeHtml(String(tabela.porcoes_por_embalagem))}</p>` : ""}
+      ${(tabela.porcao_gramas || tabela.descricao_porcao) ? `<p class="texto-suave" style="margin:4px 0;">Porção${tabela.porcao_gramas ? `: ${escapeHtml(String(tabela.porcao_gramas))} g` : ""}${tabela.descricao_porcao ? ` (${escapeHtml(tabela.descricao_porcao)})` : ""}</p>` : ""}
+      <table><thead><tr><th></th><th>${escapeHtml(colunaQtd)}</th><th>%VD*</th></tr></thead>
+      <tbody>${(tabela.linhas || []).map((l) => `<tr><td>${escapeHtml(l.nutriente || "")}</td><td>${escapeHtml(l.quantidade != null ? String(l.quantidade) : "0")}</td><td>${escapeHtml(l.vd || "**")}</td></tr>`).join("")}</tbody></table>
+      ${tabela.rodape_vd ? `<p class="texto-suave" style="font-size:11px;margin-top:4px;">${escapeHtml(tabela.rodape_vd)}</p>` : ""}
+    `;
   }
 
   async function chamar(caminho, opcoes) {
@@ -215,11 +235,8 @@
         ${projeto.item ? `
           <p><strong>${escapeHtml(projeto.item.nome_memorial || projeto.item.descricao)}</strong></p>
           ${projeto.nutricao && projeto.nutricao.vinculado_a_memorial && projeto.nutricao.memorial_aprovado_encontrado ? `
-            ${projeto.nutricao.tabela_nutricional && projeto.nutricao.tabela_nutricional.tipo === "estruturado" ? `
-              <table><thead><tr><th>Nutriente</th><th>Quantidade</th><th>Unidade</th></tr></thead>
-              <tbody>${projeto.nutricao.tabela_nutricional.linhas.map((l) => `<tr><td>${escapeHtml(l.nutriente || "")}</td><td>${escapeHtml(String(l.quantidade ?? ""))}</td><td>${escapeHtml(l.unidade || "")}</td></tr>`).join("")}</tbody></table>
-            ` : ""}
-            ${projeto.nutricao.lista_ingredientes ? `<p style="margin-top:10px;"><strong>Ingredientes:</strong> ${escapeHtml(projeto.nutricao.lista_ingredientes)}</p>` : ""}
+            ${renderizarTabelaNutricional(projeto.nutricao.tabela_nutricional)}
+            ${projeto.nutricao.lista_ingredientes ? `<p style="margin-top:10px;"><strong>Lista de Ingredientes:</strong> ${escapeHtml(projeto.nutricao.lista_ingredientes)}</p>` : ""}
           ` : '<p class="texto-suave">Tabela nutricional ainda não disponível para este produto.</p>'}
           ${editavel ? `
             <div style="margin-top:14px;">
