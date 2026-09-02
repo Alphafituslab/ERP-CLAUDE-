@@ -268,12 +268,9 @@ def _enviar_aviso_whatsapp(config, nome_arquivo, tamanho_bytes, resultados_outro
     realmente funciona sempre. Fala direto com a Evolution API (mesma
     que já atende o Whatts Inbox de produção) — não precisa da conta de
     ninguém no Alphafitus, só da apikey da própria Evolution."""
-    requests = _requests_backup()
     numero = (config.get("whatsapp_numero_destino") or "").strip()
     if not numero:
         raise ValueError("Configure whatsapp_numero_destino antes de ativar o aviso por WhatsApp.")
-    if not config.get("whatsapp_evolution_url") or not config.get("whatsapp_evolution_apikey"):
-        raise ValueError("Configure a URL e a chave de API do WhatsApp (Evolution API) antes de ativar este destino.")
 
     partes_status = []
     for nome_destino, rotulo in (("nuvem", "Nuvem"), ("email", "E-mail"), ("drive", "Google Drive"), ("local", "Local")):
@@ -290,7 +287,22 @@ def _enviar_aviso_whatsapp(config, nome_arquivo, tamanho_bytes, resultados_outro
         f"Tamanho: {tamanho_bytes / (1024 * 1024):.1f} MB\n"
         f"{resumo_destinos}"
     )
+    return enviar_texto_whatsapp(config, numero, texto)
+
+
+def enviar_texto_whatsapp(config, numero, texto):
+    """Primitivo reaproveitável — extraído de `_enviar_aviso_whatsapp`
+    (Fase 130) na Fase 136 pra também servir o portal de Terceirização
+    Premium (mandar o link do portal pro WhatsApp do cliente), sem
+    duplicar a chamada à Evolution API. Mesma config
+    (`configuracoes_backup.whatsapp_*`) — não existe uma segunda conta/
+    instância separada pra isso."""
+    requests = _requests_backup()
+    if not config.get("whatsapp_evolution_url") or not config.get("whatsapp_evolution_apikey"):
+        raise ValueError("Configure a URL e a chave de API do WhatsApp (Evolution API) em Sistema > Backups antes de usar o envio por WhatsApp.")
     digitos = "".join(c for c in numero if c.isdigit())
+    if not digitos:
+        raise ValueError("Número de WhatsApp inválido (sem dígitos).")
     resp = requests.post(
         f"{config['whatsapp_evolution_url']}/message/sendText/{config.get('whatsapp_instancia_nome') or 'whatts'}",
         json={"number": digitos, "text": texto},
@@ -298,7 +310,7 @@ def _enviar_aviso_whatsapp(config, nome_arquivo, tamanho_bytes, resultados_outro
         timeout=TIMEOUT_NUVEM_SEGUNDOS,
     )
     if not resp.ok:
-        raise RuntimeError(f"Falha ao enviar aviso por WhatsApp (HTTP {resp.status_code}): {resp.text[:300]}")
+        raise RuntimeError(f"Falha ao enviar mensagem por WhatsApp (HTTP {resp.status_code}): {resp.text[:300]}")
     return True
 
 

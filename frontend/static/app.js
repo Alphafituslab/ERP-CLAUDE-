@@ -165,6 +165,26 @@
     URL.revokeObjectURL(url);
   }
 
+  async function abrirBinarioEmNovaAba(caminho) {
+    // Mesmo raciocínio de `baixarArquivo` (a rota exige Authorization, um
+    // <a href> puro não carrega o header) — só que aqui abre pra
+    // VISUALIZAR (nova aba), não força download. Usado pelo Dossiê PDF de
+    // Terceirização.
+    const headers = {};
+    if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
+    const resp = await fetch(API + caminho, { headers });
+    if (!resp.ok) {
+      let dados = {};
+      try { dados = await resp.json(); } catch (e) { /* corpo vazio, ok */ }
+      throw new Error(dados.mensagem || `Erro ${resp.status} ao abrir o arquivo.`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    window.open(url, "_blank");
+    // Não revoga a URL na hora — a aba nova ainda está carregando o blob;
+    // deixa o navegador liberar sozinho quando a aba fechar.
+  }
+
   async function tentarRenovarToken() {
     try {
       const resp = await fetch(API + "/auth/refresh", {
@@ -10387,6 +10407,13 @@
     "Luxuoso", "Premium", "Minimalista", "Natural", "Esportivo", "Clínico", "Farmacêutico",
     "Clean", "Feminino", "Masculino", "Tecnológico", "Jovem", "Elegante", "Sofisticado",
   ];
+  // Fase 135 — espelha app/routes/terceirizacao.py::PERMISSAO_POR_DEPARTAMENTO/
+  // ROTULOS_DEPARTAMENTO — só pra decidir o que MOSTRAR (o backend sempre
+  // revalida a permissão de verdade na hora de decidir).
+  const ROTULOS_DEPARTAMENTO_TERCEIRIZACAO = { comercial: "Comercial", pd: "P&D", qualidade: "Qualidade", regulatorio: "Regulatório" };
+  const PERMISSAO_APROVACAO_DEPARTAMENTO_TERCEIRIZACAO = {
+    comercial: "aprovar_comercial", pd: "aprovar_pd", qualidade: "aprovar_qualidade", regulatorio: "aprovar_regulatorio",
+  };
 
   async function renderTerceirizacoes() {
     app.innerHTML = '<div class="carregando">Carregando…</div>';
@@ -10489,10 +10516,13 @@
     const projeto = await chamarApi(`/terceirizacao/projetos/${projetoId}`);
     const podeEditar = temPermissao("terceirizacao", "criar") && projeto.status === "rascunho";
 
-    const [potes, arquivos] = await Promise.all([
+    const [potes, arquivos, aprovacoes, linkCliente] = await Promise.all([
       chamarApi("/terceirizacao/potes"),
       chamarApi(`/terceirizacao/projetos/${projetoId}/arquivos`),
+      chamarApi(`/terceirizacao/projetos/${projetoId}/aprovacoes`),
+      chamarApi(`/terceirizacao/projetos/${projetoId}/link-cliente`),
     ]);
+    const podeEnviarParaAprovacao = temPermissao("terceirizacao", "criar") && ["rascunho", "aguardando_revisao"].includes(projeto.status);
     let tampas = [];
     if (projeto.pote_id) {
       tampas = await chamarApi(`/terceirizacao/potes/${projeto.pote_id}/tampas-compativeis`);
@@ -10584,6 +10614,32 @@
       </div>
 
       <div class="cartao">
+        <h3 style="margin-top:0;">Portal do cliente</h3>
+        <p class="texto-suave">Link seguro (sem senha) para o cliente personalizar a embalagem, preencher o briefing e enviar de volta — enviado por WhatsApp direto pro telefone cadastrado dele.</p>
+        ${linkCliente.ativo ? `
+          <p>${linkCliente.expirado ? '<span class="selo bloqueado">Expirado</span>' : '<span class="selo ativo">Ativo</span>'}
+             ${linkCliente.enviado_via_whatsapp ? " — já enviado por WhatsApp" : ""}
+             ${linkCliente.ultimo_acesso_em ? ` — último acesso ${fmtData(linkCliente.ultimo_acesso_em)}` : " — cliente ainda não abriu"}
+             ${!linkCliente.expirado ? ` — expira em ${fmtData(linkCliente.expira_em)}` : ""}</p>
+          <div class="campo" style="display:flex;gap:8px;align-items:center;">
+            <input type="text" readonly value="${escapeHtml(linkCliente.url)}" style="flex:1;font-size:12px;" onclick="this.select()">
+          </div>
+          ${temPermissao("terceirizacao", "criar") ? `
+            <div style="display:flex;gap:8px;">
+              <button type="button" class="botao secundario pequeno" data-acao="reenviar-link-cliente-whatsapp" data-id="${projeto.id}">Reenviar por WhatsApp</button>
+              <button type="button" class="botao perigo pequeno" data-acao="revogar-link-cliente" data-id="${projeto.id}">Revogar link</button>
+            </div>` : ""}
+        ` : `
+          <p class="texto-suave">Nenhum link ativo ainda.</p>
+          ${temPermissao("terceirizacao", "criar") ? `
+            <div style="display:flex;gap:8px;">
+              <button type="button" class="botao" data-acao="gerar-link-cliente" data-id="${projeto.id}" data-whatsapp="1">Gerar e enviar por WhatsApp</button>
+              <button type="button" class="botao secundario" data-acao="gerar-link-cliente" data-id="${projeto.id}" data-whatsapp="0">Só gerar link (copiar manualmente)</button>
+            </div>` : ""}
+        `}
+      </div>
+
+      <div class="cartao">
         <h3 style="margin-top:0;">Briefing do projeto</h3>
         <form id="form-briefing-terceirizacao" ${podeEditar ? "" : "class=\"desabilitado\""}>
           <div class="campo"><label>Qual é a ideia do projeto?</label><textarea name="ideia_projeto" rows="2" ${podeEditar ? "" : "disabled"}>${escapeHtml(briefing.ideia_projeto || "")}</textarea></div>
@@ -10652,9 +10708,65 @@
             </td>
           </tr>`).join("") || '<tr><td colspan="6" class="texto-suave">Nenhum arquivo enviado ainda.</td></tr>'}</tbody>
         </table>
+      </div>
+
+      <div class="cartao">
+        <div class="barra-acoes">
+          <h3 style="margin:0;">Aprovação interna</h3>
+          ${podeEnviarParaAprovacao ? `<button type="button" class="botao" data-acao="enviar-para-aprovacao-terceirizacao" data-id="${projeto.id}">Enviar para aprovação</button>` : ""}
+        </div>
+        ${aprovacoes.length === 0
+          ? '<p class="texto-suave">Este projeto ainda não foi enviado para aprovação — complete fórmula, embalagem e briefing e clique em "Enviar para aprovação".</p>'
+          : `<table>
+              <thead><tr><th>Departamento</th><th>Status</th><th>Decidido por</th><th>Quando</th><th></th></tr></thead>
+              <tbody>${aprovacoes.map((a) => {
+                const podeDecidirEsta = a.status === "pendente" && temPermissao("terceirizacao", PERMISSAO_APROVACAO_DEPARTAMENTO_TERCEIRIZACAO[a.departamento]);
+                const seloAprov = a.status === "aprovado" ? '<span class="selo ativo">Aprovado</span>'
+                  : a.status === "reprovado" ? '<span class="selo bloqueado">Reprovado</span>'
+                  : '<span class="selo amarelo">Pendente</span>';
+                return `<tr>
+                  <td>${escapeHtml(ROTULOS_DEPARTAMENTO_TERCEIRIZACAO[a.departamento] || a.departamento)}</td>
+                  <td>${seloAprov}${a.status === "reprovado" && a.motivo_reprovacao ? `<div class="texto-suave" style="font-size:12px;">${escapeHtml(a.motivo_reprovacao)}</div>` : ""}</td>
+                  <td class="texto-suave">${a.decidido_por_nome ? escapeHtml(a.decidido_por_nome) : "—"}</td>
+                  <td class="texto-suave">${a.decidido_em ? fmtData(a.decidido_em) : "—"}</td>
+                  <td style="display:flex;gap:6px;">
+                    ${podeDecidirEsta ? `
+                      <button class="botao secundario pequeno" data-acao="decidir-aprovacao-terceirizacao" data-departamento="${a.departamento}" data-decisao="aprovado" data-id="${projeto.id}">Aprovar</button>
+                      <button class="botao perigo pequeno" data-acao="decidir-aprovacao-terceirizacao" data-departamento="${a.departamento}" data-decisao="reprovado" data-id="${projeto.id}">Reprovar</button>
+                    ` : ""}
+                  </td>
+                </tr>`;
+              }).join("")}</tbody>
+            </table>`}
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Documento & Preview</h3>
+        <div id="mockup-terceirizacao-container" style="margin-bottom:12px;"><p class="texto-suave">Carregando preview…</p></div>
+        <button type="button" class="botao secundario" data-acao="abrir-dossie-terceirizacao" data-id="${projeto.id}">📄 Ver Dossiê de Desenvolvimento (PDF)</button>
       </div>`,
       "terceirizacao"
     );
+
+    // Carrega o mockup como blob autenticado (não dá pra usar <img src>
+    // direto — a rota exige Authorization, mesmo raciocínio de
+    // `abrirBinarioEmNovaAba`) e injeta como <img> assim que chegar, sem
+    // travar o resto da tela esperando.
+    (async () => {
+      const containerMockup = document.getElementById("mockup-terceirizacao-container");
+      if (!containerMockup) return;
+      try {
+        const headers = {};
+        if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
+        const resp = await fetch(`${API}/terceirizacao/projetos/${projetoId}/mockup.png`, { headers });
+        if (!resp.ok) throw new Error("Não foi possível gerar o preview.");
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        containerMockup.innerHTML = `<img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid var(--borda,#333);">`;
+      } catch (erro) {
+        containerMockup.innerHTML = '<p class="texto-suave">Preview ainda não disponível.</p>';
+      }
+    })();
 
     if (podeEditar) {
       const campoBuscaFormula = document.getElementById("busca-formula-terceirizacao");
@@ -16111,6 +16223,83 @@
         const projetoIdAtual = Number(location.hash.split("/")[2]);
         await baixarArquivo(`/terceirizacao/projetos/${projetoIdAtual}/arquivos/${alvo.dataset.id}/download`, alvo.dataset.nome);
         return;
+      }
+      case "enviar-para-aprovacao-terceirizacao": {
+        try {
+          await chamarApi(`/terceirizacao/projetos/${alvo.dataset.id}/enviar-para-aprovacao`, { method: "POST" });
+          definirFlash("ok", "Projeto enviado para aprovação — Comercial, P&D, Qualidade e Regulatório foram avisados.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível enviar para aprovação.");
+        }
+        return renderTerceirizacaoDetalhe(Number(alvo.dataset.id));
+      }
+      case "decidir-aprovacao-terceirizacao": {
+        const { id, departamento, decisao } = alvo.dataset;
+        let motivo = null;
+        if (decisao === "reprovado") {
+          motivo = prompt(`Motivo da reprovação (${ROTULOS_DEPARTAMENTO_TERCEIRIZACAO[departamento] || departamento}):`);
+          if (motivo === null) return; // cancelou o prompt
+          if (!motivo.trim()) { definirFlash("erro", "Informe o motivo da reprovação."); return; }
+        } else if (!confirm(`Confirmar aprovação de ${ROTULOS_DEPARTAMENTO_TERCEIRIZACAO[departamento] || departamento}?`)) {
+          return;
+        }
+        try {
+          await chamarApi(`/terceirizacao/projetos/${id}/aprovacoes/${departamento}/decidir`, {
+            method: "POST", body: { status: decisao, motivo: motivo || undefined },
+          });
+          definirFlash("ok", decisao === "aprovado" ? "Aprovação registrada." : "Reprovação registrada — projeto voltou para revisão.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível registrar a decisão.");
+        }
+        return renderTerceirizacaoDetalhe(Number(id));
+      }
+      case "abrir-dossie-terceirizacao": {
+        try {
+          await abrirBinarioEmNovaAba(`/terceirizacao/projetos/${alvo.dataset.id}/documento.pdf`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir o Dossiê.");
+        }
+        return;
+      }
+      case "gerar-link-cliente": {
+        const enviarWhatsapp = alvo.dataset.whatsapp === "1";
+        try {
+          const resultado = await chamarApi(`/terceirizacao/projetos/${alvo.dataset.id}/link-cliente`, {
+            method: "POST", body: { enviar_whatsapp: enviarWhatsapp },
+          });
+          if (enviarWhatsapp && resultado.enviado_via_whatsapp) {
+            definirFlash("ok", "Link gerado e enviado por WhatsApp.");
+          } else if (enviarWhatsapp && resultado.erro_envio_whatsapp) {
+            definirFlash("erro", `Link gerado, mas o envio por WhatsApp falhou: ${resultado.erro_envio_whatsapp}`);
+          } else {
+            definirFlash("ok", "Link gerado — copie e envie manualmente.");
+          }
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível gerar o link.");
+        }
+        return renderTerceirizacaoDetalhe(Number(alvo.dataset.id));
+      }
+      case "reenviar-link-cliente-whatsapp": {
+        try {
+          const resultado = await chamarApi(`/terceirizacao/projetos/${alvo.dataset.id}/link-cliente`, {
+            method: "POST", body: { enviar_whatsapp: true },
+          });
+          definirFlash(resultado.enviado_via_whatsapp ? "ok" : "erro",
+            resultado.enviado_via_whatsapp ? "Link reenviado por WhatsApp." : (resultado.erro_envio_whatsapp || "Não foi possível enviar."));
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível reenviar o link.");
+        }
+        return renderTerceirizacaoDetalhe(Number(alvo.dataset.id));
+      }
+      case "revogar-link-cliente": {
+        if (!confirm("Revogar o link atual? O cliente não conseguirá mais abri-lo.")) return;
+        try {
+          await chamarApi(`/terceirizacao/projetos/${alvo.dataset.id}/link-cliente/revogar`, { method: "POST" });
+          definirFlash("ok", "Link revogado.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível revogar o link.");
+        }
+        return renderTerceirizacaoDetalhe(Number(alvo.dataset.id));
       }
       case "editar-compatibilidade-pote": {
         const potesCache = (state.cache.catalogoEmbalagem && state.cache.catalogoEmbalagem.pote) || [];

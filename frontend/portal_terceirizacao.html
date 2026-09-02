@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Terceirização Premium — Alphafitus</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root {
+    --preto: #0c0d0e;
+    --grafite: #17191b;
+    --grafite-claro: #1f2225;
+    --borda: #2c2f33;
+    --dourado: #c9a44c;
+    --dourado-suave: #a8863f;
+    --texto: #ece9e2;
+    --texto-suave: #9a978f;
+    --sucesso: #6fae6f;
+    --erro: #c96a4c;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--preto); color: var(--texto);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .topo {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 28px; border-bottom: 1px solid var(--borda);
+  }
+  .marca { display: flex; align-items: center; gap: 12px; }
+  .marca-nome { font-size: 15px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--texto); font-weight: 600; }
+  .marca-sub { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--dourado); }
+  .selo-seguro { font-size: 11px; color: var(--texto-suave); display: flex; align-items: center; gap: 6px; }
+  .container { max-width: 880px; margin: 0 auto; padding: 32px 20px 80px; }
+  .titulo-projeto { font-size: 24px; font-weight: 600; margin: 0 0 4px; }
+  .subtitulo-projeto { color: var(--texto-suave); font-size: 14px; margin: 0 0 28px; }
+  .cartao {
+    background: var(--grafite); border: 1px solid var(--borda); border-radius: 10px;
+    padding: 22px 24px; margin-bottom: 20px;
+  }
+  .cartao h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dourado);
+    margin: 0 0 16px; font-weight: 600;
+  }
+  .campo { margin-bottom: 14px; }
+  .campo label { display: block; font-size: 12.5px; color: var(--texto-suave); margin-bottom: 6px; }
+  .campo input[type="text"], .campo textarea, .campo select {
+    width: 100%; background: var(--preto); border: 1px solid var(--borda); border-radius: 6px;
+    padding: 10px 12px; color: var(--texto); font-size: 14px; font-family: inherit;
+  }
+  .campo input:focus, .campo textarea:focus, .campo select:focus { outline: none; border-color: var(--dourado-suave); }
+  .campo textarea { resize: vertical; min-height: 60px; }
+  .grade-opcoes { display: flex; gap: 10px; flex-wrap: wrap; }
+  .opcao-embalagem {
+    width: 108px; text-align: center; background: var(--grafite-claro); border: 2px solid var(--borda);
+    border-radius: 8px; padding: 10px; cursor: pointer; color: var(--texto);
+  }
+  .opcao-embalagem.selecionada { border-color: var(--dourado); box-shadow: 0 0 0 1px var(--dourado); }
+  .opcao-embalagem img { width: 64px; height: 64px; object-fit: contain; display: block; margin: 0 auto 6px; }
+  .opcao-embalagem .sem-foto { width: 64px; height: 64px; margin: 0 auto 6px; display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--texto-suave); }
+  .opcao-embalagem .nome { font-size: 12px; }
+  .opcao-embalagem .cor { font-size: 10.5px; color: var(--texto-suave); }
+  .botao {
+    background: var(--dourado); color: #1a1408; border: none; border-radius: 6px; padding: 11px 20px;
+    font-size: 14px; font-weight: 600; cursor: pointer; letter-spacing: 0.01em;
+  }
+  .botao:hover { background: #d9b65c; }
+  .botao:disabled { opacity: 0.5; cursor: not-allowed; }
+  .botao-secundario {
+    background: none; color: var(--texto); border: 1px solid var(--borda); border-radius: 6px;
+    padding: 10px 18px; font-size: 13.5px; cursor: pointer;
+  }
+  .botao-secundario:hover { border-color: var(--dourado-suave); }
+  .estilos-chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip { border: 1px solid var(--borda); border-radius: 20px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; user-select: none; }
+  .chip.selecionado { background: var(--dourado); color: #1a1408; border-color: var(--dourado); }
+  .mockup-preview { width: 100%; border-radius: 8px; border: 1px solid var(--borda); display: block; }
+  .selo-status {
+    display: inline-block; font-size: 11px; padding: 3px 10px; border-radius: 20px;
+    background: var(--grafite-claro); border: 1px solid var(--borda); color: var(--texto-suave); margin-left: 10px; vertical-align: middle;
+  }
+  .aviso { background: rgba(201, 164, 76, 0.1); border: 1px solid var(--dourado-suave); border-radius: 8px; padding: 14px 16px; font-size: 13.5px; margin-bottom: 20px; }
+  .erro { background: rgba(201, 106, 76, 0.12); border: 1px solid var(--erro); border-radius: 8px; padding: 14px 16px; font-size: 13.5px; }
+  .tela-central { min-height: 60vh; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; text-align: center; padding: 40px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--borda); }
+  th { color: var(--texto-suave); font-weight: 500; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .lista-arquivos { list-style: none; padding: 0; margin: 12px 0 0; }
+  .lista-arquivos li { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--borda); font-size: 13px; }
+  .lista-arquivos a { color: var(--dourado); text-decoration: none; }
+  .rodape-acoes { display: flex; gap: 12px; justify-content: flex-end; margin-top: 8px; }
+  .marca-linha { display: flex; gap: 8px; margin-bottom: 8px; }
+  .marca-linha input { flex: 1; }
+  .removerlinha { background: none; border: 1px solid var(--borda); color: var(--texto-suave); border-radius: 6px; width: 36px; cursor: pointer; }
+  .texto-suave { color: var(--texto-suave); font-size: 13px; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+
+<div class="topo">
+  <div class="marca">
+    <div>
+      <div class="marca-nome">Alphafitus</div>
+      <div class="marca-sub">Terceirização Premium</div>
+    </div>
+  </div>
+  <div class="selo-seguro">🔒 Conexão segura e privada</div>
+</div>
+
+<div class="container" id="app">
+  <div class="tela-central"><p class="texto-suave">Carregando seu projeto…</p></div>
+</div>
+
+<script>
+(function () {
+  const partes = location.pathname.split("/").filter(Boolean);
+  const token = partes[partes.length - 1];
+  const API = location.origin + "/api/v1/portal/terceirizacao";
+  const app = document.getElementById("app");
+
+  const ESTILOS_VISUAIS = [
+    "Luxuoso", "Premium", "Minimalista", "Natural", "Esportivo", "Clínico", "Farmacêutico",
+    "Clean", "Feminino", "Masculino", "Tecnológico", "Jovem", "Elegante", "Sofisticado",
+  ];
+
+  function escapeHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  async function chamar(caminho, opcoes) {
+    opcoes = opcoes || {};
+    const resp = await fetch(API + caminho, {
+      method: opcoes.method || "GET",
+      headers: { "Content-Type": "application/json" },
+      body: opcoes.body !== undefined ? JSON.stringify(opcoes.body) : undefined,
+    });
+    let dados = {};
+    try { dados = await resp.json(); } catch (e) { /* corpo vazio */ }
+    if (!resp.ok) {
+      const erro = new Error(dados.mensagem || `Erro ${resp.status}`);
+      erro.codigo = dados.erro;
+      throw erro;
+    }
+    return dados;
+  }
+
+  function telaErro(mensagem) {
+    app.innerHTML = `<div class="tela-central">
+      <div style="font-size:36px;">🔒</div>
+      <h2 style="margin:0;font-weight:600;">Não foi possível abrir este link</h2>
+      <p class="texto-suave" style="max-width:420px;">${escapeHtml(mensagem)}</p>
+    </div>`;
+  }
+
+  function lerArquivoComoBase64(arquivo) {
+    return new Promise((resolve, reject) => {
+      const leitor = new FileReader();
+      leitor.onload = () => resolve(leitor.result);
+      leitor.onerror = reject;
+      leitor.readAsDataURL(arquivo);
+    });
+  }
+
+  let estadoLocal = { pote_id: null, tampa_id: null, capsula_id: null };
+
+  async function renderizar() {
+    let projeto;
+    try {
+      projeto = await chamar(`/${token}`);
+    } catch (erro) {
+      if (erro.codigo === "link_expirado") return telaErro("Este link expirou. Entre em contato com seu vendedor na Alphafitus para receber um novo link.");
+      return telaErro("Este link é inválido ou já foi revogado. Confira se copiou o endereço completo, ou peça um novo link ao seu contato na Alphafitus.");
+    }
+
+    estadoLocal.pote_id = projeto.pote_id;
+    estadoLocal.tampa_id = projeto.tampa_id;
+    estadoLocal.capsula_id = projeto.capsula_id;
+
+    const editavel = projeto.editavel;
+    const briefing = projeto.briefing || {};
+    const estiloAtual = briefing.estilo_visual ? JSON.parse(briefing.estilo_visual) : [];
+    const coresAtuais = briefing.cores_preferidas ? JSON.parse(briefing.cores_preferidas) : [];
+    const marcasAtuais = briefing.marcas_referencia ? JSON.parse(briefing.marcas_referencia) : [];
+
+    let embalagem = { potes: [], tampas: [], capsulas: [] };
+    try { embalagem = await chamar(`/${token}/embalagem-disponivel`); } catch (e) { /* segue sem opções, mostra o que já tem */ }
+
+    function opcaoEmbalagem(o, campo, selecionadoId) {
+      const cor = o.cor || o.cor_cabeca || "";
+      return `<div class="opcao-embalagem ${String(o.id) === String(selecionadoId) ? "selecionada" : ""}" data-campo="${campo}" data-id="${o.id}" ${editavel ? "" : 'style="cursor:default;"'}>
+        ${o.imagem ? `<img src="${o.imagem}">` : '<div class="sem-foto">sem foto</div>'}
+        <div class="nome">${escapeHtml(o.nome)}</div>
+        <div class="cor">${escapeHtml(cor)}</div>
+      </div>`;
+    }
+
+    app.innerHTML = `
+      <h1 class="titulo-projeto">${escapeHtml(projeto.numero)} <span class="selo-status">${editavel ? "Preenchimento aberto" : "Enviado — em análise"}</span></h1>
+      <p class="subtitulo-projeto">${escapeHtml(projeto.cliente.razao_social)}</p>
+
+      ${!editavel ? `<div class="aviso">Seu projeto já foi enviado para a Alphafitus e está em análise interna. Se precisar alterar algo, entre em contato com seu vendedor.</div>` : ""}
+
+      <div class="cartao">
+        <h2>Preview do Projeto</h2>
+        <img class="mockup-preview" id="mockup-img" alt="Preview do produto">
+      </div>
+
+      <div class="cartao">
+        <h2>Fórmula</h2>
+        ${projeto.item ? `
+          <p><strong>${escapeHtml(projeto.item.descricao)}</strong></p>
+          ${projeto.nutricao && projeto.nutricao.vinculado_a_memorial && projeto.nutricao.memorial_aprovado_encontrado ? `
+            ${projeto.nutricao.tabela_nutricional && projeto.nutricao.tabela_nutricional.tipo === "estruturado" ? `
+              <table><thead><tr><th>Nutriente</th><th>Quantidade</th><th>Unidade</th></tr></thead>
+              <tbody>${projeto.nutricao.tabela_nutricional.linhas.map((l) => `<tr><td>${escapeHtml(l.nutriente || "")}</td><td>${escapeHtml(String(l.quantidade ?? ""))}</td><td>${escapeHtml(l.unidade || "")}</td></tr>`).join("")}</tbody></table>
+            ` : ""}
+            ${projeto.nutricao.lista_ingredientes ? `<p style="margin-top:10px;"><strong>Ingredientes:</strong> ${escapeHtml(projeto.nutricao.lista_ingredientes)}</p>` : ""}
+          ` : '<p class="texto-suave">Tabela nutricional ainda não disponível para este produto.</p>'}
+          ${editavel ? `
+            <div style="margin-top:14px;">
+              <button type="button" class="botao-secundario" id="btn-solicitar-alteracao">Solicitar alteração da fórmula</button>
+            </div>` : ""}
+        ` : '<p class="texto-suave">Fórmula ainda não definida pela equipe Alphafitus.</p>'}
+        ${projeto.solicitacao_alteracao_formula ? `<div class="aviso" style="margin-top:14px;">Alteração solicitada: ${escapeHtml(projeto.solicitacao_alteracao_formula)}</div>` : ""}
+      </div>
+
+      <div class="cartao">
+        <h2>Personalização da Embalagem</h2>
+        <div class="campo"><label>Pote</label>
+          <div class="grade-opcoes" id="grade-potes">${embalagem.potes.map((o) => opcaoEmbalagem(o, "pote_id", projeto.pote_id)).join("") || '<p class="texto-suave">Nenhuma opção disponível.</p>'}</div>
+        </div>
+        <div class="campo"><label>Tampa</label>
+          <div class="grade-opcoes" id="grade-tampas">${embalagem.tampas.map((o) => opcaoEmbalagem(o, "tampa_id", projeto.tampa_id)).join("") || '<p class="texto-suave">Escolha um pote primeiro.</p>'}</div>
+        </div>
+        <div class="campo"><label>Cápsula</label>
+          <div class="grade-opcoes" id="grade-capsulas">${embalagem.capsulas.map((o) => opcaoEmbalagem({ ...o, cor: o.cor_cabeca }, "capsula_id", projeto.capsula_id)).join("") || '<p class="texto-suave">Nenhuma opção disponível.</p>'}</div>
+        </div>
+        <div style="display:flex;gap:12px;margin-top:6px;">
+          <div class="campo" style="flex:1;"><label>Quantidade por pote</label><input type="text" id="campo-quantidade" value="${projeto.quantidade_por_pote ?? ""}" ${editavel ? "" : "disabled"}></div>
+          <div class="campo" style="flex:1;"><label>Unidade</label>
+            <select id="campo-unidade" ${editavel ? "" : "disabled"}>
+              <option value="">—</option>
+              <option value="capsulas" ${projeto.unidade_quantidade === "capsulas" ? "selected" : ""}>Cápsulas</option>
+              <option value="gramas" ${projeto.unidade_quantidade === "gramas" ? "selected" : ""}>Gramas</option>
+            </select>
+          </div>
+        </div>
+        ${editavel ? '<button type="button" class="botao-secundario" id="btn-salvar-embalagem">Salvar embalagem e quantidade</button>' : ""}
+      </div>
+
+      <div class="cartao">
+        <h2>Conte-nos sobre sua marca</h2>
+        <div class="campo"><label>Qual é a ideia do projeto?</label><textarea id="b-ideia" ${editavel ? "" : "disabled"}>${escapeHtml(briefing.ideia_projeto || "")}</textarea></div>
+        <div class="campo"><label>Qual público deseja atingir?</label><textarea id="b-publico" ${editavel ? "" : "disabled"}>${escapeHtml(briefing.publico_alvo || "")}</textarea></div>
+        <div class="campo"><label>Qual posicionamento?</label><textarea id="b-posicionamento" ${editavel ? "" : "disabled"}>${escapeHtml(briefing.posicionamento || "")}</textarea></div>
+        <div class="campo"><label>Que sensação deseja transmitir?</label><textarea id="b-sensacao" ${editavel ? "" : "disabled"}>${escapeHtml(briefing.sensacao_desejada || "")}</textarea></div>
+        <div class="campo"><label>Estilo visual (escolha quantos quiser)</label>
+          <div class="estilos-chips" id="chips-estilo">
+            ${ESTILOS_VISUAIS.map((e) => `<div class="chip ${estiloAtual.includes(e) ? "selecionado" : ""}" data-estilo="${e}" ${editavel ? "" : 'style="pointer-events:none;opacity:.7;"'}>${e}</div>`).join("")}
+          </div>
+        </div>
+        <div class="campo"><label>Cores preferidas (uma por linha, HEX)</label><textarea id="b-cores" placeholder="#000000" ${editavel ? "" : "disabled"}>${coresAtuais.join("\n")}</textarea></div>
+        <div class="campo">
+          <label>Marcas ou produtos que te inspiram</label>
+          <div id="marcas-container">
+            ${marcasAtuais.map((m) => `<div class="marca-linha"><input type="text" placeholder="Nome" value="${escapeHtml(m.nome || "")}" data-campo="nome" ${editavel ? "" : "disabled"}><input type="text" placeholder="Site/Instagram" value="${escapeHtml(m.site || "")}" data-campo="site" ${editavel ? "" : "disabled"}>${editavel ? '<button type="button" class="removerlinha">✕</button>' : ""}</div>`).join("")}
+          </div>
+          ${editavel ? '<button type="button" class="botao-secundario" id="btn-add-marca" style="margin-top:6px;">+ Adicionar marca de referência</button>' : ""}
+        </div>
+        ${editavel ? '<button type="button" class="botao-secundario" id="btn-salvar-briefing">Salvar</button>' : ""}
+      </div>
+
+      <div class="cartao">
+        <h2>Referências e Anexos</h2>
+        ${editavel ? `
+          <div class="campo"><label>Enviar arquivo (JPG, PNG, WEBP ou PDF, até 10 MB)</label>
+            <input type="file" id="campo-arquivo" accept=".jpg,.jpeg,.png,.webp,.pdf">
+          </div>
+          <button type="button" class="botao-secundario" id="btn-enviar-arquivo">Enviar</button>
+        ` : ""}
+        <ul class="lista-arquivos">
+          ${(projeto.arquivos || []).map((a) => `<li><span>${escapeHtml(a.nome)}</span><a href="${API}/${token}/arquivos/${a.id}/download" target="_blank">Ver</a></li>`).join("") || '<li class="texto-suave">Nenhum arquivo enviado ainda.</li>'}
+        </ul>
+      </div>
+
+      ${editavel ? `
+        <div class="cartao" style="text-align:center;">
+          <p class="texto-suave" style="margin-bottom:16px;">Quando terminar de preencher tudo, clique abaixo para enviar para a equipe Alphafitus.</p>
+          <button type="button" class="botao" id="btn-concluir">Concluir e Enviar →</button>
+        </div>
+      ` : ""}
+    `;
+
+    // preview do mockup (blob, sem precisar de auth aqui — token já valida)
+    fetch(`${API}/${token}/mockup.png`).then((r) => r.blob()).then((b) => {
+      document.getElementById("mockup-img").src = URL.createObjectURL(b);
+    }).catch(() => {});
+
+    if (!editavel) return; // resto da função só liga eventos de edição
+
+    async function salvarEmbalagem() {
+      try {
+        await chamar(`/${token}/embalagem`, {
+          method: "PUT",
+          body: {
+            pote_id: estadoLocal.pote_id, tampa_id: estadoLocal.tampa_id, capsula_id: estadoLocal.capsula_id,
+            quantidade_por_pote: document.getElementById("campo-quantidade").value ? Number(document.getElementById("campo-quantidade").value) : null,
+            unidade_quantidade: document.getElementById("campo-unidade").value || null,
+          },
+        });
+        renderizar();
+      } catch (erro) {
+        alert(erro.message || "Não foi possível salvar.");
+        renderizar();
+      }
+    }
+
+    document.querySelectorAll(".opcao-embalagem").forEach((el) => {
+      el.addEventListener("click", () => {
+        const campo = el.dataset.campo;
+        estadoLocal[campo] = Number(el.dataset.id);
+        if (campo === "pote_id") estadoLocal.tampa_id = null;
+        salvarEmbalagem();
+      });
+    });
+    const btnSalvarEmb = document.getElementById("btn-salvar-embalagem");
+    if (btnSalvarEmb) btnSalvarEmb.addEventListener("click", salvarEmbalagem);
+
+    const containerMarcas = document.getElementById("marcas-container");
+    const btnAddMarca = document.getElementById("btn-add-marca");
+    if (btnAddMarca) {
+      btnAddMarca.addEventListener("click", () => {
+        const linha = document.createElement("div");
+        linha.className = "marca-linha";
+        linha.innerHTML = `<input type="text" placeholder="Nome" data-campo="nome"><input type="text" placeholder="Site/Instagram" data-campo="site"><button type="button" class="removerlinha">✕</button>`;
+        containerMarcas.appendChild(linha);
+      });
+    }
+    containerMarcas.addEventListener("click", (e) => {
+      if (e.target.classList.contains("removerlinha")) e.target.closest(".marca-linha").remove();
+    });
+
+    document.querySelectorAll("#chips-estilo .chip").forEach((chip) => {
+      chip.addEventListener("click", () => chip.classList.toggle("selecionado"));
+    });
+
+    const btnSalvarBriefing = document.getElementById("btn-salvar-briefing");
+    if (btnSalvarBriefing) {
+      btnSalvarBriefing.addEventListener("click", async () => {
+        const estilos = [...document.querySelectorAll("#chips-estilo .chip.selecionado")].map((c) => c.dataset.estilo);
+        const cores = (document.getElementById("b-cores").value || "").split("\n").map((s) => s.trim()).filter(Boolean);
+        const marcas = [...containerMarcas.querySelectorAll(".marca-linha")].map((linha) => ({
+          nome: linha.querySelector('[data-campo="nome"]').value.trim(),
+          site: linha.querySelector('[data-campo="site"]').value.trim(),
+        })).filter((m) => m.nome || m.site);
+        try {
+          await chamar(`/${token}/briefing`, {
+            method: "PUT",
+            body: {
+              ideia_projeto: document.getElementById("b-ideia").value,
+              publico_alvo: document.getElementById("b-publico").value,
+              posicionamento: document.getElementById("b-posicionamento").value,
+              sensacao_desejada: document.getElementById("b-sensacao").value,
+              estilo_visual: estilos, cores_preferidas: cores, marcas_referencia: marcas,
+            },
+          });
+          btnSalvarBriefing.textContent = "Salvo ✓";
+          setTimeout(() => { btnSalvarBriefing.textContent = "Salvar"; }, 2000);
+        } catch (erro) {
+          alert(erro.message || "Não foi possível salvar.");
+        }
+      });
+    }
+
+    const btnSolicitarAlteracao = document.getElementById("btn-solicitar-alteracao");
+    if (btnSolicitarAlteracao) {
+      btnSolicitarAlteracao.addEventListener("click", async () => {
+        const texto = prompt("Descreva a alteração desejada na fórmula:");
+        if (!texto || !texto.trim()) return;
+        try {
+          await chamar(`/${token}/solicitar-alteracao-formula`, { method: "PUT", body: { texto } });
+          renderizar();
+        } catch (erro) {
+          alert(erro.message || "Não foi possível enviar.");
+        }
+      });
+    }
+
+    const btnEnviarArquivo = document.getElementById("btn-enviar-arquivo");
+    if (btnEnviarArquivo) {
+      btnEnviarArquivo.addEventListener("click", async () => {
+        const campoArquivo = document.getElementById("campo-arquivo");
+        const arquivo = campoArquivo.files[0];
+        if (!arquivo) { alert("Escolha um arquivo primeiro."); return; }
+        try {
+          const dataUrl = await lerArquivoComoBase64(arquivo);
+          await chamar(`/${token}/arquivos`, {
+            method: "POST",
+            body: { nome_arquivo: arquivo.name, tipo_mime: arquivo.type, dados: dataUrl, categoria: "referencia" },
+          });
+          renderizar();
+        } catch (erro) {
+          alert(erro.message || "Não foi possível enviar o arquivo.");
+        }
+      });
+    }
+
+    const btnConcluir = document.getElementById("btn-concluir");
+    if (btnConcluir) {
+      btnConcluir.addEventListener("click", async () => {
+        if (!confirm("Confirmar envio? Depois de enviado, você não poderá mais editar por aqui.")) return;
+        try {
+          await chamar(`/${token}/concluir`, { method: "POST" });
+          renderizar();
+        } catch (erro) {
+          alert(erro.message || "Não foi possível concluir.");
+        }
+      });
+    }
+  }
+
+  renderizar();
+})();
+</script>
+</body>
+</html>

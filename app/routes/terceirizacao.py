@@ -26,15 +26,27 @@ import binascii
 import io
 import json
 import re
+import secrets as secrets_lib
 
 from flask import Blueprint, Response, g, jsonify, request
 
 from .. import audit
+from .. import backup_service
 from .. import notificacoes_service
 from ..context import ApiError, client_device, client_ip, get_db
 from ..imagens import validar_imagem_base64
 from ..pdf_marca import desenhar_cabecalho_logo
 from ..permissions import requires_permission
+
+# Fase 136 — o portal do cliente roda por trás de um túnel SSH reverso
+# (máquina local → VPS), exposto publicamente pelo Caddy em
+# whatts.alphafitus.com.br:9445 (path-restrito a /portal/*, ver nota
+# completa em migrations/schema_fase136.sql e no Caddyfile do VPS) — esta
+# é a ÚNICA origem pública que existe pra essa URL; nunca montar o link a
+# partir de `request.host`/localhost, que só o computador da empresa
+# consegue abrir.
+URL_BASE_PORTAL_PUBLICO = "https://whatts.alphafitus.com.br:9445"
+TTL_LINK_PORTAL_DIAS = 30
 
 bp = Blueprint("terceirizacao", __name__, url_prefix="/api/v1/terceirizacao")
 
@@ -1094,3 +1106,116 @@ def obter_documento_projeto(projeto_id):
         pdf_bytes, mimetype="application/pdf",
         headers={"Content-Disposition": f'inline; filename="{nome_arquivo}"'},
     )
+
+
+# =============================================================================
+# Fase 136 (Fase C) — link seguro pro portal do cliente + envio por
+# WhatsApp. Ver nota de segurança completa em app/routes/portal_terceirizacao.py
+# (o lado que RECEBE o token) — aqui é só quem GERA/revoga.
+# =============================================================================
+
+def _expira_em_daqui_a_dias(dias):
+    import datetime
+    return (datetime.datetime.utcnow() + datetime.timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _link_ativo_do_projeto(conn, projeto_id):
+    row = conn.execute(
+        "SELECT * FROM terceirizacao_links_portal WHERE projeto_id = ? AND revogado = 0 ORDER BY id DESC LIMIT 1",
+        (projeto_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@bp.get("/projetos/<int:projeto_id>/link-cliente")
+@requires_permission("terceirizacao", "visualizar")
+def obter_link_cliente(projeto_id):
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    link = _link_ativo_do_projeto(conn, projeto_id)
+    if link is None:
+        return jsonify({"ativo": False})
+    return jsonify({
+        "ativo": True, "expirado": link["expira_em"] < _now_iso(),
+        "expira_em": link["expira_em"], "ultimo_acesso_em": link["ultimo_acesso_em"],
+        "enviado_via_whatsapp": bool(link["enviado_via_whatsapp"]),
+        "url": f"{URL_BASE_PORTAL_PUBLICO}/portal/terceirizacao/{link['token']}",
+    })
+
+
+@bp.post("/projetos/<int:projeto_id>/link-cliente")
+@requires_permission("terceirizacao", "criar")
+def gerar_link_cliente(projeto_id):
+    """Gera (ou renova — revoga o anterior primeiro) o link do portal.
+    `enviar_whatsapp: true` no corpo manda a mensagem na hora, usando o
+    telefone já cadastrado do cliente (`clientes.telefone`) — a MESMA
+    configuração de Evolution API já usada pelo aviso de backup (Fase
+    130), nunca uma conta separada."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    if projeto["status"] == "cancelado":
+        raise ApiError("Não é possível gerar link para um projeto cancelado.", status=400)
+    cliente = _cliente_ou_404(conn, projeto["cliente_id"])
+
+    dados = request.get_json(silent=True) or {}
+    enviar_whatsapp = bool(dados.get("enviar_whatsapp"))
+
+    conn.execute("UPDATE terceirizacao_links_portal SET revogado = 1 WHERE projeto_id = ? AND revogado = 0", (projeto_id,))
+    token = secrets_lib.token_urlsafe(32)
+    expira_em = _expira_em_daqui_a_dias(TTL_LINK_PORTAL_DIAS)
+    cur = conn.execute(
+        "INSERT INTO terceirizacao_links_portal (projeto_id, token, criado_por, expira_em) VALUES (?, ?, ?, ?)",
+        (projeto_id, token, usuario_atual["id"], expira_em),
+    )
+    url = f"{URL_BASE_PORTAL_PUBLICO}/portal/terceirizacao/{token}"
+
+    enviado_com_sucesso = False
+    erro_envio = None
+    if enviar_whatsapp:
+        telefone = (cliente.get("telefone") or "").strip()
+        if not telefone:
+            erro_envio = "Este cliente não tem telefone cadastrado (Comercial > editar cliente)."
+        else:
+            try:
+                config = backup_service.obter_configuracao(conn)
+                texto = (
+                    f"Olá! Preparamos um link para você personalizar o seu produto na Alphafitus.\n\n"
+                    f"Acesse e preencha por aqui: {url}\n\n"
+                    f"Projeto: {projeto['numero']}"
+                )
+                backup_service.enviar_texto_whatsapp(config, telefone, texto)
+                enviado_com_sucesso = True
+                conn.execute("UPDATE terceirizacao_links_portal SET enviado_via_whatsapp = 1 WHERE id = ?", (cur.lastrowid,))
+            except Exception as erro:
+                erro_envio = str(erro)
+
+    # Fase 136 — gerar o link é o que "abre a porta" pro cliente; só avança
+    # o status se ainda estiver no começo (rascunho). Reenviar um link
+    # (projeto já em aguardando_cliente/em_preenchimento) não regride nem
+    # reavança nada.
+    if projeto["status"] == "rascunho":
+        conn.execute("UPDATE terceirizacao_projetos SET status = 'aguardando_cliente', atualizado_em = ? WHERE id = ?", (_now_iso(), projeto_id))
+
+    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+                     acao="link_portal_gerado", valor_novo={"enviado_via_whatsapp": enviado_com_sucesso},
+                     ip=client_ip(), dispositivo=client_device())
+
+    return jsonify({
+        "url": url, "expira_em": expira_em,
+        "enviado_via_whatsapp": enviado_com_sucesso, "erro_envio_whatsapp": erro_envio,
+    }), 201
+
+
+@bp.post("/projetos/<int:projeto_id>/link-cliente/revogar")
+@requires_permission("terceirizacao", "criar")
+def revogar_link_cliente(projeto_id):
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    resultado = conn.execute("UPDATE terceirizacao_links_portal SET revogado = 1 WHERE projeto_id = ? AND revogado = 0", (projeto_id,))
+    if resultado.rowcount == 0:
+        raise ApiError("Não há nenhum link ativo para revogar.", status=400)
+    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+                     acao="link_portal_revogado", ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ativo": False})

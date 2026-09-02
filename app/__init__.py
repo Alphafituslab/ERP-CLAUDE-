@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "135.0"
+VERSAO_SISTEMA = "136.0"
 
 
 def create_app(test_config: dict = None) -> Flask:
@@ -56,7 +56,7 @@ def create_app(test_config: dict = None) -> Flask:
         memorial_anexos, memorial_padronizacao, vendas_app, memorial_administracao, sistema, compras,
         cotacoes, fiscal, boletos, tipos_etapa_producao, painel_tempo_real, painel_executivo,
         solicitacoes_material, fluxo, transportadoras, tabelas_preco, clientes_documentos, terminais,
-        nfe_entrada, terceirizacao,
+        nfe_entrada, terceirizacao, portal_terceirizacao,
     )
     app.register_blueprint(auth.bp)
     app.register_blueprint(usuarios.bp)
@@ -102,6 +102,7 @@ def create_app(test_config: dict = None) -> Flask:
     app.register_blueprint(terminais.bp)
     app.register_blueprint(nfe_entrada.bp)
     app.register_blueprint(terceirizacao.bp)
+    app.register_blueprint(portal_terceirizacao.bp)
 
     @app.get("/api/v1/saude")
     def saude():
@@ -140,6 +141,17 @@ def create_app(test_config: dict = None) -> Flask:
         resposta = send_from_directory(FRONTEND_DIR, "sw.js")
         resposta.headers["Cache-Control"] = "no-cache"
         return resposta
+
+    # Fase 136 — Terceirização Premium: portal do cliente. Página estática
+    # única (o token não é usado aqui no servidor pra nada — só o
+    # JavaScript da própria página o lê de `location.pathname` e chama a
+    # API com ele); QUALQUER validação de verdade acontece no backend, em
+    # cada chamada à API (`app/routes/portal_terceirizacao.py`). Servida
+    # tanto localmente (uso interno/teste) quanto pelo túnel público em
+    # whatts.alphafitus.com.br:9445 — mesmo processo Flask nos dois casos.
+    @app.get("/portal/terceirizacao/<token>")
+    def portal_terceirizacao_pagina(token):
+        return send_from_directory(FRONTEND_DIR, "portal_terceirizacao.html")
 
     if not app.debug:
         logging.basicConfig(level=logging.INFO)
