@@ -543,6 +543,16 @@ PERMISSOES_PADRAO = [
     ("terceirizacao", "visualizar", "Ver projetos de terceirização", 0),
     ("terceirizacao", "criar", "Criar e editar projetos de terceirização (fórmula, embalagem, briefing)", 0),
     ("terceirizacao", "configurar_embalagem", "Cadastrar e editar o catálogo de potes/tampas/cápsulas", 0),
+
+    # Fase 135 — Terceirização Premium (Fase B: aprovação interna). Uma
+    # permissão POR DEPARTAMENTO — de propósito, não uma única
+    # "terceirizacao.aprovar" genérica — pra alguém de Qualidade não
+    # conseguir aprovar a linha do Comercial e vice-versa (segregação real,
+    # não só por convenção).
+    ("terceirizacao", "aprovar_comercial", "Dar o aceite do Comercial num projeto de terceirização", 0),
+    ("terceirizacao", "aprovar_pd", "Dar o aceite de P&D num projeto de terceirização", 0),
+    ("terceirizacao", "aprovar_qualidade", "Dar o aceite de Qualidade num projeto de terceirização", 0),
+    ("terceirizacao", "aprovar_regulatorio", "Dar o aceite de Regulatório num projeto de terceirização", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
@@ -588,6 +598,10 @@ PERFIS_PADRAO = [
         # criar_pedido", perfil "Compras" abaixo) — "aprova e confirma a
         # compra" continua sendo uma responsabilidade só deles.
         "aps.gerar_sugestao_compra",
+        # Fase 135 — PCP é o perfil mais próximo de "P&D" que já existe no
+        # sistema (já é dono de formulas.cadastrar) — dá o aceite técnico
+        # de P&D nos projetos de Terceirização Premium.
+        "terceirizacao.visualizar", "terceirizacao.aprovar_pd",
     ]),
     # Fase 91 — "setor de liberação" das Solicitações de Materiais/EPI: até
     # aqui, "solicitacoes_material.aprovar" não estava em NENHUM perfil
@@ -622,6 +636,8 @@ PERFIS_PADRAO = [
         "lotes.visualizar", "lotes.aprovar", "lotes.reprovar", "lotes.bloquear", "analises.visualizar",
         "desvios.visualizar", "desvios.cadastrar", "desvios.editar", "desvios.encerrar",
         "formulas.visualizar", "formulas.aprovar", "producao.visualizar", "estoque.visualizar", "empresas.visualizar",
+        # Fase 135 — aceite de Qualidade nos projetos de Terceirização Premium.
+        "terceirizacao.visualizar", "terceirizacao.aprovar_qualidade",
         # A decisão de investigar/recolher um lote é uma responsabilidade de
         # Qualidade, mesmo dono do processo de desvios/CAPA acima. O
         # bloqueio em massa (Fase 16) é a mesma responsabilidade, só que
@@ -733,6 +749,9 @@ PERFIS_PADRAO = [
         # de pote/tampa/cápsula) fica de propósito fora daqui, só no
         # Administrador — mesma régua de "fiscal.configurar" acima.
         "terceirizacao.visualizar", "terceirizacao.criar",
+        # Fase 135 — mesmo perfil dá o aceite comercial do projeto (ex.:
+        # confirma que o cliente já concordou com o que foi combinado).
+        "terceirizacao.aprovar_comercial",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",
@@ -842,6 +861,9 @@ PERFIS_PADRAO = [
         # (anexos já estão cobertos por memoriais.editar, acima).
         "memoriais.padronizar",
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
+        # Fase 135 — mesmo perfil que já cuida da documentação ANVISA dá o
+        # aceite regulatório nos projetos de Terceirização Premium.
+        "terceirizacao.visualizar", "terceirizacao.aprovar_regulatorio",
     ]),
 ]
 

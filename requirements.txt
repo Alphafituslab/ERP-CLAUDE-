@@ -20,6 +20,12 @@ pypdf>=3.17
 # ainda publicado, é esta dependência transitiva a origem (ver a nota
 # sobre isso em `_ambiente.bat`, no instalador).
 img2pdf>=0.5
+# Pillow: já vinha instalado como dependência transitiva do reportlab (que
+# usa Pillow para lidar com imagens dentro de PDFs), mas a partir da Fase
+# 135 passa a ser usado DIRETO por nós também (composição do mockup do
+# produto em Terceirização Premium — pote+tampa+cápsula+texto) — declarado
+# aqui explicitamente por isso, não porque virou uma dependência nova.
+Pillow>=10.0
 # openpyxl: gerar um .xlsx de verdade (abas, formatação de célula, fórmula)
 # para a exportação do Painel Gerencial (Fase 45) — a Fase 19 (exportação
 # em CSV) já documentava isso como pendente por falta desta biblioteca.

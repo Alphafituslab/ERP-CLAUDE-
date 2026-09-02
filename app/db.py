@@ -162,6 +162,7 @@ SCHEMA_FILES = [
     "schema_fase131.sql",  # Fase 131 — Pedidos de Venda: tela própria com filtros + tipo_pedido (terceirização/marca própria)
     "schema_fase132.sql",  # Fase 132 — Pedidos de Venda: canal_origem (comercial/app_vendas) + backfill de vendedor_id
     "schema_fase134.sql",  # Fase 134 — Terceirização Premium (Fase A): catálogo de embalagem, projetos, briefings, arquivos
+    "schema_fase135.sql",  # Fase 135 — Terceirização Premium (Fase B): aprovação interna multi-departamento
 ]
 
 

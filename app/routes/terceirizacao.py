@@ -23,14 +23,17 @@ em vez de inventar um novo:
 """
 import base64
 import binascii
+import io
 import json
 import re
 
 from flask import Blueprint, Response, g, jsonify, request
 
 from .. import audit
+from .. import notificacoes_service
 from ..context import ApiError, client_device, client_ip, get_db
 from ..imagens import validar_imagem_base64
+from ..pdf_marca import desenhar_cabecalho_logo
 from ..permissions import requires_permission
 
 bp = Blueprint("terceirizacao", __name__, url_prefix="/api/v1/terceirizacao")
@@ -290,20 +293,21 @@ def _extrair_nutrientes(valor_bruto):
     return {"tipo": "estruturado", "linhas": linhas}
 
 
-@bp.get("/formulas-disponiveis/<int:item_id>/nutricao")
-@requires_permission("terceirizacao", "visualizar")
-def obter_nutricao_item(item_id):
-    conn = get_db()
+def _nutricao_para_item(conn, item_id):
+    """Extraído como função pura (sem `jsonify`) pra poder ser reaproveitada
+    tanto pela rota `obter_nutricao_item` (JSON pro frontend) quanto por
+    `_gerar_pdf_dossie` (embutida no PDF) — nenhuma delas duplica a lógica
+    de resolver item → memorial → nutrientes."""
     item = conn.execute("SELECT * FROM itens WHERE id = ?", (item_id,)).fetchone()
     if item is None:
         raise ApiError("Item não encontrado.", status=404)
     item = dict(item)
     if not item.get("memorial_produto_id"):
-        return jsonify({
+        return {
             "vinculado_a_memorial": False,
             "mensagem": "Este item ainda não está vinculado a um Memorial Técnico aprovado. "
                         "Peça para P&D/Qualidade vincular em Itens > Editar > Memorial Técnico.",
-        })
+        }
     memorial = conn.execute(
         """
         SELECT * FROM memoriais WHERE produto_id = ? AND status = 'aprovado'
@@ -312,14 +316,14 @@ def obter_nutricao_item(item_id):
         (item["memorial_produto_id"],),
     ).fetchone()
     if memorial is None:
-        return jsonify({
+        return {
             "vinculado_a_memorial": True,
             "memorial_aprovado_encontrado": False,
             "mensagem": "Este item está vinculado a um produto do Memorial Técnico, mas ainda não há "
                         "nenhum memorial APROVADO para ele.",
-        })
+        }
     memorial = dict(memorial)
-    return jsonify({
+    return {
         "vinculado_a_memorial": True,
         "memorial_aprovado_encontrado": True,
         "memorial_id": memorial["id"],
@@ -329,7 +333,14 @@ def obter_nutricao_item(item_id):
         "excipientes": memorial.get("excipientes"),
         "lista_ingredientes": memorial.get("lista_ingredientes"),
         "advertencias": memorial.get("advertencias"),
-    })
+    }
+
+
+@bp.get("/formulas-disponiveis/<int:item_id>/nutricao")
+@requires_permission("terceirizacao", "visualizar")
+def obter_nutricao_item(item_id):
+    conn = get_db()
+    return jsonify(_nutricao_para_item(conn, item_id))
 
 
 # =============================================================================
@@ -687,3 +698,399 @@ def excluir_arquivo_projeto(projeto_id, arquivo_id):
     audit.registrar(conn, tabela="terceirizacao_arquivos", registro_id=arquivo_id, usuario_id=usuario_atual["id"],
                      acao="arquivo_excluido", valor_anterior=_arquivo_metadados(arquivo), ip=client_ip(), dispositivo=client_device())
     return "", 204
+
+
+# =============================================================================
+# Fase 135 (Fase B) — Aprovação interna multi-departamento + geração do
+# "Dossiê de Desenvolvimento de Produto" (PDF) + mockup do produto.
+# =============================================================================
+
+DEPARTAMENTOS_APROVACAO = ("comercial", "pd", "qualidade", "regulatorio")
+ROTULOS_DEPARTAMENTO = {"comercial": "Comercial", "pd": "P&D", "qualidade": "Qualidade", "regulatorio": "Regulatório"}
+PERMISSAO_POR_DEPARTAMENTO = {
+    "comercial": "aprovar_comercial", "pd": "aprovar_pd",
+    "qualidade": "aprovar_qualidade", "regulatorio": "aprovar_regulatorio",
+}
+
+
+def _aprovacoes_do_projeto(conn, projeto_id):
+    rows = conn.execute(
+        """
+        SELECT a.*, u.nome AS decidido_por_nome
+        FROM terceirizacao_aprovacoes a LEFT JOIN usuarios u ON u.id = a.decidido_por
+        WHERE a.projeto_id = ? ORDER BY a.departamento
+        """,
+        (projeto_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@bp.get("/projetos/<int:projeto_id>/aprovacoes")
+@requires_permission("terceirizacao", "visualizar")
+def listar_aprovacoes_projeto(projeto_id):
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    return jsonify(_aprovacoes_do_projeto(conn, projeto_id))
+
+
+@bp.post("/projetos/<int:projeto_id>/enviar-para-aprovacao")
+@requires_permission("terceirizacao", "criar")
+def enviar_para_aprovacao(projeto_id):
+    """Checklist mínimo antes de abrir a rodada de aprovação — mesma ideia
+    do checklist do pedido original do usuário (fórmula/embalagem/
+    quantidade/briefing preenchidos). Cria (ou reabre, se já existiam de
+    uma rodada anterior reprovada) as 4 linhas de aprovação, uma por
+    departamento, e avisa quem tem a permissão de aprovar cada uma."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    if projeto["status"] not in ("rascunho", "aguardando_revisao"):
+        raise ApiError(f"Não é possível enviar para aprovação um projeto '{projeto['status']}'.", status=400)
+
+    faltando = []
+    if not projeto["item_id"]:
+        faltando.append("fórmula")
+    if not projeto["pote_id"]:
+        faltando.append("pote")
+    if not projeto["tampa_id"]:
+        faltando.append("tampa")
+    if not projeto["capsula_id"]:
+        faltando.append("cápsula")
+    if not projeto["quantidade_por_pote"]:
+        faltando.append("quantidade")
+    if not conn.execute("SELECT 1 FROM terceirizacao_briefings WHERE projeto_id = ?", (projeto_id,)).fetchone():
+        faltando.append("briefing")
+    if faltando:
+        raise ApiError(
+            f"Complete antes de enviar para aprovação: {', '.join(faltando)}.",
+            status=400, codigo="checklist_incompleto",
+        )
+
+    for departamento in DEPARTAMENTOS_APROVACAO:
+        conn.execute(
+            """
+            INSERT INTO terceirizacao_aprovacoes (projeto_id, departamento, status, decidido_por, decidido_em, motivo_reprovacao)
+            VALUES (?, ?, 'pendente', NULL, NULL, NULL)
+            ON CONFLICT (projeto_id, departamento) DO UPDATE SET
+                status = 'pendente', decidido_por = NULL, decidido_em = NULL, motivo_reprovacao = NULL
+            """,
+            (projeto_id, departamento),
+        )
+        notificacoes_service.notificar_usuarios_com_permissao(
+            conn, modulo="terceirizacao", acao=PERMISSAO_POR_DEPARTAMENTO[departamento],
+            tipo="terceirizacao_aprovacao_pendente",
+            mensagem=f"Projeto {projeto['numero']} aguarda o aceite de {ROTULOS_DEPARTAMENTO[departamento]}.",
+        )
+    conn.execute(
+        "UPDATE terceirizacao_projetos SET status = 'aguardando_aprovacao', atualizado_em = ? WHERE id = ?",
+        (_now_iso(), projeto_id),
+    )
+    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+                     acao="enviado_para_aprovacao", ip=client_ip(), dispositivo=client_device())
+    return jsonify(_projeto_detalhado(conn, projeto_id))
+
+
+@bp.post("/projetos/<int:projeto_id>/aprovacoes/<departamento>/decidir")
+def decidir_aprovacao(projeto_id, departamento):
+    if departamento not in DEPARTAMENTOS_APROVACAO:
+        raise ApiError("Departamento inválido.", status=404)
+    # Permissão verificada AQUI (não via decorator) porque a ação exigida
+    # depende do `departamento` que vem na própria URL — cada departamento
+    # tem sua própria permissão (ver PERMISSAO_POR_DEPARTAMENTO), então uma
+    # pessoa de Qualidade não decide a linha do Comercial mesmo tendo
+    # `terceirizacao.visualizar`.
+    from ..context import get_current_user
+    from ..permissions import usuario_tem_permissao
+    usuario_atual = get_current_user()
+    conn = get_db()
+    if not usuario_tem_permissao(conn, usuario_atual["id"], "terceirizacao", PERMISSAO_POR_DEPARTAMENTO[departamento]):
+        raise ApiError("Você não tem permissão para decidir por este departamento.", status=403, codigo="sem_permissao")
+
+    projeto = _projeto_ou_404(conn, projeto_id)
+    if projeto["status"] != "aguardando_aprovacao":
+        raise ApiError(f"Este projeto não está aguardando aprovação (status atual: '{projeto['status']}').", status=400)
+    linha = conn.execute(
+        "SELECT * FROM terceirizacao_aprovacoes WHERE projeto_id = ? AND departamento = ?", (projeto_id, departamento)
+    ).fetchone()
+    if linha is None:
+        raise ApiError("Linha de aprovação não encontrada — envie o projeto para aprovação primeiro.", status=404)
+    if linha["status"] != "pendente":
+        raise ApiError(f"O departamento {ROTULOS_DEPARTAMENTO[departamento]} já decidiu ({linha['status']}) nesta rodada.", status=409)
+
+    dados = request.get_json(silent=True) or {}
+    novo_status = dados.get("status")
+    if novo_status not in ("aprovado", "reprovado"):
+        raise ApiError("status deve ser 'aprovado' ou 'reprovado'.", status=400)
+    motivo = (dados.get("motivo") or "").strip()
+    if novo_status == "reprovado" and not motivo:
+        raise ApiError("Informe o motivo da reprovação.", status=400)
+
+    conn.execute(
+        "UPDATE terceirizacao_aprovacoes SET status = ?, decidido_por = ?, decidido_em = ?, motivo_reprovacao = ? WHERE id = ?",
+        (novo_status, usuario_atual["id"], _now_iso(), motivo or None, linha["id"]),
+    )
+    audit.registrar(conn, tabela="terceirizacao_aprovacoes", registro_id=linha["id"], usuario_id=usuario_atual["id"],
+                     acao=f"aprovacao_{novo_status}", valor_novo={"departamento": departamento, "motivo": motivo},
+                     ip=client_ip(), dispositivo=client_device())
+
+    if novo_status == "reprovado":
+        conn.execute(
+            "UPDATE terceirizacao_projetos SET status = 'aguardando_revisao', atualizado_em = ? WHERE id = ?",
+            (_now_iso(), projeto_id),
+        )
+        if projeto["responsavel_id"]:
+            notificacoes_service.criar(
+                conn, usuario_id=projeto["responsavel_id"], tipo="terceirizacao_reprovado",
+                mensagem=f"Projeto {projeto['numero']} foi reprovado por {ROTULOS_DEPARTAMENTO[departamento]}: {motivo}",
+            )
+    else:
+        todas = _aprovacoes_do_projeto(conn, projeto_id)
+        if all(a["status"] == "aprovado" for a in todas):
+            conn.execute(
+                "UPDATE terceirizacao_projetos SET status = 'aguardando_assinatura', atualizado_em = ? WHERE id = ?",
+                (_now_iso(), projeto_id),
+            )
+            if projeto["responsavel_id"]:
+                notificacoes_service.criar(
+                    conn, usuario_id=projeto["responsavel_id"], tipo="terceirizacao_aprovado",
+                    mensagem=f"Projeto {projeto['numero']} foi aprovado por todos os departamentos — pronto para assinatura.",
+                )
+    return jsonify(_projeto_detalhado(conn, projeto_id))
+
+
+# ---- Mockup do produto (Pillow) ----
+#
+# Composição fotográfica de verdade (pote+tampa+cápsula numa única imagem
+# realista) exigiria fotos de produto já preparadas com fundo transparente
+# e enquadramento consistente entre si — o catálogo de embalagem aceita
+# QUALQUER foto que o administrador suba, sem essa garantia. Por isso este
+# MVP monta um "cartão de especificação visual" honesto (cada peça no seu
+# próprio quadro, lado a lado, com a cor/nome escritos) em vez de tentar
+# sobrepor fotos incompatíveis entre si e gerar um resultado quebrado. Uma
+# composição fotorrealista de verdade fica para quando houver um banco de
+# imagens de embalagem preparado especificamente para isso (3D/IA, como o
+# pedido original já previa como evolução futura).
+
+def _gerar_mockup_png(projeto, cliente, item, pote, tampa, capsula):
+    from PIL import Image, ImageDraw, ImageFont
+
+    LARGURA, ALTURA = 900, 700
+    COR_FUNDO = (18, 22, 20)
+    COR_CARTAO = (30, 36, 33)
+    COR_BORDA = (196, 165, 92)  # dourado
+    COR_TEXTO = (238, 238, 230)
+    COR_TEXTO_SUAVE = (150, 155, 150)
+
+    img = Image.new("RGB", (LARGURA, ALTURA), COR_FUNDO)
+    desenho = ImageDraw.Draw(img)
+
+    try:
+        fonte_titulo = ImageFont.truetype("arialbd.ttf", 34)
+        fonte_subtitulo = ImageFont.truetype("arial.ttf", 20)
+        fonte_rotulo = ImageFont.truetype("arialbd.ttf", 16)
+        fonte_pequena = ImageFont.truetype("arial.ttf", 14)
+    except OSError:
+        # Sem a fonte do Windows disponível (ex.: rodando em Linux) — cai
+        # pra fonte padrão do Pillow, sempre disponível, só menos bonita.
+        fonte_titulo = fonte_subtitulo = fonte_rotulo = fonte_pequena = ImageFont.load_default()
+
+    desenho.text((40, 30), "SUA MARCA", font=fonte_subtitulo, fill=COR_TEXTO_SUAVE)
+    nome_produto = (item["descricao"] if item else "Produto a definir").upper()
+    desenho.text((40, 60), nome_produto, font=fonte_titulo, fill=COR_TEXTO)
+    linha_quantidade = []
+    if projeto["quantidade_por_pote"]:
+        rotulo_unidade = "cápsulas" if projeto["unidade_quantidade"] == "capsulas" else "g"
+        linha_quantidade.append(f"{projeto['quantidade_por_pote']} {rotulo_unidade}")
+    desenho.text((40, 110), "SUPLEMENTO ALIMENTAR" + (" — " + " / ".join(linha_quantidade) if linha_quantidade else ""),
+                 font=fonte_subtitulo, fill=COR_TEXTO_SUAVE)
+
+    def quadro_peca(x, y, largura, altura, imagem_b64, titulo, subtitulo):
+        desenho.rectangle([x, y, x + largura, y + altura], outline=COR_BORDA, width=2, fill=COR_CARTAO)
+        area_imagem = altura - 70
+        if imagem_b64:
+            try:
+                m = re.match(r"^data:([\w/+.-]+);base64,(.+)$", imagem_b64, re.DOTALL)
+                dados_img = base64.b64decode(m.group(2)) if m else base64.b64decode(imagem_b64)
+                peca = Image.open(io.BytesIO(dados_img)).convert("RGBA")
+                peca.thumbnail((largura - 30, area_imagem - 20))
+                pos_x = x + (largura - peca.width) // 2
+                pos_y = y + 15 + (area_imagem - 20 - peca.height) // 2
+                img.paste(peca, (pos_x, pos_y), peca)
+            except Exception:
+                desenho.text((x + 15, y + area_imagem // 2), "(sem foto)", font=fonte_pequena, fill=COR_TEXTO_SUAVE)
+        else:
+            desenho.text((x + 15, y + area_imagem // 2), "(sem foto)", font=fonte_pequena, fill=COR_TEXTO_SUAVE)
+        desenho.text((x + 12, y + area_imagem + 8), titulo, font=fonte_rotulo, fill=COR_TEXTO)
+        desenho.text((x + 12, y + area_imagem + 30), subtitulo, font=fonte_pequena, fill=COR_TEXTO_SUAVE)
+
+    largura_quadro, altura_quadro, espaco = 260, 380, 20
+    y_quadros = 170
+    quadro_peca(40, y_quadros, largura_quadro, altura_quadro,
+                pote["imagem"] if pote else None, "POTE", pote["nome"] if pote else "—")
+    quadro_peca(40 + largura_quadro + espaco, y_quadros, largura_quadro, altura_quadro,
+                tampa["imagem"] if tampa else None, "TAMPA", tampa["nome"] if tampa else "—")
+    quadro_peca(40 + 2 * (largura_quadro + espaco), y_quadros, largura_quadro, altura_quadro,
+                capsula["imagem"] if capsula else None, "CÁPSULA", capsula["nome"] if capsula else "—")
+
+    desenho.text((40, y_quadros + altura_quadro + 30), f"Projeto {projeto['numero']} — {cliente['razao_social']}",
+                 font=fonte_pequena, fill=COR_TEXTO_SUAVE)
+
+    saida = io.BytesIO()
+    img.save(saida, format="PNG")
+    return saida.getvalue()
+
+
+@bp.get("/projetos/<int:projeto_id>/mockup.png")
+@requires_permission("terceirizacao", "visualizar")
+def obter_mockup_projeto(projeto_id):
+    conn = get_db()
+    projeto = _projeto_detalhado(conn, projeto_id)
+    png_bytes = _gerar_mockup_png(
+        projeto, projeto["cliente"], projeto.get("item"), projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
+    )
+    return Response(png_bytes, mimetype="image/png")
+
+
+# ---- Dossiê de Desenvolvimento de Produto (PDF) ----
+
+def _gerar_pdf_dossie(projeto, nutricao):
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import HRFlowable, Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    estilos = getSampleStyleSheet()
+    cor_titulo = colors.HexColor("#1a3c2e")
+    cor_dourado = colors.HexColor("#a8863f")
+    estilo_titulo = ParagraphStyle("TituloDossie", parent=estilos["Title"], textColor=cor_titulo, alignment=TA_CENTER, fontSize=20)
+    estilo_secao = ParagraphStyle("SecaoDossie", parent=estilos["Heading2"], textColor=cor_titulo, spaceBefore=14, spaceAfter=6)
+    estilo_normal = estilos["Normal"]
+    estilo_suave = ParagraphStyle("SuaveDossie", parent=estilos["Normal"], textColor=colors.HexColor("#666666"), fontSize=9)
+
+    elementos = []
+    elementos.append(Spacer(1, 1.5 * cm))
+    elementos.append(Paragraph("ALPHAFITUS — LABORATÓRIO NUTRACÊUTICO", estilo_suave))
+    elementos.append(Paragraph("DOSSIÊ DE DESENVOLVIMENTO DE PRODUTO", estilo_titulo))
+    elementos.append(HRFlowable(width="100%", thickness=1, color=cor_dourado, spaceBefore=8, spaceAfter=16))
+
+    try:
+        mockup_bytes = _gerar_mockup_png(
+            projeto, projeto["cliente"], projeto.get("item"), projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
+        )
+        elementos.append(RLImage(io.BytesIO(mockup_bytes), width=15 * cm, height=15 * cm * 700 / 900))
+        elementos.append(Spacer(1, 0.5 * cm))
+    except Exception:
+        pass
+
+    tabela_identificacao = Table([
+        ["Projeto", projeto["numero"]],
+        ["Cliente", projeto["cliente"]["razao_social"]],
+        ["CNPJ", projeto["cliente"].get("cnpj") or "—"],
+        ["Versão", str(projeto["versao"])],
+        ["Data", _now_iso()[:10]],
+    ], colWidths=[4 * cm, 12 * cm])
+    tabela_identificacao.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, 0), (0, -1), cor_titulo),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elementos.append(tabela_identificacao)
+    elementos.append(Spacer(1, 0.4 * cm))
+
+    elementos.append(Paragraph("Produto", estilo_secao))
+    item = projeto.get("item")
+    elementos.append(Paragraph(
+        f"<b>{item['descricao']}</b> ({item['codigo']})" if item else "<i>Fórmula ainda não definida.</i>", estilo_normal
+    ))
+
+    elementos.append(Paragraph("Embalagem", estilo_secao))
+    pote, tampa, capsula = projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
+    linhas_embalagem = [["Item", "Nome", "Cor/Material"]]
+    if pote:
+        linhas_embalagem.append(["Pote", pote["nome"], pote.get("cor") or ""])
+    if tampa:
+        linhas_embalagem.append(["Tampa", tampa["nome"], tampa.get("cor") or ""])
+    if capsula:
+        linhas_embalagem.append(["Cápsula", capsula["nome"], f"{capsula.get('cor_cabeca', '')}/{capsula.get('cor_corpo', '')}"])
+    if projeto["quantidade_por_pote"]:
+        rotulo_unidade = "cápsulas" if projeto["unidade_quantidade"] == "capsulas" else "g"
+        linhas_embalagem.append(["Quantidade", f"{projeto['quantidade_por_pote']} {rotulo_unidade}", ""])
+    tabela_embalagem = Table(linhas_embalagem, colWidths=[3.5 * cm, 6 * cm, 6.5 * cm])
+    tabela_embalagem.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), cor_titulo),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elementos.append(tabela_embalagem)
+
+    elementos.append(Paragraph("Fórmula — Tabela Nutricional e Ingredientes", estilo_secao))
+    if nutricao and nutricao.get("vinculado_a_memorial") and nutricao.get("memorial_aprovado_encontrado"):
+        elementos.append(Paragraph(f"Do Memorial Técnico {nutricao.get('memorial_codigo')}.", estilo_suave))
+        tab_nutri = nutricao.get("tabela_nutricional")
+        if tab_nutri and tab_nutri.get("tipo") == "estruturado" and tab_nutri.get("linhas"):
+            linhas_nutri = [["Nutriente", "Quantidade", "Unidade"]] + [
+                [str(l.get("nutriente") or ""), str(l.get("quantidade") if l.get("quantidade") is not None else ""), str(l.get("unidade") or "")]
+                for l in tab_nutri["linhas"]
+            ]
+            tabela_nutri_pdf = Table(linhas_nutri, colWidths=[8 * cm, 4 * cm, 4 * cm])
+            tabela_nutri_pdf.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), cor_titulo),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#cccccc")),
+            ]))
+            elementos.append(tabela_nutri_pdf)
+        if nutricao.get("lista_ingredientes"):
+            elementos.append(Spacer(1, 0.2 * cm))
+            elementos.append(Paragraph(f"<b>Ingredientes:</b> {nutricao['lista_ingredientes']}", estilo_normal))
+    else:
+        elementos.append(Paragraph(
+            "<i>Este produto ainda não tem um Memorial Técnico aprovado vinculado — tabela nutricional "
+            "e ingredientes pendentes de vínculo.</i>", estilo_suave
+        ))
+
+    briefing = projeto.get("briefing")
+    if briefing:
+        elementos.append(Paragraph("Briefing do Projeto", estilo_secao))
+        for rotulo, campo in [("Ideia do projeto", "ideia_projeto"), ("Público-alvo", "publico_alvo"),
+                               ("Posicionamento", "posicionamento"), ("Sensação desejada", "sensacao_desejada")]:
+            if briefing.get(campo):
+                elementos.append(Paragraph(f"<b>{rotulo}:</b> {briefing[campo]}", estilo_normal))
+        if briefing.get("estilo_visual"):
+            estilos_lista = json.loads(briefing["estilo_visual"])
+            if estilos_lista:
+                elementos.append(Paragraph(f"<b>Estilo visual:</b> {', '.join(estilos_lista)}", estilo_normal))
+        if briefing.get("cores_preferidas"):
+            cores_lista = json.loads(briefing["cores_preferidas"])
+            if cores_lista:
+                elementos.append(Paragraph(f"<b>Cores preferidas:</b> {', '.join(cores_lista)}", estilo_normal))
+
+    if projeto.get("solicitacao_alteracao_formula"):
+        elementos.append(Paragraph("Solicitação de Alteração da Fórmula", estilo_secao))
+        elementos.append(Paragraph(projeto["solicitacao_alteracao_formula"], estilo_normal))
+
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2.2 * cm, bottomMargin=1.8 * cm, leftMargin=2 * cm, rightMargin=2 * cm)
+    doc.build(elementos, onFirstPage=desenhar_cabecalho_logo, onLaterPages=desenhar_cabecalho_logo)
+    return buffer.getvalue()
+
+
+@bp.get("/projetos/<int:projeto_id>/documento.pdf")
+@requires_permission("terceirizacao", "visualizar")
+def obter_documento_projeto(projeto_id):
+    conn = get_db()
+    projeto = _projeto_detalhado(conn, projeto_id)
+    nutricao = _nutricao_para_item(conn, projeto["item_id"]) if projeto.get("item_id") else None
+    pdf_bytes = _gerar_pdf_dossie(projeto, nutricao)
+    nome_arquivo = _nome_arquivo_seguro(f"Dossie_{projeto['numero']}.pdf")
+    return Response(
+        pdf_bytes, mimetype="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{nome_arquivo}"'},
+    )
