@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 # Spec do PyInstaller para o instalador REAL do Alphafitus OS — empacota
-# TRÊS executáveis autônomos (nenhum precisa de Python instalado na
+# QUATRO executáveis autônomos (nenhum precisa de Python instalado na
 # máquina de destino) que compartilham o mesmo diretório de saída:
 #   - AlphafitusOS.exe          (installer/app_launcher_tray.py) — modo
 #     PADRÃO: sem janela nenhuma, só um ícone na bandeja do Windows. É o
@@ -12,6 +12,14 @@
 #   - AlphafitusOS_Servico.exe  (service_windows.py) — Serviço de verdade
 #     do Windows, usado pelos atalhos "Instalar/Iniciar/Parar/Remover
 #     Serviço".
+#   - AlphafitusOS_TunelPortal.exe (tunel_portal_service.py) — Fase 138:
+#     Serviço de verdade separado, mantém aberto o túnel SSH reverso do
+#     Portal do Cliente (Terceirização Premium). PRECISA ser um EXE
+#     congelado como os outros (não rodar via pythonservice.exe genérico
+#     + script solto) — essa combinação tem um bug real de resolução de
+#     path que faz `import servicemanager` falhar (`ModuleNotFoundError`,
+#     ver histórico da Fase 138); o mesmo módulo, congelado como EXE
+#     próprio igual ao AlphafitusOS_Servico.exe, não tem esse problema.
 #
 # `contents_directory='.'` + `noarchive=True`: mantém o layout "chato"
 # clássico (tudo solto ao lado do .exe, sem a subpasta `_internal/` que o
@@ -128,12 +136,34 @@ exe_servico = EXE(
     exclude_binaries=True, name="AlphafitusOS_Servico", console=True, upx=False,
 )
 
-# COLLECT junta os três (binários, dados, tudo) num único diretório de
+# Fase 138 — 4º executável: serviço do túnel do Portal do Cliente. NÃO
+# leva a chave privada (tunel_portal/chave_tunel) em `datas` de propósito
+# — essa pasta nem existe no build normal (está no .gitignore), é
+# provisionada manualmente, direto na máquina real, depois da instalação
+# (mesmo tratamento de qualquer outro segredo deste projeto).
+analise_tunel_portal = Analysis(
+    [os.path.join(RAIZ_PROJETO, "tunel_portal_service.py")],
+    pathex=[RAIZ_PROJETO],
+    binaries=[],
+    datas=[],
+    hiddenimports=["win32timezone"],
+    excludes=excludes_comuns,
+    hookspath=[],
+    noarchive=True,
+)
+pyz_tunel_portal = PYZ(analise_tunel_portal.pure, analise_tunel_portal.zipped_data, cipher=block_cipher)
+exe_tunel_portal = EXE(
+    pyz_tunel_portal, analise_tunel_portal.scripts, [],
+    exclude_binaries=True, name="AlphafitusOS_TunelPortal", console=True, upx=False,
+)
+
+# COLLECT junta os quatro (binários, dados, tudo) num único diretório de
 # saída (dist/AlphafitusOS/) — as datas_comuns acima são deduplicadas
-# automaticamente pelo PyInstaller, não viram três cópias.
+# automaticamente pelo PyInstaller, não viram quatro cópias.
 COLLECT(
     exe_tray, analise_tray.binaries, analise_tray.zipfiles, analise_tray.datas,
     exe_launcher, analise_launcher.binaries, analise_launcher.zipfiles, analise_launcher.datas,
     exe_servico, analise_servico.binaries, analise_servico.zipfiles, analise_servico.datas,
+    exe_tunel_portal, analise_tunel_portal.binaries, analise_tunel_portal.zipfiles, analise_tunel_portal.datas,
     strip=False, upx=False, name="AlphafitusOS", contents_directory=".",
 )

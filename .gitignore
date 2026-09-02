@@ -20,3 +20,10 @@ installer/dist/
 installer/build/
 installer/saida/
 backups_manuais/
+# Fase 138 — chave PRIVADA do túnel SSH reverso do Portal do Cliente
+# (Terceirização Premium). NUNCA pode ir pro git nem ser embutida no
+# instalador geral (qualquer um que baixasse o instalador ganharia acesso
+# de encaminhamento de porta pro VPS) — provisionada manualmente, direto
+# na máquina real, o mesmo tratamento dado a toda outra chave/segredo
+# deste projeto (chave do banco, apikey da Evolution API, etc.).
+tunel_portal/
