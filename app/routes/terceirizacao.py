@@ -255,17 +255,22 @@ def definir_tampas_compativeis(pote_id):
 @requires_permission("terceirizacao", "visualizar")
 def listar_formulas_disponiveis():
     """Busca por nome/código/categoria (mesmo padrão de busca já usado em
-    `comercial.listar_clientes`), combinando DUAS fontes — achado real
-    (2026-09-02): 91 produtos do Memorial Técnico já existem de verdade
-    no AlphafitusOS (85 memoriais reais), mas quase nenhum tinha
-    `itens.memorial_produto_id` preenchido ainda, então a busca (que só
-    olhava `itens`) não achava a maioria deles.
-      1. `itens` já cadastrados (tipo produto_acabado) — como sempre foi.
-      2. `memorial_produtos` que AINDA não têm nenhum `item` vinculado —
-         aparecem com `origem: "memorial"`; escolher um deles (ver PUT
-         .../formula) cria o `item` correspondente na hora, na primeira
-         vez, e some desta segunda lista depois disso (já aparece na
-         primeira, como qualquer outro item)."""
+    `comercial.listar_clientes`), combinando DUAS fontes de produtos do
+    Memorial Técnico — nunca produtos "soltos" do catálogo geral.
+
+    Fase 142 — pedido explícito do usuário (2026-09-02): "Monte sua
+    linha" é terceirização de fórmula já registrada na ANVISA — só faz
+    sentido vender ao cliente uma fórmula com Memorial Técnico APROVADO
+    de verdade, nunca um item qualquer do catálogo geral (a maioria dos
+    milhares de itens cadastrados nunca passou pelo Memorial Técnico).
+    Antes desta fase a busca misturava os dois; agora só aparece aqui
+    quem tem `EXISTS (... memoriais WHERE status='aprovado')` — item já
+    vinculado a um memorial aprovado, ou produto do Memorial ainda sem
+    item vinculado (que ganha o item na hora, ver PUT .../formula), mas
+    SEMPRE com aprovação de verdade por trás.
+      1. `itens` já cadastrados E vinculados a um memorial aprovado.
+      2. `memorial_produtos` com memorial aprovado que AINDA não têm
+         nenhum `item` vinculado — aparecem com `origem: "memorial"`."""
     conn = get_db()
     busca = (request.args.get("busca") or "").strip()
     params_itens = ["produto_acabado"]
@@ -278,8 +283,10 @@ def listar_formulas_disponiveis():
         f"""
         SELECT i.id, i.codigo, i.descricao, i.categoria, i.imagem, i.unidade_medida, i.memorial_produto_id,
                mp.nome AS nome_memorial, 'item' AS origem
-        FROM itens i LEFT JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id
-        WHERE i.tipo = ? {where_busca_itens} AND i.status = 'ativo' ORDER BY i.descricao LIMIT 30
+        FROM itens i JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id
+        WHERE i.tipo = ? {where_busca_itens} AND i.status = 'ativo'
+          AND EXISTS (SELECT 1 FROM memoriais m WHERE m.produto_id = mp.id AND m.status = 'aprovado')
+        ORDER BY i.descricao LIMIT 30
         """,
         params_itens,
     ).fetchall()
@@ -300,6 +307,7 @@ def listar_formulas_disponiveis():
             FROM memorial_produtos mp
             WHERE mp.status = 'ativo' AND mp.nome LIKE ?
               AND NOT EXISTS (SELECT 1 FROM itens i2 WHERE i2.memorial_produto_id = mp.id)
+              AND EXISTS (SELECT 1 FROM memoriais m WHERE m.produto_id = mp.id AND m.status = 'aprovado')
             ORDER BY mp.nome LIMIT ?
             """,
             (termo, vagas_restantes),
