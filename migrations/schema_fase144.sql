@@ -1,0 +1,15 @@
+-- Alphafitus OS — Fase 144 (Terceirização Premium): mockup 3D do produto.
+--
+-- Pedido do usuário (2026-09-02): o mockup do produto (hoje um "cartão de
+-- especificação" 2D feito com Pillow — pote/tampa/cápsula lado a lado,
+-- ver Fase B) precisa ficar "bonito de verdade", com curvas em 3D. Sem
+-- modelos 3D reais dos potes/tampas disponíveis ainda, a decisão do
+-- usuário foi usar um pote/tampa/cápsula 3D GENÉRICO (perfil parametrizado,
+-- não o formato exato do produto real), colorido conforme o cadastro —
+-- renderizado no NAVEGADOR (Three.js, carregado localmente, nunca de CDN,
+-- pra não quebrar o funcionamento offline do sistema).
+--
+-- O servidor não sabe renderizar 3D — por isso o navegador captura uma
+-- imagem (PNG) da cena já renderizada e manda pro backend guardar, pra
+-- poder ser usada tanto na tela quanto embutida no PDF do Dossiê.
+ALTER TABLE terceirizacao_projetos ADD COLUMN mockup_3d_imagem TEXT;

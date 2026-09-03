@@ -10425,6 +10425,198 @@
     const par = ROTULOS_STATUS_TERCEIRIZACAO[status] || ["inativo", status];
     return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
   }
+
+  // =============================================================================
+  // Fase 144 — Mockup 3D do produto (Terceirização Premium)
+  // =============================================================================
+  // Pedido do usuário (2026-09-02): mockup "bonito de verdade", com
+  // curvas, em vez do cartão de especificação 2D (Fase B). Decisão
+  // tomada com o usuário: sem modelos 3D reais dos potes/tampas ainda,
+  // usa um pote/tampa/cápsula 3D GENÉRICO (perfil parametrizado por
+  // Lathe, não a forma exata do produto real), colorido conforme o
+  // cadastro (cor do pote/tampa/cápsula escolhidos).
+  //
+  // Three.js é carregado de um arquivo LOCAL (frontend/static/vendor/),
+  // nunca de CDN — o resto do sistema é 100% offline de propósito (ver
+  // CLAUDE.md/memória do projeto) e isso não pode ser a exceção. Só
+  // carrega sob demanda (clique do usuário), nunca no carregamento
+  // normal da tela — são ~630KB que 99% das telas do sistema não usam.
+  let _promessaBibliotecaThree = null;
+  function carregarBibliotecaThree() {
+    if (window.THREE && window.THREE.OrbitControls) return Promise.resolve();
+    if (_promessaBibliotecaThree) return _promessaBibliotecaThree;
+    function carregarScript(src) {
+      return new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = src;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`Falha ao carregar ${src}`));
+        document.head.appendChild(script);
+      });
+    }
+    _promessaBibliotecaThree = carregarScript("/static/vendor/three.min.js")
+      .then(() => carregarScript("/static/vendor/OrbitControls.js"));
+    return _promessaBibliotecaThree;
+  }
+
+  // Nomes de cor em português (como cadastrados no Catálogo de
+  // Embalagem) → hex, pra colorir o material 3D. Normaliza acento/caixa;
+  // nomes não mapeados caem num cinza neutro (nunca quebra o mockup por
+  // causa de uma cor não prevista).
+  const CORES_NOMEADAS_3D = {
+    branco: "#f2f2ef", preto: "#1c1c1c", "preto fosco": "#1c1c1c",
+    verde: "#2e7d4f", "verde escuro": "#1a4d33", "verde claro": "#6fbf8b", "verde agua": "#3fb8a3",
+    azul: "#2e5fa3", "azul escuro": "#1a3a66", "azul claro": "#7ba7d9", "azul marinho": "#152a4d",
+    vermelho: "#b3352c", bordo: "#6e1f22", vinho: "#6e1f22",
+    amarelo: "#e0b93d", laranja: "#d17a2e", rosa: "#d98cae", "rosa claro": "#f0bdd4",
+    roxo: "#7a4fa3", lilas: "#b39ddb", violeta: "#7a4fa3",
+    dourado: "#c9a94a", ouro: "#c9a94a", prata: "#b8bcc0", prateado: "#b8bcc0",
+    cinza: "#8b8f92", "cinza claro": "#c4c8cb", "cinza escuro": "#57595c", grafite: "#3a3d40",
+    marrom: "#6b4a35", caramelo: "#a5713f", bege: "#d9cdb8", nude: "#d9c3ab",
+    transparente: "#e8f2ee", incolor: "#e8f2ee", natural: "#e8dcc4",
+  };
+  function resolverCorHex3D(nomeCor) {
+    if (!nomeCor) return "#b0b0b0";
+    const chave = nomeCor.toString().trim().toLowerCase()
+      .normalize("NFD").replace(/[̀-ͯ]/g, "");
+    return CORES_NOMEADAS_3D[chave] || "#b0b0b0";
+  }
+
+  // Monta a cena (pote + tampa + cápsula genéricos, curvas via
+  // LatheGeometry, coloridos conforme `opcoes`) dentro de `container` e
+  // devolve o <canvas> (pra `toDataURL()` depois, na captura pro PDF).
+  // `preserveDrawingBuffer: true` no renderer é obrigatório — sem isso o
+  // buffer pode já estar limpo quando `toDataURL` for chamado.
+  function iniciarMockup3DTerceirizacao(container, opcoes) {
+    const THREE = window.THREE;
+    const largura = container.clientWidth || 600;
+    const altura = 420;
+
+    const cena = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(38, largura / altura, 0.1, 100);
+    camera.position.set(3.4, 2.6, 5.2);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setSize(largura, altura);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    renderer.shadowMap.enabled = true;
+    renderer.outputEncoding = THREE.sRGBEncoding || renderer.outputEncoding;
+    container.appendChild(renderer.domElement);
+
+    // Luz — ambiente suave + luz principal com sombra + luz de
+    // preenchimento fraca do outro lado, pra não ficar um lado todo
+    // escuro ("visual premium" pedido pelo usuário).
+    cena.add(new THREE.HemisphereLight(0xffffff, 0x30302a, 0.65));
+    const luzPrincipal = new THREE.DirectionalLight(0xfff4e0, 1.1);
+    luzPrincipal.position.set(4, 6, 3);
+    luzPrincipal.castShadow = true;
+    luzPrincipal.shadow.mapSize.set(1024, 1024);
+    luzPrincipal.shadow.camera.left = -4; luzPrincipal.shadow.camera.right = 4;
+    luzPrincipal.shadow.camera.top = 4; luzPrincipal.shadow.camera.bottom = -4;
+    cena.add(luzPrincipal);
+    const luzPreenchimento = new THREE.DirectionalLight(0x8fb8ff, 0.35);
+    luzPreenchimento.position.set(-4, 2, -3);
+    cena.add(luzPreenchimento);
+
+    // Chão — só pra receber a sombra suave, invisível por trás (opacity
+    // baixa) pra não brigar com o fundo em degradê do próprio cartão.
+    const chao = new THREE.Mesh(
+      new THREE.CircleGeometry(4, 48),
+      new THREE.ShadowMaterial({ opacity: 0.28 }),
+    );
+    chao.rotation.x = -Math.PI / 2;
+    chao.receiveShadow = true;
+    cena.add(chao);
+
+    function materialPremium(corHex) {
+      return new THREE.MeshPhysicalMaterial({
+        color: new THREE.Color(corHex), metalness: 0.08, roughness: 0.32,
+        clearcoat: 0.5, clearcoatRoughness: 0.25, reflectivity: 0.4,
+      });
+    }
+
+    const grupoProduto = new THREE.Group();
+
+    // Pote — perfil curvo (Lathe): base levemente arredondada, corpo
+    // reto, ombro estreitando pro gargalo. Unidades arbitrárias, escala
+    // geral aplicada no grupo.
+    const perfilPote = [
+      [0.0, 0.0], [0.62, 0.0], [0.66, 0.06], [0.66, 1.55],
+      [0.60, 1.75], [0.34, 1.92], [0.30, 2.05], [0.30, 2.22],
+    ].map(([r, y]) => new THREE.Vector2(r, y));
+    const potePote = new THREE.Mesh(
+      new THREE.LatheGeometry(perfilPote, 48),
+      materialPremium(resolverCorHex3D(opcoes.corPote)),
+    );
+    potePote.castShadow = true;
+    grupoProduto.add(potePote);
+
+    // Tampa — encaixada bem no topo do gargalo do pote.
+    const perfilTampa = [
+      [0.0, 0.0], [0.36, 0.0], [0.38, 0.30], [0.34, 0.36], [0.0, 0.38],
+    ].map(([r, y]) => new THREE.Vector2(r, y));
+    const tampaMesh = new THREE.Mesh(
+      new THREE.LatheGeometry(perfilTampa, 48),
+      materialPremium(resolverCorHex3D(opcoes.corTampa)),
+    );
+    tampaMesh.position.y = 2.22;
+    tampaMesh.castShadow = true;
+    grupoProduto.add(tampaMesh);
+
+    grupoProduto.scale.setScalar(1.05);
+    grupoProduto.position.y = -1.15;
+    cena.add(grupoProduto);
+
+    // Cápsula bicolor, ao lado do pote — duas metades (hemisfério +
+    // meio-cilindro cada) coloridas separadamente com a cor da cabeça e
+    // do corpo. Sem CapsuleGeometry disponível nesta versão do Three.js.
+    const grupoCapsula = new THREE.Group();
+    const raioCapsula = 0.22, alturaMeioCilindro = 0.42;
+    function metadeCapsula(corHex, espelhado) {
+      const metade = new THREE.Group();
+      const cilindro = new THREE.Mesh(
+        new THREE.CylinderGeometry(raioCapsula, raioCapsula, alturaMeioCilindro, 24, 1, true),
+        materialPremium(corHex),
+      );
+      const esfera = new THREE.Mesh(
+        new THREE.SphereGeometry(raioCapsula, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
+        materialPremium(corHex),
+      );
+      esfera.position.y = alturaMeioCilindro / 2;
+      metade.add(cilindro, esfera);
+      metade.castShadow = true;
+      if (espelhado) metade.rotation.x = Math.PI;
+      return metade;
+    }
+    const metadeSuperior = metadeCapsula(resolverCorHex3D(opcoes.corCabecaCapsula), false);
+    metadeSuperior.position.y = alturaMeioCilindro / 2;
+    const metadeInferior = metadeCapsula(resolverCorHex3D(opcoes.corCorpoCapsula), true);
+    metadeInferior.position.y = -alturaMeioCilindro / 2;
+    grupoCapsula.add(metadeSuperior, metadeInferior);
+    grupoCapsula.rotation.z = Math.PI / 2.6;
+    grupoCapsula.position.set(1.55, -0.7, 0.3);
+    grupoCapsula.traverse((obj) => { if (obj.isMesh) obj.castShadow = true; });
+    cena.add(grupoCapsula);
+
+    const controles = new THREE.OrbitControls(camera, renderer.domElement);
+    controles.target.set(0, 0, 0);
+    controles.enablePan = false;
+    controles.minDistance = 3; controles.maxDistance = 9;
+    controles.autoRotate = true;
+    controles.autoRotateSpeed = 2.2;
+    controles.update();
+
+    let animando = true;
+    function laco() {
+      if (!animando || !document.body.contains(container)) { animando = false; return; }
+      controles.update();
+      renderer.render(cena, camera);
+      requestAnimationFrame(laco);
+    }
+    laco();
+
+    return renderer.domElement;
+  }
   const ESTILOS_VISUAIS_TERCEIRIZACAO = [
     "Luxuoso", "Premium", "Minimalista", "Natural", "Esportivo", "Clínico", "Farmacêutico",
     "Clean", "Feminino", "Masculino", "Tecnológico", "Jovem", "Elegante", "Sofisticado",
@@ -10814,8 +11006,17 @@
 
       <div class="cartao">
         <h3 style="margin-top:0;">Documento & Preview</h3>
-        <div id="mockup-terceirizacao-container" style="margin-bottom:12px;"><p class="texto-suave">Carregando preview…</p></div>
-        <button type="button" class="botao secundario" data-acao="abrir-dossie-terceirizacao" data-id="${projeto.id}">📄 Ver Dossiê de Desenvolvimento (PDF)</button>
+        <p class="texto-suave">Mockup 3D do produto montado (pote/tampa/cápsula genéricos, nas cores do que foi escolhido acima) — sem fotos reais dos moldes ainda, é uma representação, não o produto exato.</p>
+        <div id="mockup3d-container" style="margin-bottom:12px;min-height:320px;border-radius:8px;border:1px solid var(--borda,#333);overflow:hidden;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#1b2620,#0e1512);">
+          ${projeto.mockup_3d_imagem
+            ? `<img id="mockup3d-imagem-capturada" src="${projeto.mockup_3d_imagem}" style="max-width:100%;max-height:420px;display:block;">`
+            : '<p class="texto-suave">Preview 3D ainda não gerado.</p>'}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="botao secundario" data-acao="carregar-mockup3d-terceirizacao" data-id="${projeto.id}">🧊 ${projeto.mockup_3d_imagem ? "Recarregar visualização 3D interativa" : "Gerar visualização 3D"}</button>
+          <button type="button" class="botao secundario" data-acao="capturar-mockup3d-terceirizacao" data-id="${projeto.id}" hidden>📸 Capturar esta imagem para o PDF</button>
+          <button type="button" class="botao secundario" data-acao="abrir-dossie-terceirizacao" data-id="${projeto.id}">📄 Ver Dossiê de Desenvolvimento (PDF)</button>
+        </div>
       </div>
 
       <div class="cartao">
@@ -10847,25 +11048,48 @@
       "terceirizacao"
     );
 
-    // Carrega o mockup como blob autenticado (não dá pra usar <img src>
-    // direto — a rota exige Authorization, mesmo raciocínio de
-    // `abrirBinarioEmNovaAba`) e injeta como <img> assim que chegar, sem
-    // travar o resto da tela esperando.
-    (async () => {
-      const containerMockup = document.getElementById("mockup-terceirizacao-container");
-      if (!containerMockup) return;
-      try {
-        const headers = {};
-        if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
-        const resp = await fetch(`${API}/terceirizacao/projetos/${projetoId}/mockup.png`, { headers });
-        if (!resp.ok) throw new Error("Não foi possível gerar o preview.");
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        containerMockup.innerHTML = `<img src="${url}" style="max-width:100%;border-radius:8px;border:1px solid var(--borda,#333);">`;
-      } catch (erro) {
-        containerMockup.innerHTML = '<p class="texto-suave">Preview ainda não disponível.</p>';
-      }
-    })();
+    // Fase 144 — mockup 3D (Three.js, carregado sob demanda — só quando o
+    // usuário realmente clica em "Gerar visualização 3D", nunca no
+    // carregamento normal da tela, pra não pesar ~630KB em toda tela do
+    // sistema que nada tem a ver com isso).
+    const botaoCarregarMockup3d = document.querySelector('[data-acao="carregar-mockup3d-terceirizacao"]');
+    const botaoCapturarMockup3d = document.querySelector('[data-acao="capturar-mockup3d-terceirizacao"]');
+    if (botaoCarregarMockup3d) {
+      botaoCarregarMockup3d.addEventListener("click", async () => {
+        const container = document.getElementById("mockup3d-container");
+        botaoCarregarMockup3d.disabled = true;
+        botaoCarregarMockup3d.textContent = "🧊 Carregando…";
+        try {
+          await carregarBibliotecaThree();
+          container.innerHTML = "";
+          const canvas = iniciarMockup3DTerceirizacao(container, {
+            corPote: projeto.pote ? projeto.pote.cor : null,
+            corTampa: projeto.tampa ? projeto.tampa.cor : null,
+            corCabecaCapsula: projeto.capsula ? projeto.capsula.cor_cabeca : null,
+            corCorpoCapsula: projeto.capsula ? projeto.capsula.cor_corpo : null,
+          });
+          window.__mockup3dCanvasAtual = canvas;
+          if (botaoCapturarMockup3d) botaoCapturarMockup3d.hidden = false;
+        } catch (erro) {
+          container.innerHTML = '<p class="texto-suave">Não foi possível carregar a visualização 3D (seu navegador pode não suportar WebGL).</p>';
+        } finally {
+          botaoCarregarMockup3d.disabled = false;
+          botaoCarregarMockup3d.textContent = "🧊 Recarregar visualização 3D interativa";
+        }
+      });
+    }
+    if (botaoCapturarMockup3d) {
+      botaoCapturarMockup3d.addEventListener("click", async () => {
+        if (!window.__mockup3dCanvasAtual) return;
+        try {
+          const imagemDataUrl = window.__mockup3dCanvasAtual.toDataURL("image/png");
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/mockup-3d`, { method: "PUT", body: { imagem: imagemDataUrl } });
+          definirFlash("ok", "Imagem capturada — o Dossiê em PDF já vai usar ela.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível capturar a imagem.");
+        }
+      });
+    }
 
     if (podeEditar) {
       const campoBuscaFormula = document.getElementById("busca-formula-terceirizacao");

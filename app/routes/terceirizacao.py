@@ -51,6 +51,14 @@ TTL_LINK_PORTAL_DIAS = 30
 bp = Blueprint("terceirizacao", __name__, url_prefix="/api/v1/terceirizacao")
 
 TIPOS_MIME_ARQUIVOS_PERMITIDOS = ("image/jpeg", "image/png", "image/webp", "application/pdf")
+
+# Fase 143 — teto de `listar_formulas_disponiveis` (busca por texto E a
+# lista geral sem filtro nenhum). 30 fazia sentido só pra busca por
+# texto (onde sobra); com a lista SEM FILTRO (Fase 141) e restrita a só
+# Memorial aprovado (Fase 142), 30 cortava antes de mostrar tudo — hoje
+# (2026-09-02) existem 84 produtos com Memorial aprovado; 150 dá folga
+# real sem virar uma lista sem fim se o catálogo aprovado crescer muito.
+LIMITE_FORMULAS_DISPONIVEIS = 150
 TAMANHO_MAXIMO_ARQUIVO_BYTES = 10 * 1024 * 1024
 
 
@@ -286,7 +294,7 @@ def listar_formulas_disponiveis():
         FROM itens i JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id
         WHERE i.tipo = ? {where_busca_itens} AND i.status = 'ativo'
           AND EXISTS (SELECT 1 FROM memoriais m WHERE m.produto_id = mp.id AND m.status = 'aprovado')
-        ORDER BY i.descricao LIMIT 30
+        ORDER BY i.descricao LIMIT {LIMITE_FORMULAS_DISPONIVEIS}
         """,
         params_itens,
     ).fetchall()
@@ -298,7 +306,12 @@ def listar_formulas_disponiveis():
     # '%%'" de sempre já cobre 100% das linhas, então nem precisa de um
     # WHERE condicional — só remove a exigência de `busca` não-vazio que
     # antes escondia os produtos do Memorial ainda sem item vinculado.
-    vagas_restantes = max(0, 30 - len(resultado))
+    # Fase 143 — pedido do usuário: o limite de 30 (pensado originalmente
+    # pra busca por texto, onde sobra) estava cortando a lista SEM FILTRO
+    # antes de mostrar tudo — hoje (2026-09-02) só existem 84 produtos com
+    # Memorial aprovado, então 150 dá folga real sem virar uma lista
+    # infinita se o catálogo aprovado crescer bastante.
+    vagas_restantes = max(0, LIMITE_FORMULAS_DISPONIVEIS - len(resultado))
     if vagas_restantes:
         termo = f"%{busca}%"
         rows_memorial = conn.execute(
@@ -1235,6 +1248,33 @@ def obter_mockup_projeto(projeto_id):
     return Response(png_bytes, mimetype="image/png")
 
 
+@bp.put("/projetos/<int:projeto_id>/mockup-3d")
+@requires_permission("terceirizacao", "visualizar")
+def salvar_mockup_3d(projeto_id):
+    """Fase 144 — o servidor não sabe renderizar 3D; quem monta a cena
+    (Three.js, ver renderTerceirizacaoDetalhe em app.js) é o navegador —
+    esta rota só recebe a imagem PNG já capturada de lá (`canvas.
+    toDataURL()`) e guarda, pra reaproveitar tanto na tela quanto no PDF
+    do Dossiê sem precisar renderizar de novo toda vez. Permissão
+    'visualizar' (não 'criar') de propósito — qualquer um que já pode ver
+    o projeto pode deixar a cena carregada e capturar a imagem, isso não
+    é uma mudança de dado do projeto em si, só um retrato dele."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    dados = request.get_json(silent=True) or {}
+    imagem = validar_imagem_base64(dados.get("imagem"), tipos_permitidos=("image/png",), tamanho_maximo_bytes=6 * 1024 * 1024)
+    if not imagem:
+        raise ApiError("Envie a imagem capturada.", status=400)
+    conn.execute(
+        "UPDATE terceirizacao_projetos SET mockup_3d_imagem = ?, atualizado_em = ? WHERE id = ?",
+        (imagem, _now_iso(), projeto_id),
+    )
+    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+                     acao="mockup_3d_capturado", ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True})
+
+
 # ---- Dossiê de Desenvolvimento de Produto (PDF) ----
 
 def _gerar_pdf_dossie(projeto, nutricao):
@@ -1259,11 +1299,27 @@ def _gerar_pdf_dossie(projeto, nutricao):
     elementos.append(Paragraph("DOSSIÊ DE DESENVOLVIMENTO DE PRODUTO", estilo_titulo))
     elementos.append(HRFlowable(width="100%", thickness=1, color=cor_dourado, spaceBefore=8, spaceAfter=16))
 
+    # Fase 144 — se o navegador já capturou uma imagem da cena 3D
+    # (pote+tampa+cápsula montados, cores do cadastro), usa ela como a
+    # imagem principal do dossiê — bem mais bonita que o "cartão de
+    # especificação" 2D antigo. Sem captura ainda (projeto nunca abriu a
+    # tela de preview, ou o navegador não tinha WebGL), cai de volta pro
+    # mockup 2D de sempre — nunca deixa o PDF sem nenhuma imagem.
     try:
-        mockup_bytes = _gerar_mockup_png(
-            projeto, projeto["cliente"], projeto.get("item"), projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
-        )
-        elementos.append(RLImage(io.BytesIO(mockup_bytes), width=15 * cm, height=15 * cm * 700 / 900))
+        imagem_3d = projeto.get("mockup_3d_imagem")
+        if imagem_3d:
+            from PIL import Image as PILImage
+            m = re.match(r"^data:([\w/+.-]+);base64,(.+)$", imagem_3d, re.DOTALL)
+            dados_img = base64.b64decode(m.group(2)) if m else base64.b64decode(imagem_3d)
+            imagem_pil = PILImage.open(io.BytesIO(dados_img))
+            proporcao = imagem_pil.height / imagem_pil.width
+            largura_pdf = 13 * cm
+            elementos.append(RLImage(io.BytesIO(dados_img), width=largura_pdf, height=largura_pdf * proporcao))
+        else:
+            mockup_bytes = _gerar_mockup_png(
+                projeto, projeto["cliente"], projeto.get("item"), projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
+            )
+            elementos.append(RLImage(io.BytesIO(mockup_bytes), width=15 * cm, height=15 * cm * 700 / 900))
         elementos.append(Spacer(1, 0.5 * cm))
     except Exception:
         pass
