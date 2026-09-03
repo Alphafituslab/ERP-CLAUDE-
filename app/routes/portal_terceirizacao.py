@@ -76,7 +76,6 @@ def _projeto_do_portal(conn, projeto_id):
     p = tc._projeto_detalhado(conn, projeto_id)
     p.pop("criado_por", None)
     p.pop("responsavel_id", None)
-    nutricao = tc._nutricao_para_item(conn, p["item_id"]) if p.get("item_id") else None
     arquivos = conn.execute(
         "SELECT id, nome, categoria, tamanho, criado_em FROM terceirizacao_arquivos WHERE projeto_id = ? AND visibilidade = 'compartilhado' ORDER BY criado_em DESC",
         (projeto_id,),
@@ -85,11 +84,10 @@ def _projeto_do_portal(conn, projeto_id):
         "numero": p["numero"], "status": p["status"], "versao": p["versao"],
         "editavel": p["status"] in STATUS_ABERTOS_PARA_CLIENTE,
         "cliente": {"razao_social": p["cliente"]["razao_social"], "cnpj": p["cliente"].get("cnpj")},
-        "item": p.get("item"), "nutricao": nutricao,
-        "pote_id": p["pote_id"], "tampa_id": p["tampa_id"], "capsula_id": p["capsula_id"],
-        "quantidade_por_pote": p["quantidade_por_pote"], "unidade_quantidade": p["unidade_quantidade"],
+        # Fase 146 — vários itens, cada um com fórmula/embalagem/
+        # nutrição próprios (antes era um item só, direto nestes campos).
+        "itens": p["itens"],
         "briefing": p.get("briefing"),
-        "solicitacao_alteracao_formula": p.get("solicitacao_alteracao_formula"),
         "arquivos": [dict(a) for a in arquivos],
         "assinatura_cliente_nome": p.get("assinatura_cliente_nome"),
         "assinatura_cliente_em": p.get("assinatura_cliente_em"),
@@ -151,33 +149,40 @@ def obter_embalagem_disponivel_portal(token):
     """Catálogo de opções pro cliente escolher — mesmo dado que a tela
     interna usa (`/terceirizacao/potes`/`tampas`/`capsulas`), só que sem
     exigir a permissão `terceirizacao.visualizar` (o cliente não tem
-    login nenhum)."""
+    login nenhum). Fase 146 — `?pote_id=` filtra as tampas compatíveis
+    do item que o cliente está editando no momento (cada item tem sua
+    própria embalagem agora, não dá mais pra pré-filtrar por "o" pote do
+    projeto)."""
     conn, link = _resolver_link_ou_404(token)
     potes = conn.execute("SELECT * FROM terceirizacao_potes WHERE ativo = 1 ORDER BY nome").fetchall()
     capsulas = conn.execute("SELECT * FROM terceirizacao_capsulas WHERE ativo = 1 ORDER BY nome").fetchall()
-    projeto = conn.execute("SELECT pote_id FROM terceirizacao_projetos WHERE id = ?", (link["projeto_id"],)).fetchone()
-    if projeto["pote_id"]:
-        tem_restricao = conn.execute("SELECT 1 FROM terceirizacao_compat_pote_tampa WHERE pote_id = ?", (projeto["pote_id"],)).fetchone()
+    pote_id = request.args.get("pote_id", type=int)
+    if pote_id:
+        tem_restricao = conn.execute("SELECT 1 FROM terceirizacao_compat_pote_tampa WHERE pote_id = ?", (pote_id,)).fetchone()
         if tem_restricao:
             tampas = conn.execute(
                 """SELECT t.* FROM terceirizacao_tampas t JOIN terceirizacao_compat_pote_tampa c ON c.tampa_id = t.id
                    WHERE c.pote_id = ? AND t.ativo = 1 ORDER BY t.nome""",
-                (projeto["pote_id"],),
+                (pote_id,),
             ).fetchall()
         else:
             tampas = conn.execute("SELECT * FROM terceirizacao_tampas WHERE ativo = 1 ORDER BY nome").fetchall()
     else:
-        tampas = []
+        tampas = conn.execute("SELECT * FROM terceirizacao_tampas WHERE ativo = 1 ORDER BY nome").fetchall()
     return jsonify({
         "potes": [dict(r) for r in potes], "tampas": [dict(r) for r in tampas], "capsulas": [dict(r) for r in capsulas],
     })
 
 
-@bp.put("/<token>/embalagem")
-def definir_embalagem_portal(token):
+@bp.put("/<token>/itens/<int:item_projeto_id>/embalagem")
+def definir_embalagem_item_portal(token, item_projeto_id):
     conn, link = _resolver_link_ou_404(token)
     projeto_id = link["projeto_id"]
     _exigir_editavel(conn, projeto_id)
+    if not conn.execute(
+        "SELECT 1 FROM terceirizacao_projeto_itens WHERE id = ? AND projeto_id = ?", (item_projeto_id, projeto_id)
+    ).fetchone():
+        raise ApiError("Item não encontrado neste projeto.", status=404)
     dados = request.get_json(silent=True) or {}
     pote_id, tampa_id, capsula_id = dados.get("pote_id"), dados.get("tampa_id"), dados.get("capsula_id")
     for campo, valor, tabela in (("pote_id", pote_id, "terceirizacao_potes"), ("tampa_id", tampa_id, "terceirizacao_tampas"), ("capsula_id", capsula_id, "terceirizacao_capsulas")):
@@ -194,9 +199,10 @@ def definir_embalagem_portal(token):
     if unidade is not None and unidade not in ("capsulas", "gramas"):
         raise ApiError("unidade_quantidade deve ser 'capsulas' ou 'gramas'.", status=400)
     conn.execute(
-        "UPDATE terceirizacao_projetos SET pote_id = ?, tampa_id = ?, capsula_id = ?, quantidade_por_pote = ?, unidade_quantidade = ?, atualizado_em = ? WHERE id = ?",
-        (pote_id, tampa_id, capsula_id, quantidade, unidade, _now_iso(), projeto_id),
+        "UPDATE terceirizacao_projeto_itens SET pote_id = ?, tampa_id = ?, capsula_id = ?, quantidade_por_pote = ?, unidade_quantidade = ? WHERE id = ?",
+        (pote_id, tampa_id, capsula_id, quantidade, unidade, item_projeto_id),
     )
+    conn.execute("UPDATE terceirizacao_projetos SET atualizado_em = ? WHERE id = ?", (_now_iso(), projeto_id))
     return jsonify(_projeto_do_portal(conn, projeto_id))
 
 
@@ -306,12 +312,37 @@ def baixar_arquivo_portal(token, arquivo_id):
     return Response(bruto, mimetype=arquivo["tipo_mime"] or "application/octet-stream")
 
 
-@bp.get("/<token>/mockup.png")
-def mockup_portal(token):
+@bp.get("/<token>/itens/<int:item_projeto_id>/mockup.png")
+def mockup_item_portal(token, item_projeto_id):
     conn, link = _resolver_link_ou_404(token)
     projeto = tc._projeto_detalhado(conn, link["projeto_id"])
-    png_bytes = tc._gerar_mockup_png(projeto, projeto["cliente"], projeto.get("item"), projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula"))
+    item = next((i for i in projeto["itens"] if i["id"] == item_projeto_id), None)
+    if item is None:
+        raise ApiError("Item não encontrado neste projeto.", status=404)
+    png_bytes = tc._gerar_mockup_png(
+        projeto, projeto["cliente"], item.get("item"), item.get("pote"), item.get("tampa"), item.get("capsula"),
+        item.get("quantidade_por_pote"), item.get("unidade_quantidade"),
+    )
     return Response(png_bytes, mimetype="image/png")
+
+
+@bp.put("/<token>/itens/<int:item_projeto_id>/mockup-3d")
+def salvar_mockup_3d_item_portal(token, item_projeto_id):
+    """Fase 146 — mesma captura da tela interna (Fase 144), só que
+    disparada do lado do cliente quando ele abre a visualização 3D no
+    portal."""
+    conn, link = _resolver_link_ou_404(token)
+    projeto_id = link["projeto_id"]
+    if not conn.execute(
+        "SELECT 1 FROM terceirizacao_projeto_itens WHERE id = ? AND projeto_id = ?", (item_projeto_id, projeto_id)
+    ).fetchone():
+        raise ApiError("Item não encontrado neste projeto.", status=404)
+    dados = request.get_json(silent=True) or {}
+    imagem = validar_imagem_base64(dados.get("imagem"), tipos_permitidos=("image/png",), tamanho_maximo_bytes=6 * 1024 * 1024)
+    if not imagem:
+        raise ApiError("Envie a imagem capturada.", status=400)
+    conn.execute("UPDATE terceirizacao_projeto_itens SET mockup_3d_imagem = ? WHERE id = ?", (imagem, item_projeto_id))
+    return jsonify({"ok": True})
 
 
 @bp.get("/<token>/documento.pdf")
@@ -324,8 +355,7 @@ def documento_portal(token):
     da Fase D, quando existir de verdade)."""
     conn, link = _resolver_link_ou_404(token)
     projeto = tc._projeto_detalhado(conn, link["projeto_id"])
-    nutricao = tc._nutricao_para_item(conn, projeto["item_id"]) if projeto.get("item_id") else None
-    pdf_bytes = tc._gerar_pdf_dossie(projeto, nutricao)
+    pdf_bytes = tc._gerar_pdf_dossie(projeto)
     return Response(pdf_bytes, mimetype="application/pdf", headers={"Content-Disposition": "inline"})
 
 
@@ -373,8 +403,7 @@ def concluir_portal(token):
     # propagado como erro pra quem está do outro lado do link).
     try:
         projeto_detalhado = tc._projeto_detalhado(conn, projeto_id)
-        nutricao = tc._nutricao_para_item(conn, projeto_detalhado["item_id"]) if projeto_detalhado.get("item_id") else None
-        pdf_bytes = tc._gerar_pdf_dossie(projeto_detalhado, nutricao)
+        pdf_bytes = tc._gerar_pdf_dossie(projeto_detalhado)
         nome_arquivo = f"Terceirizacao_{projeto['numero']}_confirmado_pelo_cliente.pdf"
         conn.execute(
             "INSERT INTO clientes_documentos (cliente_id, nome, nome_arquivo, tipo_mime, dados, tamanho, criado_por) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -435,8 +464,7 @@ def assinar_portal(token):
         raise ApiError("Informe um CPF válido (11 dígitos) para assinar.", status=400)
 
     projeto_detalhado = tc._projeto_detalhado(conn, projeto_id)
-    nutricao = tc._nutricao_para_item(conn, projeto_detalhado["item_id"]) if projeto_detalhado.get("item_id") else None
-    pdf_bytes = tc._gerar_pdf_dossie(projeto_detalhado, nutricao)
+    pdf_bytes = tc._gerar_pdf_dossie(projeto_detalhado)
     hash_pdf = hashlib.sha256(pdf_bytes).hexdigest()
     agora = _now_iso()
     navegador = (request.headers.get("User-Agent") or "")[:500]

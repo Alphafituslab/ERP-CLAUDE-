@@ -169,6 +169,7 @@ SCHEMA_FILES = [
     "schema_fase140.sql",  # Fase 140 — Terceirização Premium (Fase D): assinatura eletrônica de verdade + congelamento de versão
     "schema_fase144.sql",  # Fase 144 — Terceirização Premium: mockup 3D do produto (imagem capturada no navegador)
     "schema_fase145.sql",  # Fase 145 — Terceirização Premium (Fase E): aprovação de arte, foto final, comentários
+    "schema_fase146.sql",  # Fase 146 — Terceirização Premium: múltiplos itens por projeto (fórmula+embalagem própria cada)
 ]
 
 

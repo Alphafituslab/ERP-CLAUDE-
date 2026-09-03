@@ -10648,7 +10648,7 @@
     const linhas = projetos.map((p) => `<tr>
       <td class="mono"><a href="#/terceirizacao/${p.id}">${escapeHtml(p.numero)}</a></td>
       <td>${escapeHtml(p.cliente_razao_social)}</td>
-      <td>${p.item_descricao ? escapeHtml(p.item_descricao) : '<span class="texto-suave">— sem fórmula ainda</span>'}</td>
+      <td>${p.item_descricao ? escapeHtml(p.item_descricao) + (p.total_itens > 1 ? ` <span class="texto-suave">+${p.total_itens - 1} outro(s)</span>` : "") : '<span class="texto-suave">— sem fórmula ainda</span>'}</td>
       <td>${p.responsavel_nome ? escapeHtml(p.responsavel_nome) : '<span class="texto-suave">—</span>'}</td>
       <td>${seloStatusTerceirizacao(p.status)}</td>
       <td class="texto-suave">${fmtData(p.criado_em)}</td>
@@ -10740,28 +10740,27 @@
       chamarApi(`/terceirizacao/projetos/${projetoId}/comentarios`),
     ]);
     const podeEnviarParaAprovacao = temPermissao("terceirizacao", "criar") && ["rascunho", "aguardando_revisao"].includes(projeto.status);
-    let tampas = [];
-    if (projeto.pote_id) {
-      tampas = await chamarApi(`/terceirizacao/potes/${projeto.pote_id}/tampas-compativeis`);
-    }
+    // Fase 146 — cada item pode ter um pote diferente, então as tampas
+    // compatíveis precisam ser buscadas POR ITEM (mapa item.id → lista).
+    const tampasPorItem = {};
+    await Promise.all((projeto.itens || []).map(async (it) => {
+      tampasPorItem[it.id] = it.pote_id ? await chamarApi(`/terceirizacao/potes/${it.pote_id}/tampas-compativeis`) : [];
+    }));
     const capsulas = await chamarApi("/terceirizacao/capsulas");
-
-    let nutricao = null;
-    if (projeto.item_id) {
-      nutricao = await chamarApi(`/terceirizacao/formulas-disponiveis/${projeto.item_id}/nutricao`).catch(() => null);
-    }
 
     const briefing = projeto.briefing || {};
     const estiloAtual = briefing.estilo_visual ? JSON.parse(briefing.estilo_visual) : [];
     const coresAtuais = briefing.cores_preferidas ? JSON.parse(briefing.cores_preferidas) : [];
     const marcasAtuais = briefing.marcas_referencia ? JSON.parse(briefing.marcas_referencia) : [];
 
-    function cartaoEmbalagem(lista, selecionadoId, campoNome, tituloVazio) {
+    // Fase 146 — `itemProjetoId` identifica QUAL item (de um projeto que
+    // agora pode ter vários) este clique de embalagem pertence.
+    function cartaoEmbalagem(lista, selecionadoId, campoNome, tituloVazio, itemProjetoId) {
       if (!lista.length) return `<p class="texto-suave">${escapeHtml(tituloVazio)}</p>`;
       return `<div style="display:flex;gap:10px;flex-wrap:wrap;">
         ${lista.map((o) => `
           <button type="button" class="botao-embalagem-opcao ${String(o.id) === String(selecionadoId) ? "selecionado" : ""}"
-            data-campo="${campoNome}" data-id="${o.id}"
+            data-campo="${campoNome}" data-id="${o.id}" data-item-projeto-id="${itemProjetoId}"
             style="border:2px solid ${String(o.id) === String(selecionadoId) ? "var(--cor-primaria, #4ade80)" : "var(--borda, #333)"};border-radius:8px;padding:8px;background:none;cursor:pointer;width:110px;text-align:center;">
             ${o.imagem ? `<img src="${o.imagem}" style="width:70px;height:70px;object-fit:contain;display:block;margin:0 auto 6px;">` : '<div style="width:70px;height:70px;margin:0 auto 6px;display:flex;align-items:center;justify-content:center;color:var(--texto-suave,#888);font-size:11px;">sem foto</div>'}
             <div style="font-size:12px;color:var(--texto,#eee);">${escapeHtml(o.nome)}</div>
@@ -10817,47 +10816,74 @@
       </div>
 
       <div class="cartao">
-        <h3 style="margin-top:0;">Fórmula</h3>
-        ${podeEditar ? `
-          <div class="campo"><label>Buscar fórmula (produto acabado já cadastrado)</label>
-            <input type="text" id="busca-formula-terceirizacao" placeholder="Digite o nome ou código…" autocomplete="off">
-            <div id="resultados-busca-formula-terceirizacao" class="lista-busca-resultados"></div>
-          </div>` : ""}
-        ${projeto.item ? `
-          <p><strong>${escapeHtml(projeto.item.nome_memorial || projeto.item.descricao)}</strong> <span class="texto-suave mono">${escapeHtml(projeto.item.codigo)}</span>${projeto.item.nome_memorial ? `<br><span class="texto-suave" style="font-size:12px;">Nome interno: ${escapeHtml(projeto.item.descricao)}</span>` : ""}</p>
-          ${nutricao ? (
-            nutricao.vinculado_a_memorial && nutricao.memorial_aprovado_encontrado ? `
-              <p class="dica">Tabela nutricional e ingredientes do Memorial Técnico ${escapeHtml(nutricao.memorial_codigo)}:</p>
-              ${renderizarTabelaNutricional(nutricao.tabela_nutricional)}
-              ${nutricao.lista_ingredientes ? `<p><strong>Lista de Ingredientes:</strong> ${escapeHtml(nutricao.lista_ingredientes)}</p>` : ""}
-            ` : `<p class="texto-suave">${escapeHtml(nutricao.mensagem)}</p>`
-          ) : ""}
-          ${podeEditar ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-solicitar-alteracao-formula" data-id="${projeto.id}">Solicitar alteração da fórmula</button>` : ""}
-        ` : '<p class="texto-suave">Nenhuma fórmula escolhida ainda.</p>'}
-        ${projeto.solicitacao_alteracao_formula ? `<p class="mensagem-erro" style="margin-top:10px;">Alteração solicitada: ${escapeHtml(projeto.solicitacao_alteracao_formula)}</p>` : ""}
+        <div class="barra-acoes">
+          <h3 style="margin:0;">Itens do projeto (${projeto.itens.length})</h3>
+          ${podeEditar ? '<button type="button" class="botao secundario pequeno" data-acao="adicionar-item-terceirizacao">+ Adicionar item</button>' : ""}
+        </div>
+        <p class="texto-suave">Um projeto pode ter mais de um produto — cada item tem sua própria fórmula, embalagem e mockup.</p>
       </div>
 
+      ${projeto.itens.map((it, idx) => `
       <div class="cartao">
-        <h3 style="margin-top:0;">Personalização da embalagem</h3>
+        <div class="barra-acoes">
+          <h3 style="margin:0;">Item ${idx + 1}${it.item ? ` — ${escapeHtml(it.item.nome_memorial || it.item.descricao)}` : ""}</h3>
+          ${podeEditar ? `<button type="button" class="botao perigo pequeno" data-acao="remover-item-terceirizacao" data-item-projeto-id="${it.id}">Remover item</button>` : ""}
+        </div>
+
+        ${podeEditar ? `
+          <div class="campo"><label>Buscar fórmula (produto acabado já cadastrado)</label>
+            <input type="text" class="busca-formula-terceirizacao" data-item-projeto-id="${it.id}" placeholder="Digite o nome ou código…" autocomplete="off">
+            <div class="resultados-busca-formula-terceirizacao lista-busca-resultados" data-item-projeto-id="${it.id}"></div>
+          </div>` : ""}
+        ${it.item ? `
+          <p><strong>${escapeHtml(it.item.nome_memorial || it.item.descricao)}</strong> <span class="texto-suave mono">${escapeHtml(it.item.codigo)}</span>${it.item.nome_memorial ? `<br><span class="texto-suave" style="font-size:12px;">Nome interno: ${escapeHtml(it.item.descricao)}</span>` : ""}</p>
+          ${it.nutricao ? (
+            it.nutricao.vinculado_a_memorial && it.nutricao.memorial_aprovado_encontrado ? `
+              <p class="dica">Tabela nutricional e ingredientes do Memorial Técnico ${escapeHtml(it.nutricao.memorial_codigo)}:</p>
+              ${renderizarTabelaNutricional(it.nutricao.tabela_nutricional)}
+              ${it.nutricao.lista_ingredientes ? `<p><strong>Lista de Ingredientes:</strong> ${escapeHtml(it.nutricao.lista_ingredientes)}</p>` : ""}
+            ` : `<p class="texto-suave">${escapeHtml(it.nutricao.mensagem)}</p>`
+          ) : ""}
+          ${podeEditar ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-solicitar-alteracao-formula" data-id="${projeto.id}" data-item-projeto-id="${it.id}">Solicitar alteração da fórmula</button>` : ""}
+        ` : '<p class="texto-suave">Nenhuma fórmula escolhida ainda.</p>'}
+        ${it.solicitacao_alteracao_formula ? `<p class="mensagem-erro" style="margin-top:10px;">Alteração solicitada: ${escapeHtml(it.solicitacao_alteracao_formula)}</p>` : ""}
+
+        <h3 style="margin-top:20px;">Personalização da embalagem</h3>
         <div class="campo"><label>Pote</label></div>
-        ${cartaoEmbalagem(potes, projeto.pote_id, "pote_id", "Nenhum pote cadastrado ainda — cadastre em Catálogo de Embalagem.")}
-        <div class="campo" style="margin-top:14px;"><label>Tampa ${projeto.pote_id ? "(compatíveis com o pote escolhido)" : "(escolha um pote primeiro)"}</label></div>
-        ${projeto.pote_id ? cartaoEmbalagem(tampas, projeto.tampa_id, "tampa_id", "Nenhuma tampa compatível cadastrada.") : '<p class="texto-suave">Escolha um pote primeiro.</p>'}
+        ${cartaoEmbalagem(potes, it.pote_id, "pote_id", "Nenhum pote cadastrado ainda — cadastre em Catálogo de Embalagem.", it.id)}
+        <div class="campo" style="margin-top:14px;"><label>Tampa ${it.pote_id ? "(compatíveis com o pote escolhido)" : "(escolha um pote primeiro)"}</label></div>
+        ${it.pote_id ? cartaoEmbalagem(tampasPorItem[it.id] || [], it.tampa_id, "tampa_id", "Nenhuma tampa compatível cadastrada.", it.id) : '<p class="texto-suave">Escolha um pote primeiro.</p>'}
         <div class="campo" style="margin-top:14px;"><label>Cápsula</label></div>
-        ${cartaoEmbalagem(capsulas.map((c) => ({ ...c, cor: c.cor_cabeca })), projeto.capsula_id, "capsula_id", "Nenhuma cápsula cadastrada ainda.")}
+        ${cartaoEmbalagem(capsulas.map((c) => ({ ...c, cor: c.cor_cabeca })), it.capsula_id, "capsula_id", "Nenhuma cápsula cadastrada ainda.", it.id)}
         <div style="display:flex;gap:10px;margin-top:14px;">
-          <div class="campo" style="margin:0;"><label>Quantidade por pote</label><input type="number" id="terceirizacao-quantidade" value="${projeto.quantidade_por_pote ?? ""}" ${podeEditar ? "" : "disabled"}></div>
+          <div class="campo" style="margin:0;"><label>Quantidade por pote</label><input type="number" class="terceirizacao-quantidade" data-item-projeto-id="${it.id}" value="${it.quantidade_por_pote ?? ""}" ${podeEditar ? "" : "disabled"}></div>
           <div class="campo" style="margin:0;"><label>Unidade</label>
-            <select id="terceirizacao-unidade" ${podeEditar ? "" : "disabled"}>
+            <select class="terceirizacao-unidade" data-item-projeto-id="${it.id}" ${podeEditar ? "" : "disabled"}>
               <option value="">—</option>
-              <option value="capsulas" ${projeto.unidade_quantidade === "capsulas" ? "selected" : ""}>Cápsulas</option>
-              <option value="gramas" ${projeto.unidade_quantidade === "gramas" ? "selected" : ""}>Gramas</option>
+              <option value="capsulas" ${it.unidade_quantidade === "capsulas" ? "selected" : ""}>Cápsulas</option>
+              <option value="gramas" ${it.unidade_quantidade === "gramas" ? "selected" : ""}>Gramas</option>
             </select>
           </div>
-          ${podeEditar ? '<button type="button" class="botao secundario" data-acao="salvar-quantidade-embalagem" style="align-self:end;">Salvar quantidade</button>' : ""}
+          ${podeEditar ? `<button type="button" class="botao secundario" data-acao="salvar-quantidade-embalagem" data-item-projeto-id="${it.id}" style="align-self:end;">Salvar quantidade</button>` : ""}
         </div>
-        <div style="display:flex;gap:10px;margin-top:14px;align-items:end;">
-          <div class="campo" style="margin:0;flex:1;"><label>Cartucho/Pouch</label>
+
+        <h3 style="margin-top:20px;">Mockup 3D deste item</h3>
+        <div id="mockup3d-container-${it.id}" style="margin-bottom:12px;min-height:280px;border-radius:8px;border:1px solid var(--borda,#333);overflow:hidden;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#1b2620,#0e1512);">
+          ${it.mockup_3d_imagem
+            ? `<img src="${it.mockup_3d_imagem}" style="max-width:100%;max-height:380px;display:block;">`
+            : '<p class="texto-suave">Preview 3D ainda não gerado.</p>'}
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button type="button" class="botao secundario" data-acao="carregar-mockup3d-terceirizacao" data-item-projeto-id="${it.id}">🧊 ${it.mockup_3d_imagem ? "Recarregar visualização 3D interativa" : "Gerar visualização 3D"}</button>
+          <button type="button" class="botao secundario" data-acao="capturar-mockup3d-terceirizacao" data-item-projeto-id="${it.id}" hidden>📸 Capturar esta imagem para o PDF</button>
+        </div>
+      </div>
+      `).join("")}
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Cartucho/Pouch (todo o projeto)</h3>
+        <div style="display:flex;gap:10px;align-items:end;">
+          <div class="campo" style="margin:0;flex:1;">
             <select id="terceirizacao-embalagem-secundaria" ${podeEditar ? "" : "disabled"}>
               <option value="">—</option>
               <option value="com_cartucho" ${briefing.embalagem_secundaria === "com_cartucho" ? "selected" : ""}>Com cartucho</option>
@@ -11066,17 +11092,8 @@
 
       <div class="cartao">
         <h3 style="margin-top:0;">Documento & Preview</h3>
-        <p class="texto-suave">Mockup 3D do produto montado (pote/tampa/cápsula genéricos, nas cores do que foi escolhido acima) — sem fotos reais dos moldes ainda, é uma representação, não o produto exato.</p>
-        <div id="mockup3d-container" style="margin-bottom:12px;min-height:320px;border-radius:8px;border:1px solid var(--borda,#333);overflow:hidden;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#1b2620,#0e1512);">
-          ${projeto.mockup_3d_imagem
-            ? `<img id="mockup3d-imagem-capturada" src="${projeto.mockup_3d_imagem}" style="max-width:100%;max-height:420px;display:block;">`
-            : '<p class="texto-suave">Preview 3D ainda não gerado.</p>'}
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="botao secundario" data-acao="carregar-mockup3d-terceirizacao" data-id="${projeto.id}">🧊 ${projeto.mockup_3d_imagem ? "Recarregar visualização 3D interativa" : "Gerar visualização 3D"}</button>
-          <button type="button" class="botao secundario" data-acao="capturar-mockup3d-terceirizacao" data-id="${projeto.id}" hidden>📸 Capturar esta imagem para o PDF</button>
-          <button type="button" class="botao secundario" data-acao="abrir-dossie-terceirizacao" data-id="${projeto.id}">📄 Ver Dossiê de Desenvolvimento (PDF)</button>
-        </div>
+        <p class="texto-suave">O Dossiê em PDF reúne todos os itens do projeto — cada um com sua imagem 3D (ou o cartão 2D se ainda não foi capturada), embalagem, fórmula e tabela nutricional.</p>
+        <button type="button" class="botao secundario" data-acao="abrir-dossie-terceirizacao" data-id="${projeto.id}">📄 Ver Dossiê de Desenvolvimento (PDF)</button>
       </div>
 
       <div class="cartao">
@@ -11108,57 +11125,116 @@
       "terceirizacao"
     );
 
-    // Fase 144 — mockup 3D (Three.js, carregado sob demanda — só quando o
-    // usuário realmente clica em "Gerar visualização 3D", nunca no
-    // carregamento normal da tela, pra não pesar ~630KB em toda tela do
-    // sistema que nada tem a ver com isso).
-    const botaoCarregarMockup3d = document.querySelector('[data-acao="carregar-mockup3d-terceirizacao"]');
-    const botaoCapturarMockup3d = document.querySelector('[data-acao="capturar-mockup3d-terceirizacao"]');
-    if (botaoCarregarMockup3d) {
-      botaoCarregarMockup3d.addEventListener("click", async () => {
-        const container = document.getElementById("mockup3d-container");
-        botaoCarregarMockup3d.disabled = true;
-        botaoCarregarMockup3d.textContent = "🧊 Carregando…";
+    // Fase 144/146 — mockup 3D (Three.js, carregado sob demanda — só
+    // quando o usuário realmente clica em "Gerar visualização 3D", nunca
+    // no carregamento normal da tela) — agora um por ITEM, guardados num
+    // mapa (item.id → canvas) em vez de uma variável global só.
+    const canvas3dPorItem = {};
+    app.querySelectorAll('[data-acao="carregar-mockup3d-terceirizacao"]').forEach((botaoCarregar) => {
+      botaoCarregar.addEventListener("click", async () => {
+        const itemProjetoId = botaoCarregar.dataset.itemProjetoId;
+        const it = projeto.itens.find((x) => String(x.id) === String(itemProjetoId));
+        const container = document.getElementById(`mockup3d-container-${itemProjetoId}`);
+        const botaoCapturar = app.querySelector(`[data-acao="capturar-mockup3d-terceirizacao"][data-item-projeto-id="${itemProjetoId}"]`);
+        botaoCarregar.disabled = true;
+        botaoCarregar.textContent = "🧊 Carregando…";
         try {
           await carregarBibliotecaThree();
           container.innerHTML = "";
           const canvas = iniciarMockup3DTerceirizacao(container, {
-            corPote: projeto.pote ? projeto.pote.cor : null,
-            corTampa: projeto.tampa ? projeto.tampa.cor : null,
-            corCabecaCapsula: projeto.capsula ? projeto.capsula.cor_cabeca : null,
-            corCorpoCapsula: projeto.capsula ? projeto.capsula.cor_corpo : null,
+            corPote: it && it.pote ? it.pote.cor : null,
+            corTampa: it && it.tampa ? it.tampa.cor : null,
+            corCabecaCapsula: it && it.capsula ? it.capsula.cor_cabeca : null,
+            corCorpoCapsula: it && it.capsula ? it.capsula.cor_corpo : null,
           });
-          window.__mockup3dCanvasAtual = canvas;
-          if (botaoCapturarMockup3d) botaoCapturarMockup3d.hidden = false;
+          canvas3dPorItem[itemProjetoId] = canvas;
+          if (botaoCapturar) botaoCapturar.hidden = false;
         } catch (erro) {
           container.innerHTML = '<p class="texto-suave">Não foi possível carregar a visualização 3D (seu navegador pode não suportar WebGL).</p>';
         } finally {
-          botaoCarregarMockup3d.disabled = false;
-          botaoCarregarMockup3d.textContent = "🧊 Recarregar visualização 3D interativa";
+          botaoCarregar.disabled = false;
+          botaoCarregar.textContent = "🧊 Recarregar visualização 3D interativa";
         }
       });
-    }
-    if (botaoCapturarMockup3d) {
-      botaoCapturarMockup3d.addEventListener("click", async () => {
-        if (!window.__mockup3dCanvasAtual) return;
+    });
+    app.querySelectorAll('[data-acao="capturar-mockup3d-terceirizacao"]').forEach((botaoCapturar) => {
+      botaoCapturar.addEventListener("click", async () => {
+        const itemProjetoId = botaoCapturar.dataset.itemProjetoId;
+        const canvas = canvas3dPorItem[itemProjetoId];
+        if (!canvas) return;
         try {
-          const imagemDataUrl = window.__mockup3dCanvasAtual.toDataURL("image/png");
-          await chamarApi(`/terceirizacao/projetos/${projetoId}/mockup-3d`, { method: "PUT", body: { imagem: imagemDataUrl } });
+          const imagemDataUrl = canvas.toDataURL("image/png");
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/itens/${itemProjetoId}/mockup-3d`, { method: "PUT", body: { imagem: imagemDataUrl } });
           definirFlash("ok", "Imagem capturada — o Dossiê em PDF já vai usar ela.");
         } catch (erro) {
           definirFlash("erro", erro.message || "Não foi possível capturar a imagem.");
         }
       });
+    });
+
+    // Fase 146 — adicionar/remover item do projeto.
+    const botaoAdicionarItem = document.querySelector('[data-acao="adicionar-item-terceirizacao"]');
+    if (botaoAdicionarItem) {
+      botaoAdicionarItem.addEventListener("click", () => {
+        abrirModal(`
+          <h3>Adicionar item ao projeto</h3>
+          <div class="campo"><label>Buscar fórmula (produto acabado já cadastrado)</label>
+            <input type="text" id="busca-formula-novo-item-terceirizacao" placeholder="Digite o nome ou código…" autocomplete="off">
+            <div id="resultados-busca-formula-novo-item-terceirizacao" class="lista-busca-resultados"></div>
+          </div>
+          <div class="rodape-modal"><button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button></div>
+        `);
+        const campo = document.getElementById("busca-formula-novo-item-terceirizacao");
+        const lista = document.getElementById("resultados-busca-formula-novo-item-terceirizacao");
+        let timeout = null;
+        async function buscar(termo) {
+          const encontrados = await chamarApi(`/terceirizacao/formulas-disponiveis?busca=${encodeURIComponent(termo)}`);
+          lista.innerHTML = encontrados.length
+            ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-origem="${i.origem}" data-id="${i.id ?? ""}" data-memorial-id="${i.memorial_produto_id ?? ""}">
+                ${i.codigo ? `<span class="mono">${escapeHtml(i.codigo)}</span> — ` : ""}${escapeHtml(i.nome_memorial || i.descricao)}
+                ${i.origem === "memorial" ? ' <span class="selo azul" style="font-size:10px;">Memorial Técnico — ainda não é item</span>' : ""}
+              </button>`).join("")
+            : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
+        }
+        campo.addEventListener("focus", () => { if (campo.value.trim().length === 0) buscar(""); });
+        campo.addEventListener("input", () => {
+          clearTimeout(timeout);
+          const termo = campo.value.trim();
+          if (termo.length === 0) { buscar(""); return; }
+          if (termo.length < 3) { lista.innerHTML = ""; return; }
+          timeout = setTimeout(() => buscar(termo), 250);
+        });
+        lista.addEventListener("click", async (e) => {
+          const botao = e.target.closest(".item-busca-resultado");
+          if (!botao) return;
+          const corpo = botao.dataset.origem === "memorial"
+            ? { memorial_produto_id: Number(botao.dataset.memorialId) }
+            : { item_id: Number(botao.dataset.id) };
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/itens`, { method: "POST", body: corpo });
+          fecharModais();
+          renderTerceirizacaoDetalhe(projetoId);
+        });
+        buscar("");
+      });
     }
+    app.querySelectorAll('[data-acao="remover-item-terceirizacao"]').forEach((botao) => {
+      botao.addEventListener("click", async () => {
+        if (!confirm("Remover este item do projeto?")) return;
+        await chamarApi(`/terceirizacao/projetos/${projetoId}/itens/${botao.dataset.itemProjetoId}`, { method: "DELETE" });
+        renderTerceirizacaoDetalhe(projetoId);
+      });
+    });
 
     if (podeEditar) {
       const campoBuscaFormula = document.getElementById("busca-formula-terceirizacao");
       const listaResultadosFormula = document.getElementById("resultados-busca-formula-terceirizacao");
       let timeoutBusca = null;
-      async function buscarEMostrarFormulas(termo) {
+      async function buscarEMostrarFormulas(termo, itemProjetoId) {
+        const listaResultadosFormula = app.querySelector(`.resultados-busca-formula-terceirizacao[data-item-projeto-id="${itemProjetoId}"]`);
+        if (!listaResultadosFormula) return;
         const encontrados = await chamarApi(`/terceirizacao/formulas-disponiveis?busca=${encodeURIComponent(termo)}`);
         listaResultadosFormula.innerHTML = encontrados.length
-          ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-origem="${i.origem}" data-id="${i.id ?? ""}" data-memorial-id="${i.memorial_produto_id ?? ""}">
+          ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-origem="${i.origem}" data-id="${i.id ?? ""}" data-memorial-id="${i.memorial_produto_id ?? ""}" data-item-projeto-id="${itemProjetoId}">
               ${i.codigo ? `<span class="mono">${escapeHtml(i.codigo)}</span> — ` : ""}${escapeHtml(i.nome_memorial || i.descricao)}
               ${i.nome_memorial && i.descricao ? ` <span class="texto-suave">(${escapeHtml(i.descricao)})</span>` : ""}
               ${i.origem === "memorial" ? ' <span class="selo azul" style="font-size:10px;">Memorial Técnico — ainda não é item</span>' : ""}
@@ -11167,46 +11243,53 @@
       }
       // Fase 141 — pedido do usuário: clicar na caixa (sem digitar nada)
       // já mostra uma lista pra escolher, não obriga digitar 3 letras
-      // primeiro. Só dispara uma vez por "sessão de clique" (some assim
-      // que o usuário começa a digitar, aí quem manda é o listener de
-      // "input" abaixo).
-      campoBuscaFormula.addEventListener("focus", () => {
-        if (campoBuscaFormula.value.trim().length === 0) buscarEMostrarFormulas("");
+      // primeiro. Fase 146 — agora um campo de busca POR ITEM, por isso
+      // delegação de evento no `app` inteiro em vez de um campo único.
+      app.querySelectorAll(".busca-formula-terceirizacao").forEach((campoBuscaFormula) => {
+        const itemProjetoId = campoBuscaFormula.dataset.itemProjetoId;
+        campoBuscaFormula.addEventListener("focus", () => {
+          if (campoBuscaFormula.value.trim().length === 0) buscarEMostrarFormulas("", itemProjetoId);
+        });
+        campoBuscaFormula.addEventListener("input", () => {
+          clearTimeout(timeoutBusca);
+          const termo = campoBuscaFormula.value.trim();
+          const listaResultadosFormula = app.querySelector(`.resultados-busca-formula-terceirizacao[data-item-projeto-id="${itemProjetoId}"]`);
+          // Vazio (apagou tudo) volta a mostrar a lista geral; de 1-2
+          // letras não busca ainda (ruído demais); 3+ busca por texto —
+          // pedido original do usuário.
+          if (termo.length === 0) { buscarEMostrarFormulas("", itemProjetoId); return; }
+          if (termo.length < 3) { if (listaResultadosFormula) listaResultadosFormula.innerHTML = ""; return; }
+          timeoutBusca = setTimeout(() => buscarEMostrarFormulas(termo, itemProjetoId), 250);
+        });
       });
-      campoBuscaFormula.addEventListener("input", () => {
-        clearTimeout(timeoutBusca);
-        const termo = campoBuscaFormula.value.trim();
-        // Vazio (apagou tudo) volta a mostrar a lista geral; de 1-2
-        // letras não busca ainda (ruído demais); 3+ busca por texto —
-        // pedido original do usuário.
-        if (termo.length === 0) { buscarEMostrarFormulas(""); return; }
-        if (termo.length < 3) { listaResultadosFormula.innerHTML = ""; return; }
-        timeoutBusca = setTimeout(() => buscarEMostrarFormulas(termo), 250);
-      });
-      listaResultadosFormula.addEventListener("click", async (e) => {
-        const botao = e.target.closest(".item-busca-resultado");
-        if (!botao) return;
-        const corpo = botao.dataset.origem === "memorial"
-          ? { memorial_produto_id: Number(botao.dataset.memorialId) }
-          : { item_id: Number(botao.dataset.id) };
-        await chamarApi(`/terceirizacao/projetos/${projetoId}/formula`, { method: "PUT", body: corpo });
-        renderTerceirizacaoDetalhe(projetoId);
+      app.querySelectorAll(".resultados-busca-formula-terceirizacao").forEach((listaResultadosFormula) => {
+        listaResultadosFormula.addEventListener("click", async (e) => {
+          const botao = e.target.closest(".item-busca-resultado");
+          if (!botao) return;
+          const corpo = botao.dataset.origem === "memorial"
+            ? { memorial_produto_id: Number(botao.dataset.memorialId) }
+            : { item_id: Number(botao.dataset.id) };
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/itens/${botao.dataset.itemProjetoId}/formula`, { method: "PUT", body: corpo });
+          renderTerceirizacaoDetalhe(projetoId);
+        });
       });
 
       app.querySelectorAll(".botao-embalagem-opcao").forEach((botao) => {
         botao.addEventListener("click", async () => {
           const campo = botao.dataset.campo;
           const id = Number(botao.dataset.id);
+          const itemProjetoId = botao.dataset.itemProjetoId;
+          const it = projeto.itens.find((x) => String(x.id) === String(itemProjetoId));
           const corpo = {
-            pote_id: projeto.pote_id, tampa_id: projeto.tampa_id, capsula_id: projeto.capsula_id,
-            quantidade_por_pote: projeto.quantidade_por_pote, unidade_quantidade: projeto.unidade_quantidade,
+            pote_id: it.pote_id, tampa_id: it.tampa_id, capsula_id: it.capsula_id,
+            quantidade_por_pote: it.quantidade_por_pote, unidade_quantidade: it.unidade_quantidade,
           };
           corpo[campo] = id;
           // Trocar de pote invalida a tampa escolhida antes (pode não ser
           // mais compatível) — deixa o usuário escolher de novo.
           if (campo === "pote_id") corpo.tampa_id = null;
           try {
-            await chamarApi(`/terceirizacao/projetos/${projetoId}/embalagem`, { method: "PUT", body: corpo });
+            await chamarApi(`/terceirizacao/projetos/${projetoId}/itens/${itemProjetoId}/embalagem`, { method: "PUT", body: corpo });
             renderTerceirizacaoDetalhe(projetoId);
           } catch (erro) {
             definirFlash("erro", erro.message || "Não foi possível salvar a embalagem.");
@@ -11215,21 +11298,24 @@
         });
       });
 
-      const botaoSalvarQtd = document.querySelector('[data-acao="salvar-quantidade-embalagem"]');
-      if (botaoSalvarQtd) {
+      app.querySelectorAll('[data-acao="salvar-quantidade-embalagem"]').forEach((botaoSalvarQtd) => {
         botaoSalvarQtd.addEventListener("click", async () => {
-          await chamarApi(`/terceirizacao/projetos/${projetoId}/embalagem`, {
+          const itemProjetoId = botaoSalvarQtd.dataset.itemProjetoId;
+          const it = projeto.itens.find((x) => String(x.id) === String(itemProjetoId));
+          const campoQtd = app.querySelector(`.terceirizacao-quantidade[data-item-projeto-id="${itemProjetoId}"]`);
+          const campoUnidade = app.querySelector(`.terceirizacao-unidade[data-item-projeto-id="${itemProjetoId}"]`);
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/itens/${itemProjetoId}/embalagem`, {
             method: "PUT",
             body: {
-              pote_id: projeto.pote_id, tampa_id: projeto.tampa_id, capsula_id: projeto.capsula_id,
-              quantidade_por_pote: document.getElementById("terceirizacao-quantidade").value ? Number(document.getElementById("terceirizacao-quantidade").value) : null,
-              unidade_quantidade: document.getElementById("terceirizacao-unidade").value || null,
+              pote_id: it.pote_id, tampa_id: it.tampa_id, capsula_id: it.capsula_id,
+              quantidade_por_pote: campoQtd.value ? Number(campoQtd.value) : null,
+              unidade_quantidade: campoUnidade.value || null,
             },
           });
           definirFlash("ok", "Quantidade salva.");
           renderTerceirizacaoDetalhe(projetoId);
         });
-      }
+      });
 
       const botaoSalvarEmbalagemSecundaria = document.querySelector('[data-acao="salvar-embalagem-secundaria-terceirizacao"]');
       if (botaoSalvarEmbalagemSecundaria) {
@@ -11445,10 +11531,10 @@
     }
   }
 
-  function modalSolicitarAlteracaoFormula(projetoId) {
+  function modalSolicitarAlteracaoFormula(projetoId, itemProjetoId) {
     abrirModal(`
       <h3>Solicitar alteração da fórmula</h3>
-      <form data-form="solicitar-alteracao-formula" data-id="${projetoId}">
+      <form data-form="solicitar-alteracao-formula" data-id="${projetoId}" data-item-projeto-id="${itemProjetoId}">
         <div class="campo"><label>Descreva a alteração desejada</label><textarea name="texto" rows="4" required></textarea></div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
@@ -16748,7 +16834,7 @@
         modalCancelarProjetoTerceirizacao(Number(alvo.dataset.id));
         return;
       case "abrir-solicitar-alteracao-formula":
-        modalSolicitarAlteracaoFormula(Number(alvo.dataset.id));
+        modalSolicitarAlteracaoFormula(Number(alvo.dataset.id), Number(alvo.dataset.itemProjetoId));
         return;
       case "novo-embalagem":
         modalEmbalagem(alvo.dataset.tipo, null);
@@ -18762,7 +18848,7 @@
         return renderTerceirizacaoDetalhe(Number(form.dataset.id));
       }
       case "solicitar-alteracao-formula": {
-        await chamarApi(`/terceirizacao/projetos/${form.dataset.id}/solicitar-alteracao-formula`, {
+        await chamarApi(`/terceirizacao/projetos/${form.dataset.id}/itens/${form.dataset.itemProjetoId}/solicitar-alteracao-formula`, {
           method: "PUT", body: { texto: dados.get("texto") },
         });
         fecharModais();

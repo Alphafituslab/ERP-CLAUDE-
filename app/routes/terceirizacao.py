@@ -100,24 +100,61 @@ def _projeto_ou_404(conn, projeto_id):
     return dict(row)
 
 
+def _item_projeto_hidratado(conn, linha):
+    """Fase 146 — um item da lista `terceirizacao_projeto_itens`, com
+    fórmula/pote/tampa/cápsula/nutrição já resolvidos (mesmo padrão que
+    `_projeto_detalhado` fazia pro projeto inteiro antes de virar
+    multi-item)."""
+    d = dict(linha)
+    if d["item_id"]:
+        item = conn.execute(
+            "SELECT i.*, mp.nome AS nome_memorial FROM itens i LEFT JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id WHERE i.id = ?",
+            (d["item_id"],),
+        ).fetchone()
+        d["item"] = dict(item) if item else None
+        d["nutricao"] = _nutricao_para_item(conn, d["item_id"])
+    else:
+        d["item"] = None
+        d["nutricao"] = None
+    if d["pote_id"]:
+        row = conn.execute("SELECT * FROM terceirizacao_potes WHERE id = ?", (d["pote_id"],)).fetchone()
+        d["pote"] = dict(row) if row else None
+    if d["tampa_id"]:
+        row = conn.execute("SELECT * FROM terceirizacao_tampas WHERE id = ?", (d["tampa_id"],)).fetchone()
+        d["tampa"] = dict(row) if row else None
+    if d["capsula_id"]:
+        row = conn.execute("SELECT * FROM terceirizacao_capsulas WHERE id = ?", (d["capsula_id"],)).fetchone()
+        d["capsula"] = dict(row) if row else None
+    return d
+
+
+def _itens_do_projeto(conn, projeto_id):
+    linhas = conn.execute(
+        "SELECT * FROM terceirizacao_projeto_itens WHERE projeto_id = ? ORDER BY ordem, id", (projeto_id,)
+    ).fetchall()
+    return [_item_projeto_hidratado(conn, l) for l in linhas]
+
+
+def _item_projeto_ou_404(conn, projeto_id, item_projeto_id):
+    row = conn.execute(
+        "SELECT * FROM terceirizacao_projeto_itens WHERE id = ? AND projeto_id = ?", (item_projeto_id, projeto_id)
+    ).fetchone()
+    if row is None:
+        raise ApiError("Item não encontrado neste projeto.", status=404)
+    return dict(row)
+
+
 def _projeto_detalhado(conn, projeto_id):
     p = _projeto_ou_404(conn, projeto_id)
     p["cliente"] = _cliente_ou_404(conn, p["cliente_id"])
-    if p["item_id"]:
-        item = conn.execute(
-            "SELECT i.*, mp.nome AS nome_memorial FROM itens i LEFT JOIN memorial_produtos mp ON mp.id = i.memorial_produto_id WHERE i.id = ?",
-            (p["item_id"],),
-        ).fetchone()
-        p["item"] = dict(item) if item else None
-    if p["pote_id"]:
-        row = conn.execute("SELECT * FROM terceirizacao_potes WHERE id = ?", (p["pote_id"],)).fetchone()
-        p["pote"] = dict(row) if row else None
-    if p["tampa_id"]:
-        row = conn.execute("SELECT * FROM terceirizacao_tampas WHERE id = ?", (p["tampa_id"],)).fetchone()
-        p["tampa"] = dict(row) if row else None
-    if p["capsula_id"]:
-        row = conn.execute("SELECT * FROM terceirizacao_capsulas WHERE id = ?", (p["capsula_id"],)).fetchone()
-        p["capsula"] = dict(row) if row else None
+    # Fase 146 — um projeto agora pode ter VÁRIOS itens (fórmula +
+    # embalagem própria cada), não mais um só. As colunas antigas
+    # (item_id/pote_id/tampa_id/capsula_id/quantidade_por_pote/
+    # unidade_quantidade/mockup_3d_imagem) direto em
+    # terceirizacao_projetos continuam no banco (nunca apagadas — dado
+    # de projetos criados antes desta fase, migrado pra cá também), mas
+    # o código novo só lê/escreve em `itens`.
+    p["itens"] = _itens_do_projeto(conn, projeto_id)
     briefing = conn.execute("SELECT * FROM terceirizacao_briefings WHERE projeto_id = ?", (projeto_id,)).fetchone()
     p["briefing"] = dict(briefing) if briefing else None
     return p
@@ -481,13 +518,21 @@ def listar_projetos():
         clausulas.append("p.cliente_id = ?")
         params.append(cliente_id)
     where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
+    # Fase 146 — a lista mostra o nome do primeiro item + quantos itens o
+    # projeto tem no total (não dá mais pra mostrar "o" item, pode ter
+    # vários) — subquery correlacionada em vez de JOIN porque cada
+    # projeto pode ter 0, 1 ou N linhas em terceirizacao_projeto_itens.
     rows = conn.execute(
         f"""
-        SELECT p.*, c.razao_social AS cliente_razao_social, i.descricao AS item_descricao,
-               u.nome AS responsavel_nome
+        SELECT p.*, c.razao_social AS cliente_razao_social, u.nome AS responsavel_nome,
+               (SELECT COUNT(*) FROM terceirizacao_projeto_itens pi WHERE pi.projeto_id = p.id) AS total_itens,
+               (
+                   SELECT i.descricao FROM terceirizacao_projeto_itens pi
+                   LEFT JOIN itens i ON i.id = pi.item_id
+                   WHERE pi.projeto_id = p.id ORDER BY pi.ordem, pi.id LIMIT 1
+               ) AS item_descricao
         FROM terceirizacao_projetos p
         JOIN clientes c ON c.id = p.cliente_id
-        LEFT JOIN itens i ON i.id = p.item_id
         LEFT JOIN usuarios u ON u.id = p.responsavel_id
         {where} ORDER BY p.id DESC
         """,
@@ -568,47 +613,12 @@ def _item_id_para_memorial_produto(conn, usuario_id, memorial_produto_id):
     return cur.lastrowid
 
 
-@bp.put("/projetos/<int:projeto_id>/formula")
-@requires_permission("terceirizacao", "criar")
-def definir_formula_projeto(projeto_id):
-    usuario_atual = g.usuario_atual
-    conn = get_db()
-    projeto = _projeto_ou_404(conn, projeto_id)
+def _exigir_projeto_rascunho(projeto, acao):
     if projeto["status"] != "rascunho":
-        raise ApiError("Só é possível alterar a fórmula enquanto o projeto está em rascunho.", status=400)
-    dados = request.get_json(silent=True) or {}
-    item_id = dados.get("item_id")
-    memorial_produto_id = dados.get("memorial_produto_id")
-    if memorial_produto_id is not None:
-        item_id = _item_id_para_memorial_produto(conn, usuario_atual["id"], memorial_produto_id)
-    elif item_id is not None and not conn.execute(
-        "SELECT 1 FROM itens WHERE id = ? AND tipo = 'produto_acabado'", (item_id,)
-    ).fetchone():
-        raise ApiError("Item não encontrado ou não é um produto acabado.", status=404)
-    conn.execute(
-        "UPDATE terceirizacao_projetos SET item_id = ?, atualizado_em = ? WHERE id = ?",
-        (item_id, _now_iso(), projeto_id),
-    )
-    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
-                     acao="formula_definida", valor_novo={"item_id": item_id}, ip=client_ip(), dispositivo=client_device())
-    return jsonify(_projeto_detalhado(conn, projeto_id))
+        raise ApiError(f"Só é possível {acao} enquanto o projeto está em rascunho.", status=400)
 
 
-@bp.put("/projetos/<int:projeto_id>/embalagem")
-@requires_permission("terceirizacao", "criar")
-def definir_embalagem_projeto(projeto_id):
-    usuario_atual = g.usuario_atual
-    conn = get_db()
-    projeto = _projeto_ou_404(conn, projeto_id)
-    if projeto["status"] != "rascunho":
-        raise ApiError("Só é possível alterar a embalagem enquanto o projeto está em rascunho.", status=400)
-    dados = request.get_json(silent=True) or {}
-    pote_id, tampa_id, capsula_id = dados.get("pote_id"), dados.get("tampa_id"), dados.get("capsula_id")
-    quantidade = dados.get("quantidade_por_pote")
-    unidade_quantidade = dados.get("unidade_quantidade")
-    if unidade_quantidade is not None and unidade_quantidade not in ("capsulas", "gramas"):
-        raise ApiError("unidade_quantidade deve ser 'capsulas' ou 'gramas'.", status=400)
-
+def _validar_embalagem(conn, pote_id, tampa_id, capsula_id):
     if pote_id and not conn.execute("SELECT 1 FROM terceirizacao_potes WHERE id = ? AND ativo = 1", (pote_id,)).fetchone():
         raise ApiError("Pote não encontrado ou inativo.", status=404)
     if tampa_id:
@@ -626,36 +636,137 @@ def definir_embalagem_projeto(projeto_id):
     if capsula_id and not conn.execute("SELECT 1 FROM terceirizacao_capsulas WHERE id = ? AND ativo = 1", (capsula_id,)).fetchone():
         raise ApiError("Cápsula não encontrada ou inativa.", status=404)
 
+
+# =============================================================================
+# Fase 146 — itens do projeto (cada um com fórmula + embalagem própria).
+# Antes desta fase um projeto tinha UM item_id/pote_id/tampa_id/capsula_id
+# direto em terceirizacao_projetos; pedido do usuário (2026-09-03): o
+# mesmo projeto/contrato pode incluir mais de um produto (ex.: Colágeno
+# num pote, Creatina noutro tipo de embalagem), decisão confirmada com o
+# usuário: cada item tem embalagem própria (não uma única pro projeto
+# inteiro). As colunas antigas continuam no banco (nunca apagadas), só
+# não são mais lidas/escritas pelo código novo.
+# =============================================================================
+
+@bp.post("/projetos/<int:projeto_id>/itens")
+@requires_permission("terceirizacao", "criar")
+def adicionar_item_projeto(projeto_id):
+    """Cria uma linha nova (fórmula ainda sem embalagem/quantidade — isso
+    se define depois, via PUT .../embalagem) — mesma ideia de "adicionar
+    mais um produto ao pedido"."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    _exigir_projeto_rascunho(projeto, "adicionar um item")
+    dados = request.get_json(silent=True) or {}
+    item_id = dados.get("item_id")
+    memorial_produto_id = dados.get("memorial_produto_id")
+    if memorial_produto_id is not None:
+        item_id = _item_id_para_memorial_produto(conn, usuario_atual["id"], memorial_produto_id)
+    elif item_id is not None and not conn.execute(
+        "SELECT 1 FROM itens WHERE id = ? AND tipo = 'produto_acabado'", (item_id,)
+    ).fetchone():
+        raise ApiError("Item não encontrado ou não é um produto acabado.", status=404)
+    else:
+        raise ApiError("Informe item_id ou memorial_produto_id.", status=400)
+    proxima_ordem = (conn.execute(
+        "SELECT COALESCE(MAX(ordem), -1) + 1 AS o FROM terceirizacao_projeto_itens WHERE projeto_id = ?", (projeto_id,)
+    ).fetchone()["o"])
+    cur = conn.execute(
+        "INSERT INTO terceirizacao_projeto_itens (projeto_id, item_id, ordem) VALUES (?, ?, ?)",
+        (projeto_id, item_id, proxima_ordem),
+    )
+    conn.execute("UPDATE terceirizacao_projetos SET atualizado_em = ? WHERE id = ?", (_now_iso(), projeto_id))
+    audit.registrar(conn, tabela="terceirizacao_projeto_itens", registro_id=cur.lastrowid, usuario_id=usuario_atual["id"],
+                     acao="item_adicionado", valor_novo={"item_id": item_id}, ip=client_ip(), dispositivo=client_device())
+    return jsonify(_projeto_detalhado(conn, projeto_id)), 201
+
+
+@bp.put("/projetos/<int:projeto_id>/itens/<int:item_projeto_id>/formula")
+@requires_permission("terceirizacao", "criar")
+def definir_formula_item(projeto_id, item_projeto_id):
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    _exigir_projeto_rascunho(projeto, "alterar a fórmula")
+    _item_projeto_ou_404(conn, projeto_id, item_projeto_id)
+    dados = request.get_json(silent=True) or {}
+    item_id = dados.get("item_id")
+    memorial_produto_id = dados.get("memorial_produto_id")
+    if memorial_produto_id is not None:
+        item_id = _item_id_para_memorial_produto(conn, usuario_atual["id"], memorial_produto_id)
+    elif item_id is not None and not conn.execute(
+        "SELECT 1 FROM itens WHERE id = ? AND tipo = 'produto_acabado'", (item_id,)
+    ).fetchone():
+        raise ApiError("Item não encontrado ou não é um produto acabado.", status=404)
+    conn.execute("UPDATE terceirizacao_projeto_itens SET item_id = ? WHERE id = ?", (item_id, item_projeto_id))
+    conn.execute("UPDATE terceirizacao_projetos SET atualizado_em = ? WHERE id = ?", (_now_iso(), projeto_id))
+    audit.registrar(conn, tabela="terceirizacao_projeto_itens", registro_id=item_projeto_id, usuario_id=usuario_atual["id"],
+                     acao="formula_definida", valor_novo={"item_id": item_id}, ip=client_ip(), dispositivo=client_device())
+    return jsonify(_projeto_detalhado(conn, projeto_id))
+
+
+@bp.put("/projetos/<int:projeto_id>/itens/<int:item_projeto_id>/embalagem")
+@requires_permission("terceirizacao", "criar")
+def definir_embalagem_item(projeto_id, item_projeto_id):
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    _exigir_projeto_rascunho(projeto, "alterar a embalagem")
+    _item_projeto_ou_404(conn, projeto_id, item_projeto_id)
+    dados = request.get_json(silent=True) or {}
+    pote_id, tampa_id, capsula_id = dados.get("pote_id"), dados.get("tampa_id"), dados.get("capsula_id")
+    quantidade = dados.get("quantidade_por_pote")
+    unidade_quantidade = dados.get("unidade_quantidade")
+    if unidade_quantidade is not None and unidade_quantidade not in ("capsulas", "gramas"):
+        raise ApiError("unidade_quantidade deve ser 'capsulas' ou 'gramas'.", status=400)
+    _validar_embalagem(conn, pote_id, tampa_id, capsula_id)
     conn.execute(
         """
-        UPDATE terceirizacao_projetos
-        SET pote_id = ?, tampa_id = ?, capsula_id = ?, quantidade_por_pote = ?, unidade_quantidade = ?, atualizado_em = ?
+        UPDATE terceirizacao_projeto_itens
+        SET pote_id = ?, tampa_id = ?, capsula_id = ?, quantidade_por_pote = ?, unidade_quantidade = ?
         WHERE id = ?
         """,
-        (pote_id, tampa_id, capsula_id, quantidade, unidade_quantidade, _now_iso(), projeto_id),
+        (pote_id, tampa_id, capsula_id, quantidade, unidade_quantidade, item_projeto_id),
     )
-    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+    conn.execute("UPDATE terceirizacao_projetos SET atualizado_em = ? WHERE id = ?", (_now_iso(), projeto_id))
+    audit.registrar(conn, tabela="terceirizacao_projeto_itens", registro_id=item_projeto_id, usuario_id=usuario_atual["id"],
                      acao="embalagem_definida", valor_novo=dados, ip=client_ip(), dispositivo=client_device())
     return jsonify(_projeto_detalhado(conn, projeto_id))
 
 
-@bp.put("/projetos/<int:projeto_id>/solicitar-alteracao-formula")
+@bp.delete("/projetos/<int:projeto_id>/itens/<int:item_projeto_id>")
 @requires_permission("terceirizacao", "criar")
-def solicitar_alteracao_formula(projeto_id):
+def excluir_item_projeto(projeto_id, item_projeto_id):
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    projeto = _projeto_ou_404(conn, projeto_id)
+    _exigir_projeto_rascunho(projeto, "remover um item")
+    item = _item_projeto_ou_404(conn, projeto_id, item_projeto_id)
+    conn.execute("DELETE FROM terceirizacao_projeto_itens WHERE id = ?", (item_projeto_id,))
+    conn.execute("UPDATE terceirizacao_projetos SET atualizado_em = ? WHERE id = ?", (_now_iso(), projeto_id))
+    audit.registrar(conn, tabela="terceirizacao_projeto_itens", registro_id=item_projeto_id, usuario_id=usuario_atual["id"],
+                     acao="item_removido", valor_anterior=item, ip=client_ip(), dispositivo=client_device())
+    return jsonify(_projeto_detalhado(conn, projeto_id))
+
+
+@bp.put("/projetos/<int:projeto_id>/itens/<int:item_projeto_id>/solicitar-alteracao-formula")
+@requires_permission("terceirizacao", "criar")
+def solicitar_alteracao_formula_item(projeto_id, item_projeto_id):
     """Etapa 1 do pedido do usuário: cliente não edita a fórmula aprovada
-    diretamente — registra um pedido de alteração pra avaliação interna."""
+    diretamente — registra um pedido de alteração pra avaliação interna,
+    agora POR ITEM (cada produto do projeto pode ter seu próprio pedido
+    de alteração, independente dos outros)."""
     usuario_atual = g.usuario_atual
     conn = get_db()
     _projeto_ou_404(conn, projeto_id)
+    _item_projeto_ou_404(conn, projeto_id, item_projeto_id)
     dados = request.get_json(silent=True) or {}
     texto = (dados.get("texto") or "").strip()
     if not texto:
         raise ApiError("Descreva a alteração desejada.", status=400)
-    conn.execute(
-        "UPDATE terceirizacao_projetos SET solicitacao_alteracao_formula = ?, atualizado_em = ? WHERE id = ?",
-        (texto, _now_iso(), projeto_id),
-    )
-    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+    conn.execute("UPDATE terceirizacao_projeto_itens SET solicitacao_alteracao_formula = ? WHERE id = ?", (texto, item_projeto_id))
+    audit.registrar(conn, tabela="terceirizacao_projeto_itens", registro_id=item_projeto_id, usuario_id=usuario_atual["id"],
                      acao="alteracao_formula_solicitada", valor_novo={"texto": texto}, ip=client_ip(), dispositivo=client_device())
     return jsonify(_projeto_detalhado(conn, projeto_id))
 
@@ -1118,22 +1229,33 @@ def enviar_para_aprovacao(projeto_id):
     if projeto["status"] not in ("rascunho", "aguardando_revisao"):
         raise ApiError(f"Não é possível enviar para aprovação um projeto '{projeto['status']}'.", status=400)
 
+    # Fase 146 — o checklist agora vale por ITEM (cada produto do projeto
+    # precisa da própria fórmula/embalagem/quantidade completas), mais a
+    # exigência de ter pelo menos 1 item e o briefing (esse continua
+    # único, por projeto).
+    itens = conn.execute("SELECT * FROM terceirizacao_projeto_itens WHERE projeto_id = ?", (projeto_id,)).fetchall()
     faltando = []
-    if not projeto["item_id"]:
-        faltando.append("fórmula")
-    if not projeto["pote_id"]:
-        faltando.append("pote")
-    if not projeto["tampa_id"]:
-        faltando.append("tampa")
-    if not projeto["capsula_id"]:
-        faltando.append("cápsula")
-    if not projeto["quantidade_por_pote"]:
-        faltando.append("quantidade")
+    if not itens:
+        faltando.append("pelo menos 1 item (fórmula)")
+    for idx, item in enumerate(itens, start=1):
+        campos_item = []
+        if not item["item_id"]:
+            campos_item.append("fórmula")
+        if not item["pote_id"]:
+            campos_item.append("pote")
+        if not item["tampa_id"]:
+            campos_item.append("tampa")
+        if not item["capsula_id"]:
+            campos_item.append("cápsula")
+        if not item["quantidade_por_pote"]:
+            campos_item.append("quantidade")
+        if campos_item:
+            faltando.append(f"item {idx}: {', '.join(campos_item)}")
     if not conn.execute("SELECT 1 FROM terceirizacao_briefings WHERE projeto_id = ?", (projeto_id,)).fetchone():
         faltando.append("briefing")
     if faltando:
         raise ApiError(
-            f"Complete antes de enviar para aprovação: {', '.join(faltando)}.",
+            f"Complete antes de enviar para aprovação: {'; '.join(faltando)}.",
             status=400, codigo="checklist_incompleto",
         )
 
@@ -1325,7 +1447,7 @@ def iniciar_nova_versao(projeto_id):
 # imagens de embalagem preparado especificamente para isso (3D/IA, como o
 # pedido original já previa como evolução futura).
 
-def _gerar_mockup_png(projeto, cliente, item, pote, tampa, capsula):
+def _gerar_mockup_png(projeto, cliente, item, pote, tampa, capsula, quantidade_por_pote=None, unidade_quantidade=None):
     from PIL import Image, ImageDraw, ImageFont
 
     LARGURA, ALTURA = 900, 700
@@ -1352,9 +1474,9 @@ def _gerar_mockup_png(projeto, cliente, item, pote, tampa, capsula):
     nome_produto = (item["descricao"] if item else "Produto a definir").upper()
     desenho.text((40, 60), nome_produto, font=fonte_titulo, fill=COR_TEXTO)
     linha_quantidade = []
-    if projeto["quantidade_por_pote"]:
-        rotulo_unidade = "cápsulas" if projeto["unidade_quantidade"] == "capsulas" else "g"
-        linha_quantidade.append(f"{projeto['quantidade_por_pote']} {rotulo_unidade}")
+    if quantidade_por_pote:
+        rotulo_unidade = "cápsulas" if unidade_quantidade == "capsulas" else "g"
+        linha_quantidade.append(f"{quantidade_por_pote} {rotulo_unidade}")
     desenho.text((40, 110), "SUPLEMENTO ALIMENTAR" + (" — " + " / ".join(linha_quantidade) if linha_quantidade else ""),
                  font=fonte_subtitulo, fill=COR_TEXTO_SUAVE)
 
@@ -1394,117 +1516,90 @@ def _gerar_mockup_png(projeto, cliente, item, pote, tampa, capsula):
     return saida.getvalue()
 
 
-@bp.get("/projetos/<int:projeto_id>/mockup.png")
+@bp.get("/projetos/<int:projeto_id>/itens/<int:item_projeto_id>/mockup.png")
 @requires_permission("terceirizacao", "visualizar")
-def obter_mockup_projeto(projeto_id):
+def obter_mockup_item(projeto_id, item_projeto_id):
     conn = get_db()
     projeto = _projeto_detalhado(conn, projeto_id)
+    item = next((i for i in projeto["itens"] if i["id"] == item_projeto_id), None)
+    if item is None:
+        raise ApiError("Item não encontrado neste projeto.", status=404)
     png_bytes = _gerar_mockup_png(
-        projeto, projeto["cliente"], projeto.get("item"), projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
+        projeto, projeto["cliente"], item.get("item"), item.get("pote"), item.get("tampa"), item.get("capsula"),
+        item.get("quantidade_por_pote"), item.get("unidade_quantidade"),
     )
     return Response(png_bytes, mimetype="image/png")
 
 
-@bp.put("/projetos/<int:projeto_id>/mockup-3d")
+@bp.put("/projetos/<int:projeto_id>/itens/<int:item_projeto_id>/mockup-3d")
 @requires_permission("terceirizacao", "visualizar")
-def salvar_mockup_3d(projeto_id):
-    """Fase 144 — o servidor não sabe renderizar 3D; quem monta a cena
-    (Three.js, ver renderTerceirizacaoDetalhe em app.js) é o navegador —
-    esta rota só recebe a imagem PNG já capturada de lá (`canvas.
-    toDataURL()`) e guarda, pra reaproveitar tanto na tela quanto no PDF
-    do Dossiê sem precisar renderizar de novo toda vez. Permissão
-    'visualizar' (não 'criar') de propósito — qualquer um que já pode ver
-    o projeto pode deixar a cena carregada e capturar a imagem, isso não
-    é uma mudança de dado do projeto em si, só um retrato dele."""
+def salvar_mockup_3d_item(projeto_id, item_projeto_id):
+    """Fase 144 (agora por ITEM desde a Fase 146) — o servidor não sabe
+    renderizar 3D; quem monta a cena (Three.js, ver renderTerceirizacaoDetalhe
+    em app.js) é o navegador — esta rota só recebe a imagem PNG já
+    capturada de lá (`canvas.toDataURL()`) e guarda, pra reaproveitar
+    tanto na tela quanto no PDF do Dossiê sem precisar renderizar de novo
+    toda vez. Permissão 'visualizar' (não 'criar') de propósito —
+    qualquer um que já pode ver o projeto pode deixar a cena carregada e
+    capturar a imagem, isso não é uma mudança de dado do projeto em si,
+    só um retrato dele."""
     usuario_atual = g.usuario_atual
     conn = get_db()
     _projeto_ou_404(conn, projeto_id)
+    _item_projeto_ou_404(conn, projeto_id, item_projeto_id)
     dados = request.get_json(silent=True) or {}
     imagem = validar_imagem_base64(dados.get("imagem"), tipos_permitidos=("image/png",), tamanho_maximo_bytes=6 * 1024 * 1024)
     if not imagem:
         raise ApiError("Envie a imagem capturada.", status=400)
-    conn.execute(
-        "UPDATE terceirizacao_projetos SET mockup_3d_imagem = ?, atualizado_em = ? WHERE id = ?",
-        (imagem, _now_iso(), projeto_id),
-    )
-    audit.registrar(conn, tabela="terceirizacao_projetos", registro_id=projeto_id, usuario_id=usuario_atual["id"],
+    conn.execute("UPDATE terceirizacao_projeto_itens SET mockup_3d_imagem = ? WHERE id = ?", (imagem, item_projeto_id))
+    audit.registrar(conn, tabela="terceirizacao_projeto_itens", registro_id=item_projeto_id, usuario_id=usuario_atual["id"],
                      acao="mockup_3d_capturado", ip=client_ip(), dispositivo=client_device())
     return jsonify({"ok": True})
 
 
 # ---- Dossiê de Desenvolvimento de Produto (PDF) ----
 
-def _gerar_pdf_dossie(projeto, nutricao):
+def _secao_item_pdf(elementos, indice, total, item, estilo_secao, estilo_normal, estilo_suave, cor_titulo):
+    """Fase 146 — um bloco completo (imagem/embalagem/fórmula/nutrição)
+    POR ITEM do projeto — chamado uma vez pra cada produto, em vez de
+    uma vez só pro projeto inteiro."""
     from reportlab.lib import colors
-    from reportlab.lib.enums import TA_CENTER
-    from reportlab.lib.pagesizes import A4
-    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import cm
-    from reportlab.platypus import HRFlowable, Image as RLImage, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    from reportlab.platypus import Image as RLImage, PageBreak, Paragraph, Spacer, Table, TableStyle
 
-    estilos = getSampleStyleSheet()
-    cor_titulo = colors.HexColor("#1a3c2e")
-    cor_dourado = colors.HexColor("#a8863f")
-    estilo_titulo = ParagraphStyle("TituloDossie", parent=estilos["Title"], textColor=cor_titulo, alignment=TA_CENTER, fontSize=20)
-    estilo_secao = ParagraphStyle("SecaoDossie", parent=estilos["Heading2"], textColor=cor_titulo, spaceBefore=14, spaceAfter=6)
-    estilo_normal = estilos["Normal"]
-    estilo_suave = ParagraphStyle("SuaveDossie", parent=estilos["Normal"], textColor=colors.HexColor("#666666"), fontSize=9)
+    if total > 1:
+        elementos.append(Paragraph(f"Item {indice} de {total}", estilo_secao))
 
-    elementos = []
-    elementos.append(Spacer(1, 1.5 * cm))
-    elementos.append(Paragraph("ALPHAFITUS — LABORATÓRIO NUTRACÊUTICO", estilo_suave))
-    elementos.append(Paragraph("DOSSIÊ DE DESENVOLVIMENTO DE PRODUTO", estilo_titulo))
-    elementos.append(HRFlowable(width="100%", thickness=1, color=cor_dourado, spaceBefore=8, spaceAfter=16))
-
-    # Fase 144 — se o navegador já capturou uma imagem da cena 3D
-    # (pote+tampa+cápsula montados, cores do cadastro), usa ela como a
-    # imagem principal do dossiê — bem mais bonita que o "cartão de
-    # especificação" 2D antigo. Sem captura ainda (projeto nunca abriu a
-    # tela de preview, ou o navegador não tinha WebGL), cai de volta pro
-    # mockup 2D de sempre — nunca deixa o PDF sem nenhuma imagem.
+    # Imagem — 3D capturado se existir, senão o cartão 2D de sempre;
+    # nunca deixa o item sem nenhuma imagem.
     try:
-        imagem_3d = projeto.get("mockup_3d_imagem")
+        imagem_3d = item.get("mockup_3d_imagem")
         if imagem_3d:
             from PIL import Image as PILImage
             m = re.match(r"^data:([\w/+.-]+);base64,(.+)$", imagem_3d, re.DOTALL)
             dados_img = base64.b64decode(m.group(2)) if m else base64.b64decode(imagem_3d)
             imagem_pil = PILImage.open(io.BytesIO(dados_img))
             proporcao = imagem_pil.height / imagem_pil.width
-            largura_pdf = 13 * cm
+            largura_pdf = 11 * cm
             elementos.append(RLImage(io.BytesIO(dados_img), width=largura_pdf, height=largura_pdf * proporcao))
-        else:
+        elif item.get("pote") or item.get("tampa") or item.get("capsula"):
             mockup_bytes = _gerar_mockup_png(
-                projeto, projeto["cliente"], projeto.get("item"), projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
+                {"numero": ""}, {"razao_social": ""}, item.get("item"), item.get("pote"), item.get("tampa"), item.get("capsula"),
+                item.get("quantidade_por_pote"), item.get("unidade_quantidade"),
             )
-            elementos.append(RLImage(io.BytesIO(mockup_bytes), width=15 * cm, height=15 * cm * 700 / 900))
-        elementos.append(Spacer(1, 0.5 * cm))
+            elementos.append(RLImage(io.BytesIO(mockup_bytes), width=13 * cm, height=13 * cm * 700 / 900))
+        elementos.append(Spacer(1, 0.4 * cm))
     except Exception:
         pass
 
-    tabela_identificacao = Table([
-        ["Projeto", projeto["numero"]],
-        ["Cliente", projeto["cliente"]["razao_social"]],
-        ["CNPJ", projeto["cliente"].get("cnpj") or "—"],
-        ["Versão", str(projeto["versao"])],
-        ["Data", _now_iso()[:10]],
-    ], colWidths=[4 * cm, 12 * cm])
-    tabela_identificacao.setStyle(TableStyle([
-        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
-        ("TEXTCOLOR", (0, 0), (0, -1), cor_titulo),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-    ]))
-    elementos.append(tabela_identificacao)
-    elementos.append(Spacer(1, 0.4 * cm))
-
     elementos.append(Paragraph("Produto", estilo_secao))
-    item = projeto.get("item")
+    prod = item.get("item")
     elementos.append(Paragraph(
-        f"<b>{item['descricao']}</b> ({item['codigo']})" if item else "<i>Fórmula ainda não definida.</i>", estilo_normal
+        f"<b>{prod['descricao']}</b> ({prod['codigo']})" if prod else "<i>Fórmula ainda não definida.</i>", estilo_normal
     ))
 
     elementos.append(Paragraph("Embalagem", estilo_secao))
-    pote, tampa, capsula = projeto.get("pote"), projeto.get("tampa"), projeto.get("capsula")
+    pote, tampa, capsula = item.get("pote"), item.get("tampa"), item.get("capsula")
     linhas_embalagem = [["Item", "Nome", "Cor/Material"]]
     if pote:
         linhas_embalagem.append(["Pote", pote["nome"], pote.get("cor") or ""])
@@ -1512,9 +1607,9 @@ def _gerar_pdf_dossie(projeto, nutricao):
         linhas_embalagem.append(["Tampa", tampa["nome"], tampa.get("cor") or ""])
     if capsula:
         linhas_embalagem.append(["Cápsula", capsula["nome"], f"{capsula.get('cor_cabeca', '')}/{capsula.get('cor_corpo', '')}"])
-    if projeto["quantidade_por_pote"]:
-        rotulo_unidade = "cápsulas" if projeto["unidade_quantidade"] == "capsulas" else "g"
-        linhas_embalagem.append(["Quantidade", f"{projeto['quantidade_por_pote']} {rotulo_unidade}", ""])
+    if item.get("quantidade_por_pote"):
+        rotulo_unidade = "cápsulas" if item.get("unidade_quantidade") == "capsulas" else "g"
+        linhas_embalagem.append(["Quantidade", f"{item['quantidade_por_pote']} {rotulo_unidade}", ""])
     tabela_embalagem = Table(linhas_embalagem, colWidths=[3.5 * cm, 6 * cm, 6.5 * cm])
     tabela_embalagem.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), cor_titulo),
@@ -1527,6 +1622,7 @@ def _gerar_pdf_dossie(projeto, nutricao):
     elementos.append(tabela_embalagem)
 
     elementos.append(Paragraph("Fórmula — Tabela Nutricional e Ingredientes", estilo_secao))
+    nutricao = item.get("nutricao")
     if nutricao and nutricao.get("vinculado_a_memorial") and nutricao.get("memorial_aprovado_encontrado"):
         elementos.append(Paragraph(f"Do Memorial Técnico {nutricao.get('memorial_codigo')}.", estilo_suave))
         tab_nutri = nutricao.get("tabela_nutricional")
@@ -1568,6 +1664,63 @@ def _gerar_pdf_dossie(projeto, nutricao):
             "e ingredientes pendentes de vínculo.</i>", estilo_suave
         ))
 
+    if item.get("solicitacao_alteracao_formula"):
+        elementos.append(Paragraph("Solicitação de Alteração da Fórmula", estilo_secao))
+        elementos.append(Paragraph(item["solicitacao_alteracao_formula"], estilo_normal))
+
+    if indice < total:
+        elementos.append(PageBreak())
+
+
+def _gerar_pdf_dossie(projeto):
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_CENTER
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import cm
+    from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+
+    estilos = getSampleStyleSheet()
+    cor_titulo = colors.HexColor("#1a3c2e")
+    cor_dourado = colors.HexColor("#a8863f")
+    estilo_titulo = ParagraphStyle("TituloDossie", parent=estilos["Title"], textColor=cor_titulo, alignment=TA_CENTER, fontSize=20)
+    estilo_secao = ParagraphStyle("SecaoDossie", parent=estilos["Heading2"], textColor=cor_titulo, spaceBefore=14, spaceAfter=6)
+    estilo_normal = estilos["Normal"]
+    estilo_suave = ParagraphStyle("SuaveDossie", parent=estilos["Normal"], textColor=colors.HexColor("#666666"), fontSize=9)
+
+    elementos = []
+    elementos.append(Spacer(1, 1.5 * cm))
+    elementos.append(Paragraph("ALPHAFITUS — LABORATÓRIO NUTRACÊUTICO", estilo_suave))
+    elementos.append(Paragraph("DOSSIÊ DE DESENVOLVIMENTO DE PRODUTO", estilo_titulo))
+    elementos.append(HRFlowable(width="100%", thickness=1, color=cor_dourado, spaceBefore=8, spaceAfter=16))
+
+    tabela_identificacao = Table([
+        ["Projeto", projeto["numero"]],
+        ["Cliente", projeto["cliente"]["razao_social"]],
+        ["CNPJ", projeto["cliente"].get("cnpj") or "—"],
+        ["Versão", str(projeto["versao"])],
+        ["Data", _now_iso()[:10]],
+        ["Itens neste projeto", str(len(projeto["itens"]))],
+    ], colWidths=[4 * cm, 12 * cm])
+    tabela_identificacao.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (0, -1), "Helvetica-Bold"),
+        ("TEXTCOLOR", (0, 0), (0, -1), cor_titulo),
+        ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elementos.append(tabela_identificacao)
+    elementos.append(Spacer(1, 0.4 * cm))
+
+    # Fase 146 — um bloco (imagem + embalagem + fórmula + nutrição) por
+    # ITEM do projeto, em vez de um bloco só pro projeto inteiro; cada
+    # item além do primeiro começa em página nova, pra não misturar
+    # tabelas nutricionais de produtos diferentes na mesma página.
+    total_itens = len(projeto["itens"])
+    if total_itens == 0:
+        elementos.append(Paragraph("<i>Nenhum item adicionado a este projeto ainda.</i>", estilo_suave))
+    for indice, item in enumerate(projeto["itens"], start=1):
+        _secao_item_pdf(elementos, indice, total_itens, item, estilo_secao, estilo_normal, estilo_suave, cor_titulo)
+
     briefing = projeto.get("briefing")
     if briefing:
         elementos.append(Paragraph("Briefing do Projeto", estilo_secao))
@@ -1584,10 +1737,6 @@ def _gerar_pdf_dossie(projeto, nutricao):
             if cores_lista:
                 elementos.append(Paragraph(f"<b>Cores preferidas:</b> {', '.join(cores_lista)}", estilo_normal))
 
-    if projeto.get("solicitacao_alteracao_formula"):
-        elementos.append(Paragraph("Solicitação de Alteração da Fórmula", estilo_secao))
-        elementos.append(Paragraph(projeto["solicitacao_alteracao_formula"], estilo_normal))
-
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=2.2 * cm, bottomMargin=1.8 * cm, leftMargin=2 * cm, rightMargin=2 * cm)
     doc.build(elementos, onFirstPage=desenhar_cabecalho_logo, onLaterPages=desenhar_cabecalho_logo)
@@ -1599,8 +1748,7 @@ def _gerar_pdf_dossie(projeto, nutricao):
 def obter_documento_projeto(projeto_id):
     conn = get_db()
     projeto = _projeto_detalhado(conn, projeto_id)
-    nutricao = _nutricao_para_item(conn, projeto["item_id"]) if projeto.get("item_id") else None
-    pdf_bytes = _gerar_pdf_dossie(projeto, nutricao)
+    pdf_bytes = _gerar_pdf_dossie(projeto)
     nome_arquivo = _nome_arquivo_seguro(f"Dossie_{projeto['numero']}.pdf")
     return Response(
         pdf_bytes, mimetype="application/pdf",

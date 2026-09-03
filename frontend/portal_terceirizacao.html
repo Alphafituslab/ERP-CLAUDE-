@@ -183,7 +183,11 @@
     });
   }
 
-  let estadoLocal = { pote_id: null, tampa_id: null, capsula_id: null };
+  // Fase 146 — um projeto pode ter vários itens agora, cada um com
+  // fórmula/embalagem próprias; `estadoLocal` guarda a seleção de
+  // pote/tampa/cápsula EM ANDAMENTO por item (chave = item.id), pra não
+  // perder o clique no pote antes de escolher a tampa.
+  let estadoLocalPorItem = {};
 
   async function renderizar() {
     let projeto;
@@ -194,22 +198,29 @@
       return telaErro("Este link é inválido ou já foi revogado. Confira se copiou o endereço completo, ou peça um novo link ao seu contato na Alphafitus.");
     }
 
-    estadoLocal.pote_id = projeto.pote_id;
-    estadoLocal.tampa_id = projeto.tampa_id;
-    estadoLocal.capsula_id = projeto.capsula_id;
-
     const editavel = projeto.editavel;
     const briefing = projeto.briefing || {};
     const estiloAtual = briefing.estilo_visual ? JSON.parse(briefing.estilo_visual) : [];
     const coresAtuais = briefing.cores_preferidas ? JSON.parse(briefing.cores_preferidas) : [];
     const marcasAtuais = briefing.marcas_referencia ? JSON.parse(briefing.marcas_referencia) : [];
+    const itens = projeto.itens || [];
 
-    let embalagem = { potes: [], tampas: [], capsulas: [] };
-    try { embalagem = await chamar(`/${token}/embalagem-disponivel`); } catch (e) { /* segue sem opções, mostra o que já tem */ }
+    // Busca as opções de embalagem POR ITEM (tampas compatíveis dependem
+    // do pote de CADA item, que pode ser diferente entre eles).
+    const embalagemPorItem = {};
+    await Promise.all(itens.map(async (it) => {
+      estadoLocalPorItem[it.id] = estadoLocalPorItem[it.id] || { pote_id: it.pote_id, tampa_id: it.tampa_id, capsula_id: it.capsula_id };
+      const est = estadoLocalPorItem[it.id];
+      try {
+        embalagemPorItem[it.id] = await chamar(`/${token}/embalagem-disponivel${est.pote_id ? `?pote_id=${est.pote_id}` : ""}`);
+      } catch (e) {
+        embalagemPorItem[it.id] = { potes: [], tampas: [], capsulas: [] };
+      }
+    }));
 
-    function opcaoEmbalagem(o, campo, selecionadoId) {
+    function opcaoEmbalagem(o, campo, selecionadoId, itemId) {
       const cor = o.cor || o.cor_cabeca || "";
-      return `<div class="opcao-embalagem ${String(o.id) === String(selecionadoId) ? "selecionada" : ""}" data-campo="${campo}" data-id="${o.id}" ${editavel ? "" : 'style="cursor:default;"'}>
+      return `<div class="opcao-embalagem ${String(o.id) === String(selecionadoId) ? "selecionada" : ""}" data-campo="${campo}" data-id="${o.id}" data-item-id="${itemId}" ${editavel ? "" : 'style="cursor:default;"'}>
         ${o.imagem ? `<img src="${o.imagem}">` : '<div class="sem-foto">sem foto</div>'}
         <div class="nome">${escapeHtml(o.nome)}</div>
         <div class="cor">${escapeHtml(cor)}</div>
@@ -223,52 +234,52 @@
       ${!editavel ? `<div class="aviso">Seu projeto já foi enviado para a Alphafitus e está em análise interna. Se precisar alterar algo, entre em contato com seu vendedor.${projeto.assinatura_cliente_nome ? `<br>Confirmado por ${escapeHtml(projeto.assinatura_cliente_nome)}.` : ""}</div>` : ""}
 
       <div class="cartao">
-        <h2>Preview do Projeto</h2>
-        <img class="mockup-preview" id="mockup-img" alt="Preview do produto">
-        <div style="margin-top:12px;">
-          <a href="${API}/${token}/documento.pdf" target="_blank" class="botao-secundario" style="text-decoration:none;display:inline-block;">📄 Ver documento completo (PDF)</a>
-        </div>
+        <h2>Documento completo</h2>
+        <a href="${API}/${token}/documento.pdf" target="_blank" class="botao-secundario" style="text-decoration:none;display:inline-block;">📄 Ver documento completo (PDF)</a>
       </div>
 
+      ${itens.map((it, idx) => `
       <div class="cartao">
-        <h2>Fórmula</h2>
-        ${projeto.item ? `
-          <p><strong>${escapeHtml(projeto.item.nome_memorial || projeto.item.descricao)}</strong></p>
-          ${projeto.nutricao && projeto.nutricao.vinculado_a_memorial && projeto.nutricao.memorial_aprovado_encontrado ? `
-            ${renderizarTabelaNutricional(projeto.nutricao.tabela_nutricional)}
-            ${projeto.nutricao.lista_ingredientes ? `<p style="margin-top:10px;"><strong>Lista de Ingredientes:</strong> ${escapeHtml(projeto.nutricao.lista_ingredientes)}</p>` : ""}
+        <h2>${itens.length > 1 ? `Item ${idx + 1} — ` : ""}Fórmula</h2>
+        <img class="mockup-preview" id="mockup-img-${it.id}" alt="Preview do produto" style="max-width:220px;display:block;margin:0 auto 14px;">
+        ${it.item ? `
+          <p><strong>${escapeHtml(it.item.nome_memorial || it.item.descricao)}</strong></p>
+          ${it.nutricao && it.nutricao.vinculado_a_memorial && it.nutricao.memorial_aprovado_encontrado ? `
+            ${renderizarTabelaNutricional(it.nutricao.tabela_nutricional)}
+            ${it.nutricao.lista_ingredientes ? `<p style="margin-top:10px;"><strong>Lista de Ingredientes:</strong> ${escapeHtml(it.nutricao.lista_ingredientes)}</p>` : ""}
           ` : '<p class="texto-suave">Tabela nutricional ainda não disponível para este produto.</p>'}
           ${editavel ? `
             <div style="margin-top:14px;">
-              <button type="button" class="botao-secundario" id="btn-solicitar-alteracao">Solicitar alteração da fórmula</button>
+              <button type="button" class="botao-secundario btn-solicitar-alteracao" data-item-id="${it.id}">Solicitar alteração da fórmula</button>
             </div>` : ""}
         ` : '<p class="texto-suave">Fórmula ainda não definida pela equipe Alphafitus.</p>'}
-        ${projeto.solicitacao_alteracao_formula ? `<div class="aviso" style="margin-top:14px;">Alteração solicitada: ${escapeHtml(projeto.solicitacao_alteracao_formula)}</div>` : ""}
+        ${it.solicitacao_alteracao_formula ? `<div class="aviso" style="margin-top:14px;">Alteração solicitada: ${escapeHtml(it.solicitacao_alteracao_formula)}</div>` : ""}
       </div>
 
       <div class="cartao">
-        <h2>Personalização da Embalagem</h2>
+        <h2>Personalização da Embalagem${itens.length > 1 ? ` (item ${idx + 1})` : ""}</h2>
         <div class="campo"><label>Pote</label>
-          <div class="grade-opcoes" id="grade-potes">${embalagem.potes.map((o) => opcaoEmbalagem(o, "pote_id", projeto.pote_id)).join("") || '<p class="texto-suave">Nenhuma opção disponível.</p>'}</div>
+          <div class="grade-opcoes">${(embalagemPorItem[it.id].potes || []).map((o) => opcaoEmbalagem(o, "pote_id", estadoLocalPorItem[it.id].pote_id, it.id)).join("") || '<p class="texto-suave">Nenhuma opção disponível.</p>'}</div>
         </div>
         <div class="campo"><label>Tampa</label>
-          <div class="grade-opcoes" id="grade-tampas">${embalagem.tampas.map((o) => opcaoEmbalagem(o, "tampa_id", projeto.tampa_id)).join("") || '<p class="texto-suave">Escolha um pote primeiro.</p>'}</div>
+          <div class="grade-opcoes">${(embalagemPorItem[it.id].tampas || []).map((o) => opcaoEmbalagem(o, "tampa_id", estadoLocalPorItem[it.id].tampa_id, it.id)).join("") || '<p class="texto-suave">Escolha um pote primeiro.</p>'}</div>
         </div>
         <div class="campo"><label>Cápsula</label>
-          <div class="grade-opcoes" id="grade-capsulas">${embalagem.capsulas.map((o) => opcaoEmbalagem({ ...o, cor: o.cor_cabeca }, "capsula_id", projeto.capsula_id)).join("") || '<p class="texto-suave">Nenhuma opção disponível.</p>'}</div>
+          <div class="grade-opcoes">${(embalagemPorItem[it.id].capsulas || []).map((o) => opcaoEmbalagem({ ...o, cor: o.cor_cabeca }, "capsula_id", estadoLocalPorItem[it.id].capsula_id, it.id)).join("") || '<p class="texto-suave">Nenhuma opção disponível.</p>'}</div>
         </div>
         <div style="display:flex;gap:12px;margin-top:6px;">
-          <div class="campo" style="flex:1;"><label>Quantidade por pote</label><input type="text" id="campo-quantidade" value="${projeto.quantidade_por_pote ?? ""}" ${editavel ? "" : "disabled"}></div>
+          <div class="campo" style="flex:1;"><label>Quantidade por pote</label><input type="text" class="campo-quantidade" data-item-id="${it.id}" value="${it.quantidade_por_pote ?? ""}" ${editavel ? "" : "disabled"}></div>
           <div class="campo" style="flex:1;"><label>Unidade</label>
-            <select id="campo-unidade" ${editavel ? "" : "disabled"}>
+            <select class="campo-unidade" data-item-id="${it.id}" ${editavel ? "" : "disabled"}>
               <option value="">—</option>
-              <option value="capsulas" ${projeto.unidade_quantidade === "capsulas" ? "selected" : ""}>Cápsulas</option>
-              <option value="gramas" ${projeto.unidade_quantidade === "gramas" ? "selected" : ""}>Gramas</option>
+              <option value="capsulas" ${it.unidade_quantidade === "capsulas" ? "selected" : ""}>Cápsulas</option>
+              <option value="gramas" ${it.unidade_quantidade === "gramas" ? "selected" : ""}>Gramas</option>
             </select>
           </div>
         </div>
-        ${editavel ? '<button type="button" class="botao-secundario" id="btn-salvar-embalagem">Salvar embalagem e quantidade</button>' : ""}
+        ${editavel ? `<button type="button" class="botao-secundario btn-salvar-embalagem" data-item-id="${it.id}">Salvar embalagem e quantidade</button>` : ""}
       </div>
+      `).join("")}
 
       <div class="cartao">
         <h2>Conte-nos sobre sua marca</h2>
@@ -387,10 +398,19 @@
       ` : ""}
     `;
 
-    // preview do mockup (blob, sem precisar de auth aqui — token já valida)
-    fetch(`${API}/${token}/mockup.png`).then((r) => r.blob()).then((b) => {
-      document.getElementById("mockup-img").src = URL.createObjectURL(b);
-    }).catch(() => {});
+    // Fase 146 — preview do mockup POR ITEM: se já existe uma captura 3D
+    // salva (feita pela equipe interna ou pelo próprio cliente), usa ela
+    // direto (é só uma imagem estática, não precisa carregar Three.js
+    // aqui no portal); senão cai pro cartão 2D de sempre (blob, sem
+    // precisar de auth — token já valida).
+    itens.forEach((it) => {
+      const img = document.getElementById(`mockup-img-${it.id}`);
+      if (!img) return;
+      if (it.mockup_3d_imagem) { img.src = it.mockup_3d_imagem; return; }
+      fetch(`${API}/${token}/itens/${it.id}/mockup.png`).then((r) => r.blob()).then((b) => {
+        img.src = URL.createObjectURL(b);
+      }).catch(() => {});
+    });
 
     // Fase 140 — o botão de assinatura de verdade fica FORA do `editavel`
     // (que só cobre aguardando_cliente/em_preenchimento) — sem isso, o
@@ -460,14 +480,17 @@
 
     if (!editavel) return; // resto da função só liga eventos de edição
 
-    async function salvarEmbalagem() {
+    async function salvarEmbalagem(itemId) {
+      const est = estadoLocalPorItem[itemId];
+      const campoQtd = document.querySelector(`.campo-quantidade[data-item-id="${itemId}"]`);
+      const campoUnidade = document.querySelector(`.campo-unidade[data-item-id="${itemId}"]`);
       try {
-        await chamar(`/${token}/embalagem`, {
+        await chamar(`/${token}/itens/${itemId}/embalagem`, {
           method: "PUT",
           body: {
-            pote_id: estadoLocal.pote_id, tampa_id: estadoLocal.tampa_id, capsula_id: estadoLocal.capsula_id,
-            quantidade_por_pote: document.getElementById("campo-quantidade").value ? Number(document.getElementById("campo-quantidade").value) : null,
-            unidade_quantidade: document.getElementById("campo-unidade").value || null,
+            pote_id: est.pote_id, tampa_id: est.tampa_id, capsula_id: est.capsula_id,
+            quantidade_por_pote: campoQtd.value ? Number(campoQtd.value) : null,
+            unidade_quantidade: campoUnidade.value || null,
           },
         });
         renderizar();
@@ -480,13 +503,15 @@
     document.querySelectorAll(".opcao-embalagem").forEach((el) => {
       el.addEventListener("click", () => {
         const campo = el.dataset.campo;
-        estadoLocal[campo] = Number(el.dataset.id);
-        if (campo === "pote_id") estadoLocal.tampa_id = null;
-        salvarEmbalagem();
+        const itemId = el.dataset.itemId;
+        estadoLocalPorItem[itemId][campo] = Number(el.dataset.id);
+        if (campo === "pote_id") estadoLocalPorItem[itemId].tampa_id = null;
+        salvarEmbalagem(itemId);
       });
     });
-    const btnSalvarEmb = document.getElementById("btn-salvar-embalagem");
-    if (btnSalvarEmb) btnSalvarEmb.addEventListener("click", salvarEmbalagem);
+    document.querySelectorAll(".btn-salvar-embalagem").forEach((btn) => {
+      btn.addEventListener("click", () => salvarEmbalagem(btn.dataset.itemId));
+    });
 
     const containerMarcas = document.getElementById("marcas-container");
     const btnAddMarca = document.getElementById("btn-add-marca");
@@ -534,19 +559,18 @@
       });
     }
 
-    const btnSolicitarAlteracao = document.getElementById("btn-solicitar-alteracao");
-    if (btnSolicitarAlteracao) {
+    document.querySelectorAll(".btn-solicitar-alteracao").forEach((btnSolicitarAlteracao) => {
       btnSolicitarAlteracao.addEventListener("click", async () => {
         const texto = prompt("Descreva a alteração desejada na fórmula:");
         if (!texto || !texto.trim()) return;
         try {
-          await chamar(`/${token}/solicitar-alteracao-formula`, { method: "PUT", body: { texto } });
+          await chamar(`/${token}/itens/${btnSolicitarAlteracao.dataset.itemId}/solicitar-alteracao-formula`, { method: "PUT", body: { texto } });
           renderizar();
         } catch (erro) {
           alert(erro.message || "Não foi possível enviar.");
         }
       });
-    }
+    });
 
     const btnEnviarArquivo = document.getElementById("btn-enviar-arquivo");
     if (btnEnviarArquivo) {
