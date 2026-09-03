@@ -10730,12 +10730,14 @@
     const projeto = await chamarApi(`/terceirizacao/projetos/${projetoId}`);
     const podeEditar = temPermissao("terceirizacao", "criar") && projeto.status === "rascunho";
 
-    const [potes, arquivos, aprovacoes, linkCliente, versoes] = await Promise.all([
+    const [potes, arquivos, aprovacoes, linkCliente, versoes, artes, comentarios] = await Promise.all([
       chamarApi("/terceirizacao/potes"),
       chamarApi(`/terceirizacao/projetos/${projetoId}/arquivos`),
       chamarApi(`/terceirizacao/projetos/${projetoId}/aprovacoes`),
       chamarApi(`/terceirizacao/projetos/${projetoId}/link-cliente`),
       chamarApi(`/terceirizacao/projetos/${projetoId}/versoes`),
+      chamarApi(`/terceirizacao/projetos/${projetoId}/artes`),
+      chamarApi(`/terceirizacao/projetos/${projetoId}/comentarios`),
     ]);
     const podeEnviarParaAprovacao = temPermissao("terceirizacao", "criar") && ["rascunho", "aguardando_revisao"].includes(projeto.status);
     let tampas = [];
@@ -10926,6 +10928,7 @@
                 <option value="estilo">Estilo</option>
                 <option value="logotipo">Logotipo</option>
                 <option value="concorrente">Concorrente</option>
+                <option value="foto_produto_final">Foto do produto final (real)</option>
                 <option value="outro">Outro</option>
               </select>
             </div>
@@ -10951,6 +10954,63 @@
             </td>
           </tr>`).join("") || '<tr><td colspan="6" class="texto-suave">Nenhum arquivo enviado ainda.</td></tr>'}</tbody>
         </table>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Aprovação de arte (rótulo/embalagem)</h3>
+        <p class="texto-suave">Cada versão enviada (V1, V2, V3…) fica registrada pra sempre — o cliente aprova ou pede alteração pelo portal, e uma nova versão pode ser enviada quantas vezes precisar, mesmo com o projeto já assinado.</p>
+        ${podeEditar || temPermissao("terceirizacao", "criar") ? `
+          <form id="form-enviar-arte-terceirizacao" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-bottom:14px;">
+            <div class="campo" style="margin:0;"><label>Arquivo da arte (JPG, PNG, WEBP ou PDF)</label><input type="file" name="arte" accept=".jpg,.jpeg,.png,.webp,.pdf" required></div>
+            <div class="campo" style="margin:0;flex:1;min-width:200px;"><label>O que mudou nesta versão (opcional)</label><input type="text" name="observacoes"></div>
+            <button type="submit" class="botao secundario">Enviar nova versão</button>
+          </form>` : ""}
+        <table>
+          <thead><tr><th>Versão</th><th>Status</th><th>Enviado em</th><th>Decisão</th><th></th></tr></thead>
+          <tbody>${artes.map((a) => {
+            const seloArte = a.status === "aprovado" ? '<span class="selo ativo">Aprovado</span>'
+              : a.status === "alteracao_solicitada" ? '<span class="selo bloqueado">Alteração solicitada</span>'
+              : '<span class="selo amarelo">Aguardando aprovação</span>';
+            const podeDecidirArte = a.status === "aguardando_aprovacao" && temPermissao("terceirizacao", "criar");
+            return `<tr>
+              <td>V${a.versao}${a.observacoes ? `<br><span class="texto-suave" style="font-size:12px;">${escapeHtml(a.observacoes)}</span>` : ""}</td>
+              <td>${seloArte}${a.status === "alteracao_solicitada" && a.solicitacao_texto ? `<div class="texto-suave" style="font-size:12px;">${escapeHtml(a.solicitacao_texto)}</div>` : ""}${a.decidido_por_nome ? `<div class="texto-suave" style="font-size:12px;">por ${escapeHtml(a.decidido_por_nome)}</div>` : ""}</td>
+              <td class="texto-suave">${fmtData(a.criado_em)}</td>
+              <td style="display:flex;gap:6px;flex-wrap:wrap;">
+                ${podeDecidirArte ? `
+                  <button class="botao secundario pequeno" data-acao="decidir-arte-terceirizacao" data-versao="${a.versao}" data-decisao="aprovado">Aprovar</button>
+                  <button class="botao perigo pequeno" data-acao="decidir-arte-terceirizacao" data-versao="${a.versao}" data-decisao="alteracao_solicitada">Pedir alteração</button>
+                ` : ""}
+              </td>
+              <td><button class="botao secundario pequeno" data-acao="baixar-arte-terceirizacao" data-versao="${a.versao}" data-nome="${escapeHtml(a.nome_arquivo)}">Ver</button></td>
+            </tr>`;
+          }).join("") || '<tr><td colspan="5" class="texto-suave">Nenhuma arte enviada ainda.</td></tr>'}</tbody>
+        </table>
+      </div>
+
+      <div class="cartao">
+        <h3 style="margin-top:0;">Comentários</h3>
+        <p class="texto-suave">"Interno" só a equipe vê; "compartilhado" também aparece pro cliente no portal.</p>
+        <div style="max-height:260px;overflow-y:auto;margin-bottom:12px;">
+          ${comentarios.map((c) => `
+            <div style="padding:8px 0;border-bottom:1px solid var(--borda,#333);">
+              <div style="display:flex;justify-content:space-between;gap:8px;">
+                <strong>${escapeHtml(c.autor_nome)}</strong>
+                <span class="texto-suave" style="font-size:12px;">${fmtData(c.criado_em)} ${c.visibilidade === "interno" ? '<span class="selo bloqueado">Interno</span>' : '<span class="selo ativo">Compartilhado</span>'}</span>
+              </div>
+              <p style="margin:4px 0 0;white-space:pre-wrap;">${escapeHtml(c.texto)}</p>
+            </div>`).join("") || '<p class="texto-suave">Nenhum comentário ainda.</p>'}
+        </div>
+        <form id="form-comentario-terceirizacao" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;">
+          <div class="campo" style="margin:0;flex:1;min-width:220px;"><label>Novo comentário</label><textarea name="texto" rows="2" required></textarea></div>
+          <div class="campo" style="margin:0;"><label>Visibilidade</label>
+            <select name="visibilidade">
+              <option value="interno">Interno</option>
+              <option value="compartilhado">Compartilhado com o cliente</option>
+            </select>
+          </div>
+          <button type="submit" class="botao secundario">Comentar</button>
+        </form>
       </div>
 
       <div class="cartao">
@@ -11322,6 +11382,67 @@
         renderTerceirizacaoDetalhe(projetoId);
       });
     });
+
+    // Fase 145 — arte e comentários ficam disponíveis em QUALQUER status
+    // do projeto (não só rascunho como fórmula/embalagem/briefing), por
+    // isso os listeners abaixo vivem fora do `if (podeEditar)` acima.
+    const formEnviarArte = document.getElementById("form-enviar-arte-terceirizacao");
+    if (formEnviarArte) {
+      formEnviarArte.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const dados = new FormData(formEnviarArte);
+        const arquivo = dados.get("arte");
+        if (!arquivo || !arquivo.size) { definirFlash("erro", "Escolha um arquivo."); return; }
+        const dataUrl = await lerArquivoComoBase64(arquivo);
+        await chamarApi(`/terceirizacao/projetos/${projetoId}/artes`, {
+          method: "POST",
+          body: { nome_arquivo: arquivo.name, tipo_mime: arquivo.type, dados: dataUrl, observacoes: dados.get("observacoes") },
+        });
+        definirFlash("ok", "Nova versão de arte enviada.");
+        renderTerceirizacaoDetalhe(projetoId);
+      });
+    }
+    app.querySelectorAll('[data-acao="decidir-arte-terceirizacao"]').forEach((botao) => {
+      botao.addEventListener("click", async () => {
+        const decisao = botao.dataset.decisao;
+        let solicitacao_texto;
+        if (decisao === "alteracao_solicitada") {
+          solicitacao_texto = prompt("O que precisa mudar nesta arte?");
+          if (!solicitacao_texto || !solicitacao_texto.trim()) return;
+        }
+        try {
+          await chamarApi(`/terceirizacao/projetos/${projetoId}/artes/${botao.dataset.versao}/decidir`, {
+            method: "POST", body: { status: decisao, solicitacao_texto },
+          });
+          definirFlash("ok", "Decisão registrada.");
+          renderTerceirizacaoDetalhe(projetoId);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível registrar a decisão.");
+        }
+      });
+    });
+    app.querySelectorAll('[data-acao="baixar-arte-terceirizacao"]').forEach((botao) => {
+      botao.addEventListener("click", async () => {
+        try {
+          await abrirBinarioEmNovaAba(`/terceirizacao/projetos/${projetoId}/artes/${botao.dataset.versao}/arquivo`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir a arte.");
+        }
+      });
+    });
+    const formComentario = document.getElementById("form-comentario-terceirizacao");
+    if (formComentario) {
+      formComentario.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const dados = new FormData(formComentario);
+        const texto = (dados.get("texto") || "").trim();
+        if (!texto) return;
+        await chamarApi(`/terceirizacao/projetos/${projetoId}/comentarios`, {
+          method: "POST", body: { texto, visibilidade: dados.get("visibilidade") },
+        });
+        renderTerceirizacaoDetalhe(projetoId);
+      });
+    }
   }
 
   function modalSolicitarAlteracaoFormula(projetoId) {

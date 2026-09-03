@@ -305,6 +305,48 @@
         </ul>
       </div>
 
+      ${(projeto.artes || []).length ? `
+        <div class="cartao">
+          <h2>Arte do rótulo/embalagem</h2>
+          <p class="texto-suave" style="margin-bottom:16px;">Aprove ou peça alteração na versão mais recente. Versões anteriores ficam guardadas abaixo, só pra consulta.</p>
+          ${projeto.artes.map((a, idx) => `
+            <div style="padding:12px 0;${idx > 0 ? "border-top:1px solid rgba(255,255,255,.08);" : ""}">
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+                <strong>Versão ${a.versao}</strong>
+                <a href="${API}/${token}/artes/${a.versao}/arquivo" target="_blank" class="botao-secundario" style="padding:4px 10px;font-size:13px;">Ver arquivo</a>
+              </div>
+              ${a.observacoes ? `<p class="texto-suave" style="margin:4px 0;">${escapeHtml(a.observacoes)}</p>` : ""}
+              ${a.status === "aprovado" ? `<p style="color:#5fbf7f;margin:6px 0 0;">✓ Aprovado${a.decidido_por_nome ? ` por ${escapeHtml(a.decidido_por_nome)}` : ""}</p>`
+                : a.status === "alteracao_solicitada" ? `<p style="color:#d98c4a;margin:6px 0 0;">Alteração solicitada${a.decidido_por_nome ? ` por ${escapeHtml(a.decidido_por_nome)}` : ""}: ${escapeHtml(a.solicitacao_texto || "")}</p>`
+                : idx === 0 ? `
+                  <div id="decisao-arte-${a.versao}" style="margin-top:10px;text-align:left;">
+                    <div class="campo"><label>Seu nome</label><input type="text" class="arte-decisao-nome" data-versao="${a.versao}"></div>
+                    <div class="rodape-acoes">
+                      <button type="button" class="botao-secundario botao-arte-alterar" data-versao="${a.versao}">Pedir alteração</button>
+                      <button type="button" class="botao botao-arte-aprovar" data-versao="${a.versao}">Aprovar esta arte →</button>
+                    </div>
+                  </div>` : '<p class="texto-suave" style="margin:6px 0 0;">Aguardando decisão sobre a versão mais recente.</p>'}
+            </div>`).join("")}
+        </div>
+      ` : ""}
+
+      <div class="cartao">
+        <h2>Comentários</h2>
+        <div style="max-height:240px;overflow-y:auto;margin-bottom:12px;text-align:left;">
+          ${(projeto.comentarios || []).map((c) => `
+            <div style="padding:8px 0;border-bottom:1px solid rgba(255,255,255,.08);">
+              <div style="display:flex;justify-content:space-between;gap:8px;">
+                <strong>${escapeHtml(c.autor_nome)}</strong>
+                <span class="texto-suave" style="font-size:12px;">${new Date(c.criado_em).toLocaleString("pt-BR")}</span>
+              </div>
+              <p style="margin:4px 0 0;white-space:pre-wrap;">${escapeHtml(c.texto)}</p>
+            </div>`).join("") || '<p class="texto-suave">Nenhum comentário ainda.</p>'}
+        </div>
+        <div class="campo"><label>Seu nome</label><input type="text" id="comentario-nome"></div>
+        <div class="campo"><label>Comentário</label><textarea id="comentario-texto" rows="2"></textarea></div>
+        <button type="button" class="botao-secundario" id="btn-enviar-comentario">Comentar</button>
+      </div>
+
       ${editavel ? `
         <div class="cartao" id="cartao-concluir" style="text-align:center;">
           <div id="passo-revisar">
@@ -373,6 +415,46 @@
           btnAssinar.disabled = false;
           btnAssinar.textContent = "Assinar eletronicamente →";
         }
+      });
+    }
+
+    // Fase 145 — arte e comentários ficam disponíveis em QUALQUER status
+    // do projeto, por isso ficam fora do `if (!editavel) return` abaixo.
+    document.querySelectorAll(".botao-arte-aprovar").forEach((botao) => {
+      botao.addEventListener("click", async () => {
+        const versao = botao.dataset.versao;
+        const nome = document.querySelector(`.arte-decisao-nome[data-versao="${versao}"]`).value.trim();
+        if (!nome) { alert("Informe seu nome."); return; }
+        try {
+          await chamar(`/${token}/artes/${versao}/decidir`, { method: "POST", body: { nome, status: "aprovado" } });
+          renderizar();
+        } catch (erro) { alert(erro.message || "Não foi possível registrar a aprovação."); }
+      });
+    });
+    document.querySelectorAll(".botao-arte-alterar").forEach((botao) => {
+      botao.addEventListener("click", async () => {
+        const versao = botao.dataset.versao;
+        const nome = document.querySelector(`.arte-decisao-nome[data-versao="${versao}"]`).value.trim();
+        if (!nome) { alert("Informe seu nome."); return; }
+        const solicitacao_texto = prompt("O que precisa mudar nesta arte?");
+        if (!solicitacao_texto || !solicitacao_texto.trim()) return;
+        try {
+          await chamar(`/${token}/artes/${versao}/decidir`, { method: "POST", body: { nome, status: "alteracao_solicitada", solicitacao_texto } });
+          renderizar();
+        } catch (erro) { alert(erro.message || "Não foi possível registrar a solicitação."); }
+      });
+    });
+    const btnEnviarComentario = document.getElementById("btn-enviar-comentario");
+    if (btnEnviarComentario) {
+      btnEnviarComentario.addEventListener("click", async () => {
+        const nome = document.getElementById("comentario-nome").value.trim();
+        const texto = document.getElementById("comentario-texto").value.trim();
+        if (!nome) { alert("Informe seu nome."); return; }
+        if (!texto) { alert("Escreva um comentário."); return; }
+        try {
+          await chamar(`/${token}/comentarios`, { method: "POST", body: { nome, texto } });
+          renderizar();
+        } catch (erro) { alert(erro.message || "Não foi possível enviar o comentário."); }
       });
     }
 

@@ -831,7 +831,10 @@ def _validar_e_decodificar_arquivo(doc):
             status=400,
         )
     categoria = dados_categoria = (doc.get("categoria") or "outro").strip()
-    if categoria not in ("embalagem", "rotulo", "cor", "estilo", "logotipo", "concorrente", "referencia", "documento_empresa", "outro"):
+    if categoria not in (
+        "embalagem", "rotulo", "cor", "estilo", "logotipo", "concorrente", "referencia",
+        "documento_empresa", "foto_produto_final", "outro",
+    ):
         categoria = "outro"
     visibilidade = (doc.get("visibilidade") or "compartilhado").strip()
     if visibilidade not in ("interno", "compartilhado"):
@@ -912,6 +915,160 @@ def excluir_arquivo_projeto(projeto_id, arquivo_id):
     audit.registrar(conn, tabela="terceirizacao_arquivos", registro_id=arquivo_id, usuario_id=usuario_atual["id"],
                      acao="arquivo_excluido", valor_anterior=_arquivo_metadados(arquivo), ip=client_ip(), dispositivo=client_device())
     return "", 204
+
+
+# =============================================================================
+# Fase 145 (Fase E) — Aprovação de arte (V1/V2/V3) + comentários internos
+# vs compartilhados. Diferente do congelamento de versão da Fase D (que
+# trava o PROJETO inteiro depois de assinado) — aqui é só o arquivo de
+# ARTE que tem ciclo de versão e aprovação próprios, podendo acontecer
+# várias vezes mesmo com o projeto já assinado (rótulo é frequentemente
+# ajustado depois da aprovação da fórmula/embalagem em si).
+# =============================================================================
+
+def _arte_metadados(row):
+    d = dict(row)
+    d.pop("dados", None)
+    return d
+
+
+@bp.get("/projetos/<int:projeto_id>/artes")
+@requires_permission("terceirizacao", "visualizar")
+def listar_artes_projeto(projeto_id):
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    rows = conn.execute(
+        "SELECT * FROM terceirizacao_artes WHERE projeto_id = ? ORDER BY versao DESC", (projeto_id,)
+    ).fetchall()
+    return jsonify([_arte_metadados(r) for r in rows])
+
+
+@bp.post("/projetos/<int:projeto_id>/artes")
+@requires_permission("terceirizacao", "criar")
+def enviar_arte_projeto(projeto_id):
+    """Envia uma nova versão de arte (V1 na primeira vez, V2/V3/... nas
+    seguintes — número sempre sequencial, nunca reaproveitado). Enviar
+    uma nova versão NÃO decide nada sobre a anterior — cada uma guarda
+    seu próprio status pra sempre; a lista mostra o histórico completo,
+    não só a mais recente."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    dados = request.get_json(silent=True) or {}
+    # Reaproveita a mesma validação/decodificação de terceirizacao_arquivos
+    # (allowlist de MIME, limite de tamanho, base64 válido) — categoria/
+    # visibilidade não existem em terceirizacao_artes, passadas só pra
+    # satisfazer a assinatura da função, descartadas com `_`.
+    nome_arquivo, tipo_mime, conteudo_base64, tamanho, _cat, _vis, _com = _validar_e_decodificar_arquivo({
+        **dados, "categoria": "outro", "visibilidade": "compartilhado",
+    })[1:]
+    ultima_versao = conn.execute(
+        "SELECT MAX(versao) v FROM terceirizacao_artes WHERE projeto_id = ?", (projeto_id,)
+    ).fetchone()["v"] or 0
+    nova_versao = ultima_versao + 1
+    cur = conn.execute(
+        """
+        INSERT INTO terceirizacao_artes
+            (projeto_id, versao, nome_arquivo, tipo_mime, dados, tamanho, observacoes, enviado_por)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (projeto_id, nova_versao, nome_arquivo, tipo_mime, conteudo_base64, tamanho, dados.get("observacoes"), usuario_atual["id"]),
+    )
+    audit.registrar(conn, tabela="terceirizacao_artes", registro_id=cur.lastrowid, usuario_id=usuario_atual["id"],
+                     acao="arte_enviada", valor_novo={"versao": nova_versao}, ip=client_ip(), dispositivo=client_device())
+    if projeto_ja_tem_link_cliente_ativo(conn, projeto_id):
+        notificacoes_service.notificar_usuarios_com_permissao(
+            conn, modulo="terceirizacao", acao="criar", tipo="terceirizacao_arte_enviada",
+            mensagem=f"Nova arte V{nova_versao} enviada — projeto {projeto_id}.",
+        )
+    return jsonify(_arte_metadados(conn.execute("SELECT * FROM terceirizacao_artes WHERE id = ?", (cur.lastrowid,)).fetchone())), 201
+
+
+@bp.get("/projetos/<int:projeto_id>/artes/<int:versao>/arquivo")
+@requires_permission("terceirizacao", "visualizar")
+def baixar_arte_projeto(projeto_id, versao):
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    arte = conn.execute(
+        "SELECT * FROM terceirizacao_artes WHERE projeto_id = ? AND versao = ?", (projeto_id, versao)
+    ).fetchone()
+    if arte is None:
+        raise ApiError("Versão de arte não encontrada.", status=404)
+    try:
+        bruto = base64.b64decode(arte["dados"], validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError("Arquivo corrompido.", status=500)
+    return Response(bruto, mimetype=arte["tipo_mime"],
+                     headers={"Content-Disposition": f"inline; filename=\"{arte['nome_arquivo']}\""})
+
+
+@bp.post("/projetos/<int:projeto_id>/artes/<int:versao>/decidir")
+@requires_permission("terceirizacao", "criar")
+def decidir_arte_projeto(projeto_id, versao):
+    """Decisão INTERNA (equipe) sobre uma versão de arte — o cliente
+    decide pela rota equivalente no portal (`portal_terceirizacao.py`),
+    que grava exatamente nas mesmas colunas, só com `decidido_por_nome`
+    vindo do nome digitado pelo cliente em vez de `g.usuario_atual`."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    arte = conn.execute(
+        "SELECT * FROM terceirizacao_artes WHERE projeto_id = ? AND versao = ?", (projeto_id, versao)
+    ).fetchone()
+    if arte is None:
+        raise ApiError("Versão de arte não encontrada.", status=404)
+    dados = request.get_json(silent=True) or {}
+    novo_status = dados.get("status")
+    if novo_status not in ("aprovado", "alteracao_solicitada"):
+        raise ApiError("status deve ser 'aprovado' ou 'alteracao_solicitada'.", status=400)
+    solicitacao_texto = (dados.get("solicitacao_texto") or "").strip()
+    if novo_status == "alteracao_solicitada" and not solicitacao_texto:
+        raise ApiError("Descreva o que precisa mudar.", status=400)
+    conn.execute(
+        """
+        UPDATE terceirizacao_artes SET status = ?, solicitacao_texto = ?,
+               decidido_por_nome = ?, decidido_em = ? WHERE id = ?
+        """,
+        (novo_status, solicitacao_texto or None, usuario_atual["nome"], _now_iso(), arte["id"]),
+    )
+    audit.registrar(conn, tabela="terceirizacao_artes", registro_id=arte["id"], usuario_id=usuario_atual["id"],
+                     acao=f"arte_{novo_status}", valor_novo={"versao": versao}, ip=client_ip(), dispositivo=client_device())
+    return jsonify(_arte_metadados(conn.execute("SELECT * FROM terceirizacao_artes WHERE id = ?", (arte["id"],)).fetchone()))
+
+
+# ---- Comentários (interno vs compartilhado com o cliente) ----
+
+@bp.get("/projetos/<int:projeto_id>/comentarios")
+@requires_permission("terceirizacao", "visualizar")
+def listar_comentarios_projeto(projeto_id):
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    rows = conn.execute(
+        "SELECT * FROM terceirizacao_comentarios WHERE projeto_id = ? ORDER BY criado_em", (projeto_id,)
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@bp.post("/projetos/<int:projeto_id>/comentarios")
+@requires_permission("terceirizacao", "criar")
+def criar_comentario_projeto(projeto_id):
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    _projeto_ou_404(conn, projeto_id)
+    dados = request.get_json(silent=True) or {}
+    texto = (dados.get("texto") or "").strip()
+    if not texto:
+        raise ApiError("Escreva o comentário.", status=400)
+    visibilidade = dados.get("visibilidade") if dados.get("visibilidade") in ("interno", "compartilhado") else "interno"
+    cur = conn.execute(
+        "INSERT INTO terceirizacao_comentarios (projeto_id, texto, visibilidade, autor_nome, autor_usuario_id) VALUES (?, ?, ?, ?, ?)",
+        (projeto_id, texto, visibilidade, usuario_atual["nome"], usuario_atual["id"]),
+    )
+    return jsonify(dict(conn.execute("SELECT * FROM terceirizacao_comentarios WHERE id = ?", (cur.lastrowid,)).fetchone())), 201
+
+
+def projeto_ja_tem_link_cliente_ativo(conn, projeto_id):
+    return bool(_link_ativo_do_projeto(conn, projeto_id))
 
 
 # =============================================================================

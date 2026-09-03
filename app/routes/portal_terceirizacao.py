@@ -97,6 +97,22 @@ def _projeto_do_portal(conn, projeto_id):
         # foi assinada); None enquanto `status` ainda não chegou em
         # 'assinado' pela primeira vez nesta versão.
         "assinatura_eletronica": _assinatura_eletronica_atual(conn, projeto_id, p["versao"]),
+        # Fase 145 (Fase E) — arte do rótulo/embalagem (histórico
+        # completo de versões, o cliente decide sobre a mais recente) e
+        # comentários (só os marcados 'compartilhado' — um 'interno' da
+        # equipe nunca chega até aqui, nem por engano).
+        "artes": [
+            {k: v for k, v in dict(a).items() if k != "dados"}
+            for a in conn.execute(
+                "SELECT * FROM terceirizacao_artes WHERE projeto_id = ? ORDER BY versao DESC", (projeto_id,)
+            ).fetchall()
+        ],
+        "comentarios": [
+            dict(c) for c in conn.execute(
+                "SELECT * FROM terceirizacao_comentarios WHERE projeto_id = ? AND visibilidade = 'compartilhado' ORDER BY criado_em",
+                (projeto_id,),
+            ).fetchall()
+        ],
     }
 
 
@@ -472,4 +488,102 @@ def assinar_portal(token):
             conn, modulo="terceirizacao", acao="criar", tipo="terceirizacao_assinado",
             mensagem=f"Projeto {projeto['numero']} foi assinado eletronicamente por {nome}.",
         )
+    return jsonify(_projeto_do_portal(conn, projeto_id))
+
+
+@bp.get("/<token>/artes/<int:versao>/arquivo")
+def baixar_arte_portal(token, versao):
+    conn, link = _resolver_link_ou_404(token)
+    arte = conn.execute(
+        "SELECT * FROM terceirizacao_artes WHERE projeto_id = ? AND versao = ?", (link["projeto_id"], versao)
+    ).fetchone()
+    if arte is None:
+        raise ApiError("Versão de arte não encontrada.", status=404)
+    try:
+        bruto = base64.b64decode(arte["dados"], validate=True)
+    except (binascii.Error, ValueError):
+        raise ApiError("Arquivo corrompido.", status=500)
+    return Response(bruto, mimetype=arte["tipo_mime"],
+                     headers={"Content-Disposition": f"inline; filename=\"{arte['nome_arquivo']}\""})
+
+
+@bp.post("/<token>/artes/<int:versao>/decidir")
+def decidir_arte_portal(token, versao):
+    """Fase 145 (Fase E) — o cliente aprova a arte do rótulo ou pede
+    alteração, direto pelo link — sem depender de login. Grava nas
+    MESMAS colunas que a decisão interna (ver decidir_arte_projeto em
+    terceirizacao.py), só com `decidido_por_nome` vindo do que o cliente
+    digitou aqui em vez de `g.usuario_atual`. Disponível em QUALQUER
+    status do projeto — arte é frequentemente ajustada depois da
+    aprovação/assinatura da fórmula em si, não faz sentido travar isso
+    ao congelamento da Fase D."""
+    conn, link = _resolver_link_ou_404(token)
+    projeto_id = link["projeto_id"]
+    arte = conn.execute(
+        "SELECT * FROM terceirizacao_artes WHERE projeto_id = ? AND versao = ?", (projeto_id, versao)
+    ).fetchone()
+    if arte is None:
+        raise ApiError("Versão de arte não encontrada.", status=404)
+    if arte["status"] != "aguardando_aprovacao":
+        raise ApiError("Esta versão já foi decidida anteriormente.", status=409, codigo="arte_ja_decidida")
+
+    dados = request.get_json(silent=True) or {}
+    nome = (dados.get("nome") or "").strip()
+    novo_status = dados.get("status")
+    if not nome:
+        raise ApiError("Informe seu nome.", status=400)
+    if novo_status not in ("aprovado", "alteracao_solicitada"):
+        raise ApiError("status deve ser 'aprovado' ou 'alteracao_solicitada'.", status=400)
+    solicitacao_texto = (dados.get("solicitacao_texto") or "").strip()
+    if novo_status == "alteracao_solicitada" and not solicitacao_texto:
+        raise ApiError("Descreva o que precisa mudar.", status=400)
+
+    conn.execute(
+        """
+        UPDATE terceirizacao_artes SET status = ?, solicitacao_texto = ?,
+               decidido_por_nome = ?, decidido_em = ? WHERE id = ?
+        """,
+        (novo_status, solicitacao_texto or None, nome, _now_iso(), arte["id"]),
+    )
+    audit.registrar(conn, tabela="terceirizacao_artes", registro_id=arte["id"], usuario_id=link["criado_por"],
+                     acao=f"cliente_arte_{novo_status}", valor_novo={"versao": versao, "nome": nome},
+                     ip=client_ip(), dispositivo=client_device())
+    projeto = conn.execute("SELECT numero, responsavel_id FROM terceirizacao_projetos WHERE id = ?", (projeto_id,)).fetchone()
+    mensagem = (
+        f"Cliente aprovou a arte V{versao} do projeto {projeto['numero']}." if novo_status == "aprovado"
+        else f"Cliente pediu alteração na arte V{versao} do projeto {projeto['numero']}: {solicitacao_texto}"
+    )
+    if projeto["responsavel_id"]:
+        notificacoes_service.criar(conn, usuario_id=projeto["responsavel_id"], tipo="terceirizacao_arte_decidida", mensagem=mensagem)
+    else:
+        notificacoes_service.notificar_usuarios_com_permissao(conn, modulo="terceirizacao", acao="criar", tipo="terceirizacao_arte_decidida", mensagem=mensagem)
+    return jsonify(_projeto_do_portal(conn, projeto_id))
+
+
+@bp.post("/<token>/comentarios")
+def criar_comentario_portal(token):
+    """Comentário do cliente pelo portal — sempre 'compartilhado' (o
+    cliente não tem como criar um comentário 'interno', essa opção nem
+    existe do lado dele)."""
+    conn, link = _resolver_link_ou_404(token)
+    projeto_id = link["projeto_id"]
+    dados = request.get_json(silent=True) or {}
+    nome = (dados.get("nome") or "").strip()
+    texto = (dados.get("texto") or "").strip()
+    if not nome:
+        raise ApiError("Informe seu nome.", status=400)
+    if not texto:
+        raise ApiError("Escreva o comentário.", status=400)
+    conn.execute(
+        "INSERT INTO terceirizacao_comentarios (projeto_id, texto, visibilidade, autor_nome, autor_usuario_id) VALUES (?, ?, 'compartilhado', ?, NULL)",
+        (projeto_id, texto, nome),
+    )
+    audit.registrar(conn, tabela="terceirizacao_comentarios", registro_id=projeto_id, usuario_id=link["criado_por"],
+                     acao="cliente_comentou", valor_novo={"nome": nome}, ip=client_ip(), dispositivo=client_device())
+    projeto = conn.execute("SELECT numero, responsavel_id FROM terceirizacao_projetos WHERE id = ?", (projeto_id,)).fetchone()
+    mensagem = f"Novo comentário do cliente no projeto {projeto['numero']}: {texto[:120]}"
+    if projeto["responsavel_id"]:
+        notificacoes_service.criar(conn, usuario_id=projeto["responsavel_id"], tipo="terceirizacao_comentario", mensagem=mensagem)
+    else:
+        notificacoes_service.notificar_usuarios_com_permissao(conn, modulo="terceirizacao", acao="criar", tipo="terceirizacao_comentario", mensagem=mensagem)
     return jsonify(_projeto_do_portal(conn, projeto_id))
