@@ -10871,21 +10871,33 @@
       const campoBuscaFormula = document.getElementById("busca-formula-terceirizacao");
       const listaResultadosFormula = document.getElementById("resultados-busca-formula-terceirizacao");
       let timeoutBusca = null;
+      async function buscarEMostrarFormulas(termo) {
+        const encontrados = await chamarApi(`/terceirizacao/formulas-disponiveis?busca=${encodeURIComponent(termo)}`);
+        listaResultadosFormula.innerHTML = encontrados.length
+          ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-origem="${i.origem}" data-id="${i.id ?? ""}" data-memorial-id="${i.memorial_produto_id ?? ""}">
+              ${i.codigo ? `<span class="mono">${escapeHtml(i.codigo)}</span> — ` : ""}${escapeHtml(i.nome_memorial || i.descricao)}
+              ${i.nome_memorial && i.descricao ? ` <span class="texto-suave">(${escapeHtml(i.descricao)})</span>` : ""}
+              ${i.origem === "memorial" ? ' <span class="selo azul" style="font-size:10px;">Memorial Técnico — ainda não é item</span>' : ""}
+            </button>`).join("")
+          : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
+      }
+      // Fase 141 — pedido do usuário: clicar na caixa (sem digitar nada)
+      // já mostra uma lista pra escolher, não obriga digitar 3 letras
+      // primeiro. Só dispara uma vez por "sessão de clique" (some assim
+      // que o usuário começa a digitar, aí quem manda é o listener de
+      // "input" abaixo).
+      campoBuscaFormula.addEventListener("focus", () => {
+        if (campoBuscaFormula.value.trim().length === 0) buscarEMostrarFormulas("");
+      });
       campoBuscaFormula.addEventListener("input", () => {
         clearTimeout(timeoutBusca);
-        // Pedido do usuário — buscar já a partir de 3 letras.
         const termo = campoBuscaFormula.value.trim();
+        // Vazio (apagou tudo) volta a mostrar a lista geral; de 1-2
+        // letras não busca ainda (ruído demais); 3+ busca por texto —
+        // pedido original do usuário.
+        if (termo.length === 0) { buscarEMostrarFormulas(""); return; }
         if (termo.length < 3) { listaResultadosFormula.innerHTML = ""; return; }
-        timeoutBusca = setTimeout(async () => {
-          const encontrados = await chamarApi(`/terceirizacao/formulas-disponiveis?busca=${encodeURIComponent(termo)}`);
-          listaResultadosFormula.innerHTML = encontrados.length
-            ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-origem="${i.origem}" data-id="${i.id ?? ""}" data-memorial-id="${i.memorial_produto_id ?? ""}">
-                ${i.codigo ? `<span class="mono">${escapeHtml(i.codigo)}</span> — ` : ""}${escapeHtml(i.nome_memorial || i.descricao)}
-                ${i.nome_memorial && i.descricao ? ` <span class="texto-suave">(${escapeHtml(i.descricao)})</span>` : ""}
-                ${i.origem === "memorial" ? ' <span class="selo azul" style="font-size:10px;">Memorial Técnico — ainda não é item</span>' : ""}
-              </button>`).join("")
-            : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
-        }, 250);
+        timeoutBusca = setTimeout(() => buscarEMostrarFormulas(termo), 250);
       });
       listaResultadosFormula.addEventListener("click", async (e) => {
         const botao = e.target.closest(".item-busca-resultado");

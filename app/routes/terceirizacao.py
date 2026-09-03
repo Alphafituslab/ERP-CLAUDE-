@@ -285,8 +285,14 @@ def listar_formulas_disponiveis():
     ).fetchall()
     resultado = [dict(r) for r in rows_itens]
 
+    # Fase 141 — pedido do usuário: a caixa de busca também precisa
+    # mostrar algo SEM precisar digitar nada (clicar e já ver uma lista
+    # pra escolher, não só buscar por texto). Com `busca` vazio, o "LIKE
+    # '%%'" de sempre já cobre 100% das linhas, então nem precisa de um
+    # WHERE condicional — só remove a exigência de `busca` não-vazio que
+    # antes escondia os produtos do Memorial ainda sem item vinculado.
     vagas_restantes = max(0, 30 - len(resultado))
-    if busca and vagas_restantes:
+    if vagas_restantes:
         termo = f"%{busca}%"
         rows_memorial = conn.execute(
             """
