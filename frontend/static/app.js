@@ -464,6 +464,13 @@
           case "pedidos-venda": return renderPedidosVenda();
           case "terceirizacao": return param ? renderTerceirizacaoDetalhe(Number(param)) : renderTerceirizacoes();
           case "terceirizacao-embalagens": return renderTerceirizacaoEmbalagens();
+          // Fase 147 — documentos + contratos do cliente ("deve ficar
+          // linkado ao cadastro do cliente", pedido do usuário) — tela
+          // própria (não modal: conteúdo grande demais pra caber bem
+          // dentro de um modal — texto de contrato inteiro, checklist de
+          // itens, tabela de versões).
+          case "cliente": return renderClienteDetalhe(Number(param));
+          case "contrato": return renderContratoDetalhe(Number(param));
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "financeiro-remessa-cnab": return renderRemessaCnab();
           case "financeiro-retorno-cnab": return renderRetornoCnab();
@@ -10426,6 +10433,16 @@
     return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
   }
 
+  // Fase 147 — Gerador de Contratos.
+  const ROTULOS_STATUS_CONTRATO = {
+    rascunho: ["inativo", "Rascunho"], aguardando_assinatura: ["azul", "Aguardando assinatura"],
+    assinado: ["ativo", "Assinado"], cancelado: ["bloqueado", "Cancelado"],
+  };
+  function seloStatusContrato(status) {
+    const par = ROTULOS_STATUS_CONTRATO[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
   // =============================================================================
   // Fase 144 — Mockup 3D do produto (Terceirização Premium)
   // =============================================================================
@@ -10482,6 +10499,91 @@
     return CORES_NOMEADAS_3D[chave] || "#b0b0b0";
   }
 
+  // Fase 148 — textura de rótulo (canvas 2D → CanvasTexture) aplicada
+  // como "etiqueta" no corpo do pote: moldura dourada + nome da marca
+  // (razão social do cliente) + nome do produto, igual à referência que
+  // o usuário mandou ("SUA MARCA" / nome do produto no rótulo). É um
+  // placeholder deliberado — texto sintético, não uma arte real — até o
+  // cliente ter o rótulo definitivo (pedido do usuário, 2026-09-03).
+  function _quebrarTextoCanvas3D(ctx, texto, larguraMax) {
+    const palavras = texto.split(" ");
+    const linhas = [];
+    let atual = "";
+    palavras.forEach((p) => {
+      const teste = atual ? `${atual} ${p}` : p;
+      if (ctx.measureText(teste).width > larguraMax && atual) { linhas.push(atual); atual = p; }
+      else atual = teste;
+    });
+    if (atual) linhas.push(atual);
+    return linhas;
+  }
+  function _criarTexturaRotuloMockup3D(THREE, nomeMarca, nomeProduto) {
+    const tela = document.createElement("canvas");
+    tela.width = 420; tela.height = 520;
+    const ctx = tela.getContext("2d");
+    const m = 18, raio = 22;
+    ctx.beginPath();
+    ctx.moveTo(m + raio, m);
+    ctx.arcTo(tela.width - m, m, tela.width - m, tela.height - m, raio);
+    ctx.arcTo(tela.width - m, tela.height - m, m, tela.height - m, raio);
+    ctx.arcTo(m, tela.height - m, m, m, raio);
+    ctx.arcTo(m, m, tela.width - m, m, raio);
+    ctx.closePath();
+    const fundo = ctx.createLinearGradient(0, m, 0, tela.height - m);
+    fundo.addColorStop(0, "rgba(20,16,12,0.94)");
+    fundo.addColorStop(1, "rgba(8,7,5,0.94)");
+    ctx.fillStyle = fundo;
+    ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#c9a94a";
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#c9a94a";
+    ctx.font = "600 28px Georgia, 'Times New Roman', serif";
+    ctx.fillText((nomeMarca || "SUA MARCA").toUpperCase().slice(0, 24), tela.width / 2, 150);
+
+    ctx.strokeStyle = "rgba(201,169,74,0.55)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(tela.width / 2 - 70, 175);
+    ctx.lineTo(tela.width / 2 + 70, 175);
+    ctx.stroke();
+
+    ctx.fillStyle = "#f2ede1";
+    ctx.font = "700 38px Georgia, 'Times New Roman', serif";
+    const linhas = _quebrarTextoCanvas3D(ctx, (nomeProduto || "PRODUTO PERSONALIZADO").toUpperCase(), tela.width - 90);
+    let y = 250;
+    linhas.slice(0, 3).forEach((linha) => { ctx.fillText(linha, tela.width / 2, y); y += 44; });
+
+    ctx.fillStyle = "rgba(242,237,225,0.65)";
+    ctx.font = "400 19px Arial, sans-serif";
+    ctx.fillText("SUPLEMENTO ALIMENTAR", tela.width / 2, tela.height - 72);
+    ctx.font = "400 15px Arial, sans-serif";
+    ctx.fillStyle = "rgba(242,237,225,0.4)";
+    ctx.fillText("MOCKUP — AGUARDANDO ARTE FINAL", tela.width / 2, tela.height - 44);
+
+    const textura = new THREE.CanvasTexture(tela);
+    textura.needsUpdate = true;
+    if (THREE.sRGBEncoding) textura.encoding = THREE.sRGBEncoding;
+    return textura;
+  }
+  // Fundo em degradê quente (canvas → texture de cena) — dá a atmosfera
+  // "premium" da referência mesmo girando o produto, o que um gradiente
+  // CSS por trás do <canvas> sozinho não cobre.
+  function _criarTexturaFundoMockup3D(THREE) {
+    const tela = document.createElement("canvas");
+    tela.width = 512; tela.height = 512;
+    const ctx = tela.getContext("2d");
+    const grad = ctx.createRadialGradient(256, 185, 40, 256, 256, 380);
+    grad.addColorStop(0, "#3a2c18");
+    grad.addColorStop(0.45, "#1c150e");
+    grad.addColorStop(1, "#070605");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 512, 512);
+    return new THREE.CanvasTexture(tela);
+  }
+
   // Monta a cena (pote + tampa + cápsula genéricos, curvas via
   // LatheGeometry, coloridos conforme `opcoes`) dentro de `container` e
   // devolve o <canvas> (pra `toDataURL()` depois, na captura pro PDF).
@@ -10493,8 +10595,10 @@
     const altura = 420;
 
     const cena = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(38, largura / altura, 0.1, 100);
-    camera.position.set(3.4, 2.6, 5.2);
+    cena.background = _criarTexturaFundoMockup3D(THREE);
+    cena.fog = new THREE.Fog(0x0a0806, 6, 12);
+    const camera = new THREE.PerspectiveCamera(36, largura / altura, 0.1, 100);
+    camera.position.set(3.6, 2.5, 5.6);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setSize(largura, altura);
@@ -10504,8 +10608,10 @@
     container.appendChild(renderer.domElement);
 
     // Luz — ambiente suave + luz principal com sombra + luz de
-    // preenchimento fraca do outro lado, pra não ficar um lado todo
-    // escuro ("visual premium" pedido pelo usuário).
+    // preenchimento fraca do outro lado + luz de contorno quente por
+    // trás (fake rim light), pra não ficar um lado todo escuro e dar
+    // aquele brilho de borda de vitrine ("visual premium" pedido pelo
+    // usuário).
     cena.add(new THREE.HemisphereLight(0xffffff, 0x30302a, 0.65));
     const luzPrincipal = new THREE.DirectionalLight(0xfff4e0, 1.1);
     luzPrincipal.position.set(4, 6, 3);
@@ -10517,6 +10623,9 @@
     const luzPreenchimento = new THREE.DirectionalLight(0x8fb8ff, 0.35);
     luzPreenchimento.position.set(-4, 2, -3);
     cena.add(luzPreenchimento);
+    const luzContorno = new THREE.DirectionalLight(0xffd9a0, 0.55);
+    luzContorno.position.set(-2.5, 3, -5);
+    cena.add(luzContorno);
 
     // Chão — só pra receber a sombra suave, invisível por trás (opacity
     // baixa) pra não brigar com o fundo em degradê do próprio cartão.
@@ -10530,10 +10639,14 @@
 
     function materialPremium(corHex) {
       return new THREE.MeshPhysicalMaterial({
-        color: new THREE.Color(corHex), metalness: 0.08, roughness: 0.32,
-        clearcoat: 0.5, clearcoatRoughness: 0.25, reflectivity: 0.4,
+        color: new THREE.Color(corHex), metalness: 0.1, roughness: 0.22,
+        clearcoat: 0.75, clearcoatRoughness: 0.12, reflectivity: 0.55,
       });
     }
+    const materialDourado = new THREE.MeshPhysicalMaterial({
+      color: new THREE.Color("#c9a94a"), metalness: 0.9, roughness: 0.18,
+      clearcoat: 0.5, clearcoatRoughness: 0.1, reflectivity: 0.8,
+    });
 
     const grupoProduto = new THREE.Group();
 
@@ -10562,6 +10675,25 @@
     tampaMesh.position.y = 2.22;
     tampaMesh.castShadow = true;
     grupoProduto.add(tampaMesh);
+
+    // Friso dourado na junção pote/tampa — detalhe de acabamento
+    // "premium" independente da cor escolhida (a cor real do pote/tampa
+    // continua vindo do cadastro; isto é só um filete decorativo, igual
+    // ao acabamento dourado da referência que o usuário mandou).
+    const frisoDourado = new THREE.Mesh(new THREE.TorusGeometry(0.335, 0.028, 16, 48), materialDourado);
+    frisoDourado.rotation.x = Math.PI / 2;
+    frisoDourado.position.y = 2.22;
+    grupoProduto.add(frisoDourado);
+
+    // Rótulo — plaqueta com o nome da marca/produto, encostada na frente
+    // do corpo do pote (gira junto no auto-rotate).
+    const texturaRotulo = _criarTexturaRotuloMockup3D(THREE, opcoes.nomeMarca, opcoes.nomeProduto);
+    const rotulo = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.86, 1.07),
+      new THREE.MeshBasicMaterial({ map: texturaRotulo, transparent: true, toneMapped: false }),
+    );
+    rotulo.position.set(0, 0.98, 0.675);
+    grupoProduto.add(rotulo);
 
     grupoProduto.scale.setScalar(1.05);
     grupoProduto.position.y = -1.15;
@@ -10603,7 +10735,7 @@
     controles.enablePan = false;
     controles.minDistance = 3; controles.maxDistance = 9;
     controles.autoRotate = true;
-    controles.autoRotateSpeed = 2.2;
+    controles.autoRotateSpeed = 1.1;
     controles.update();
 
     let animando = true;
@@ -10739,6 +10871,11 @@
       chamarApi(`/terceirizacao/projetos/${projetoId}/artes`),
       chamarApi(`/terceirizacao/projetos/${projetoId}/comentarios`),
     ]);
+    // Fase 147 — o contrato pertence ao CLIENTE, não ao projeto; um
+    // projeto pode ter zero ou mais contratos vinculados (o normal é 0 ou
+    // 1). A gestão de verdade (criar/editar/assinar) mora na tela do
+    // cliente (#/cliente/<id>) — aqui só mostra o que já está vinculado.
+    const contratosVinculados = await chamarApi(`/contratos?projeto_id=${projetoId}`);
     const podeEnviarParaAprovacao = temPermissao("terceirizacao", "criar") && ["rascunho", "aguardando_revisao"].includes(projeto.status);
     // Fase 146 — cada item pode ter um pote diferente, então as tampas
     // compatíveis precisam ser buscadas POR ITEM (mapa item.id → lista).
@@ -10868,14 +11005,14 @@
         </div>
 
         <h3 style="margin-top:20px;">Mockup 3D deste item</h3>
-        <div id="mockup3d-container-${it.id}" style="margin-bottom:12px;min-height:280px;border-radius:8px;border:1px solid var(--borda,#333);overflow:hidden;display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,#1b2620,#0e1512);">
-          ${it.mockup_3d_imagem
-            ? `<img src="${it.mockup_3d_imagem}" style="max-width:100%;max-height:380px;display:block;">`
-            : '<p class="texto-suave">Preview 3D ainda não gerado.</p>'}
+        <p class="texto-suave" style="margin-top:-6px;">Preview genérico — a cor acompanha o pote/tampa/cápsula escolhidos acima em tempo real. Troque de pote ou tampa e o mockup atualiza sozinho, até você anexar fotos reais do produto.</p>
+        <div id="mockup3d-container-${it.id}" style="margin-bottom:8px;min-height:320px;border-radius:10px;border:1px solid var(--borda,#333);overflow:hidden;display:flex;align-items:center;justify-content:center;background:radial-gradient(ellipse at 50% 28%, #2a2118 0%, #14100c 55%, #070605 100%);">
+          <p class="texto-suave">${it.pote_id ? "Carregando visualização 3D…" : "Escolha um pote acima para ver o preview."}</p>
         </div>
+        ${it.mockup_3d_imagem ? `<p class="texto-suave" style="font-size:12px;">📌 Última captura salva pro Dossiê em PDF: <img src="${it.mockup_3d_imagem}" style="height:28px;vertical-align:middle;border-radius:4px;margin-left:4px;border:1px solid var(--borda,#333);"></p>` : ""}
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button type="button" class="botao secundario" data-acao="carregar-mockup3d-terceirizacao" data-item-projeto-id="${it.id}">🧊 ${it.mockup_3d_imagem ? "Recarregar visualização 3D interativa" : "Gerar visualização 3D"}</button>
-          <button type="button" class="botao secundario" data-acao="capturar-mockup3d-terceirizacao" data-item-projeto-id="${it.id}" hidden>📸 Capturar esta imagem para o PDF</button>
+          <button type="button" class="botao secundario" data-acao="carregar-mockup3d-terceirizacao" data-item-projeto-id="${it.id}">🧊 Recarregar visualização 3D</button>
+          <button type="button" class="botao secundario" data-acao="capturar-mockup3d-terceirizacao" data-item-projeto-id="${it.id}" ${it.pote_id ? "" : "hidden"}>📸 Capturar esta imagem para o PDF</button>
         </div>
       </div>
       `).join("")}
@@ -11097,6 +11234,26 @@
       </div>
 
       <div class="cartao">
+        <div class="barra-acoes">
+          <h3 style="margin:0;">Contrato</h3>
+          ${temPermissao("terceirizacao", "criar") ? `<a class="botao secundario pequeno" href="#/cliente/${projeto.cliente_id}">Gerenciar contratos do cliente →</a>` : ""}
+        </div>
+        <p class="texto-suave">O contrato pertence ao cadastro do cliente (pode ter mais de um) — crie ou vincule um contrato existente na tela do cliente. Aqui aparece só o que já estiver vinculado a este projeto.</p>
+        ${contratosVinculados.length === 0 ? '<p class="texto-suave">Nenhum contrato vinculado a este projeto ainda.</p>' : `
+          <table>
+            <thead><tr><th>Número</th><th>Status</th><th>Versão</th><th></th></tr></thead>
+            <tbody>${contratosVinculados.map((c) => `
+              <tr>
+                <td class="mono"><a href="#/contrato/${c.id}">${escapeHtml(c.numero)}</a></td>
+                <td>${seloStatusContrato(c.status)}</td>
+                <td>V${c.versao}</td>
+                <td><a class="botao secundario pequeno" href="#/contrato/${c.id}">Abrir</a></td>
+              </tr>`).join("")}</tbody>
+          </table>
+        `}
+      </div>
+
+      <div class="cartao">
         <h3 style="margin-top:0;">Portal do cliente</h3>
         <p class="texto-suave">Link seguro (sem senha) para o cliente ver a prévia, personalizar a embalagem, preencher o briefing e confirmar — enviado por WhatsApp direto pro telefone cadastrado dele.</p>
         ${projeto.assinatura_cliente_nome ? `<p class="dica">✓ Confirmado pelo cliente (${escapeHtml(projeto.assinatura_cliente_nome)}) em ${fmtData(projeto.assinatura_cliente_em)}.</p>` : ""}
@@ -11125,38 +11282,45 @@
       "terceirizacao"
     );
 
-    // Fase 144/146 — mockup 3D (Three.js, carregado sob demanda — só
-    // quando o usuário realmente clica em "Gerar visualização 3D", nunca
-    // no carregamento normal da tela) — agora um por ITEM, guardados num
-    // mapa (item.id → canvas) em vez de uma variável global só.
+    // Fase 144/146/148 — mockup 3D (Three.js, carregado sob demanda — só
+    // baixa o vendor quando existe pelo menos um item com pote escolhido,
+    // nunca em telas que não usam isto) — um por ITEM, guardados num mapa
+    // (item.id → canvas) em vez de uma variável global só. Fase 148: além
+    // do botão manual, carrega SOZINHO ao abrir a tela e sempre que a
+    // embalagem muda (a tela inteira é re-renderizada nesse caso — ver
+    // handler de ".botao-embalagem-opcao" abaixo), pra refletir a cor
+    // escolhida sem precisar clicar em nada ("ao trocar a cor troca ele",
+    // pedido do usuário 2026-09-03).
     const canvas3dPorItem = {};
+    async function carregarMockup3dItem(itemProjetoId, botaoCarregar) {
+      const it = projeto.itens.find((x) => String(x.id) === String(itemProjetoId));
+      const container = document.getElementById(`mockup3d-container-${itemProjetoId}`);
+      if (!container || !it || !it.pote_id) return;
+      const botaoCapturar = app.querySelector(`[data-acao="capturar-mockup3d-terceirizacao"][data-item-projeto-id="${itemProjetoId}"]`);
+      if (botaoCarregar) { botaoCarregar.disabled = true; botaoCarregar.textContent = "🧊 Carregando…"; }
+      try {
+        await carregarBibliotecaThree();
+        container.innerHTML = "";
+        const canvas = iniciarMockup3DTerceirizacao(container, {
+          corPote: it.pote ? it.pote.cor : null,
+          corTampa: it.tampa ? it.tampa.cor : null,
+          corCabecaCapsula: it.capsula ? it.capsula.cor_cabeca : null,
+          corCorpoCapsula: it.capsula ? it.capsula.cor_corpo : null,
+          nomeMarca: projeto.cliente ? projeto.cliente.razao_social : null,
+          nomeProduto: it.item ? (it.item.nome_memorial || it.item.descricao) : null,
+        });
+        canvas3dPorItem[itemProjetoId] = canvas;
+        if (botaoCapturar) botaoCapturar.hidden = false;
+      } catch (erro) {
+        container.innerHTML = '<p class="texto-suave">Não foi possível carregar a visualização 3D (seu navegador pode não suportar WebGL).</p>';
+      } finally {
+        if (botaoCarregar) { botaoCarregar.disabled = false; botaoCarregar.textContent = "🧊 Recarregar visualização 3D"; }
+      }
+    }
     app.querySelectorAll('[data-acao="carregar-mockup3d-terceirizacao"]').forEach((botaoCarregar) => {
-      botaoCarregar.addEventListener("click", async () => {
-        const itemProjetoId = botaoCarregar.dataset.itemProjetoId;
-        const it = projeto.itens.find((x) => String(x.id) === String(itemProjetoId));
-        const container = document.getElementById(`mockup3d-container-${itemProjetoId}`);
-        const botaoCapturar = app.querySelector(`[data-acao="capturar-mockup3d-terceirizacao"][data-item-projeto-id="${itemProjetoId}"]`);
-        botaoCarregar.disabled = true;
-        botaoCarregar.textContent = "🧊 Carregando…";
-        try {
-          await carregarBibliotecaThree();
-          container.innerHTML = "";
-          const canvas = iniciarMockup3DTerceirizacao(container, {
-            corPote: it && it.pote ? it.pote.cor : null,
-            corTampa: it && it.tampa ? it.tampa.cor : null,
-            corCabecaCapsula: it && it.capsula ? it.capsula.cor_cabeca : null,
-            corCorpoCapsula: it && it.capsula ? it.capsula.cor_corpo : null,
-          });
-          canvas3dPorItem[itemProjetoId] = canvas;
-          if (botaoCapturar) botaoCapturar.hidden = false;
-        } catch (erro) {
-          container.innerHTML = '<p class="texto-suave">Não foi possível carregar a visualização 3D (seu navegador pode não suportar WebGL).</p>';
-        } finally {
-          botaoCarregar.disabled = false;
-          botaoCarregar.textContent = "🧊 Recarregar visualização 3D interativa";
-        }
-      });
+      botaoCarregar.addEventListener("click", () => carregarMockup3dItem(botaoCarregar.dataset.itemProjetoId, botaoCarregar));
     });
+    projeto.itens.filter((it) => it.pote_id).forEach((it) => carregarMockup3dItem(it.id, null));
     app.querySelectorAll('[data-acao="capturar-mockup3d-terceirizacao"]').forEach((botaoCapturar) => {
       botaoCapturar.addEventListener("click", async () => {
         const itemProjetoId = botaoCapturar.dataset.itemProjetoId;
@@ -11701,6 +11865,7 @@
         <td style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="botao secundario pequeno" data-acao="ver-desempenho-cliente" data-id="${c.id}" data-nome="${escapeHtml(c.razao_social)}">Desempenho</button>
           ${podeCadastrarCliente ? `<button class="botao secundario pequeno" data-acao="editar-cliente" data-id="${c.id}">Editar</button>` : ""}
+          <a class="botao secundario pequeno" href="#/cliente/${c.id}">Documentos</a>
           ${podeAprovarCliente && c.aprovacao_financeira_status !== "aprovado" ? `<button class="botao pequeno" data-acao="aprovar-cliente-financeiramente" data-id="${c.id}">Aprovar</button>` : ""}
           ${podeAprovarCliente && c.aprovacao_financeira_status !== "reprovado" ? `<button class="botao perigo pequeno" data-acao="abrir-reprovar-cliente-financeiramente" data-id="${c.id}" data-nome="${escapeHtml(c.razao_social)}">Reprovar</button>` : ""}
         </td>
@@ -11879,6 +12044,271 @@
       const idParaAbrir = state.clienteParaAbrirAoEntrarComercial;
       state.clienteParaAbrirAoEntrarComercial = null;
       await abrirEdicaoClienteCompleta(idParaAbrir);
+    }
+  }
+
+  // =======================================================================
+  // Fase 147 — Documentos + Contratos do cliente. Tela própria (não modal
+  // — conteúdo grande demais: texto do contrato inteiro, checklist de
+  // itens, tabela de versões) — pedido do usuário: "esse contrato deve
+  // ficar linkado ao cadastro do cliente, e pode ser feito mais de um
+  // contrato e ter um espaço para anexar documentos no cadastro do
+  // cliente".
+  // =======================================================================
+
+  async function renderClienteDetalhe(clienteId) {
+    app.innerHTML = '<div class="carregando">Carregando cliente…</div>';
+    const [cliente, documentos, contratos, projetos] = await Promise.all([
+      chamarApi(`/comercial/clientes/${clienteId}`),
+      chamarApi(`/comercial/clientes/${clienteId}/documentos`),
+      chamarApi(`/contratos?cliente_id=${clienteId}`),
+      chamarApi(`/terceirizacao/projetos?cliente_id=${clienteId}`).catch(() => []),
+    ]);
+    const podeCadastrarCliente = temPermissao("comercial", "cadastrar_cliente");
+    const podeCriarContrato = temPermissao("terceirizacao", "criar");
+    state.cache.projetosParaContratoCliente = projetos;
+
+    renderShell(
+      `<div class="barra-acoes">
+         <h2 style="margin:0;">${escapeHtml(cliente.razao_social)} <span class="texto-suave" style="font-weight:400;font-size:13px;">${escapeHtml(cliente.cnpj || "")}</span></h2>
+         <a class="botao secundario pequeno" href="#/comercial">← Voltar pra Comercial</a>
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Documentos</h3>
+           ${podeCadastrarCliente ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-enviar-documento-cliente" data-id="${cliente.id}">+ Anexar documento</button>` : ""}
+         </div>
+         <p class="texto-suave">Fotos/arquivos do cliente (contrato social, RG, alvará…) — os vendedores externos também anexam por aqui, direto do App de Vendas em campo.</p>
+         ${documentos.length === 0 ? '<p class="texto-suave">Nenhum documento anexado ainda.</p>' : `
+           <div class="tabela-scroll">
+           <table>
+             <thead><tr><th>Nome</th><th>Arquivo</th><th>Tamanho</th><th>Enviado em</th><th></th></tr></thead>
+             <tbody>${documentos.map((d) => `
+               <tr>
+                 <td>${escapeHtml(d.nome)}</td>
+                 <td class="texto-suave">${escapeHtml(d.nome_arquivo)}</td>
+                 <td class="texto-suave">${(d.tamanho / 1024).toFixed(0)} KB</td>
+                 <td class="texto-suave">${fmtData(d.criado_em)}</td>
+                 <td style="display:flex;gap:6px;flex-wrap:wrap;">
+                   <button class="botao secundario pequeno" data-acao="ver-documento-cliente" data-cliente-id="${cliente.id}" data-id="${d.id}">Ver</button>
+                   <button class="botao secundario pequeno" data-acao="baixar-documento-cliente" data-cliente-id="${cliente.id}" data-id="${d.id}" data-nome="${escapeHtml(d.nome_arquivo)}">Baixar</button>
+                   ${podeCadastrarCliente ? `<button class="botao perigo pequeno" data-acao="excluir-documento-cliente" data-cliente-id="${cliente.id}" data-id="${d.id}">Excluir</button>` : ""}
+                 </td>
+               </tr>`).join("")}</tbody>
+           </table>
+           </div>
+         `}
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Contratos</h3>
+           ${podeCriarContrato ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-criar-contrato-cliente" data-id="${cliente.id}">+ Novo contrato</button>` : ""}
+         </div>
+         <p class="texto-suave">Um cliente pode ter mais de um contrato. O vínculo com um projeto do Monte sua linha é opcional — dá pra escolher na criação ou depois.</p>
+         ${contratos.length === 0 ? '<p class="texto-suave">Nenhum contrato ainda.</p>' : `
+           <div class="tabela-scroll">
+           <table>
+             <thead><tr><th>Número</th><th>Status</th><th>Versão</th><th>Projeto vinculado</th><th></th></tr></thead>
+             <tbody>${contratos.map((c) => `
+               <tr>
+                 <td class="mono"><a href="#/contrato/${c.id}">${escapeHtml(c.numero)}</a></td>
+                 <td>${seloStatusContrato(c.status)}</td>
+                 <td>V${c.versao}</td>
+                 <td class="texto-suave">${c.projeto ? escapeHtml(c.projeto.numero) : "—"}</td>
+                 <td><a class="botao secundario pequeno" href="#/contrato/${c.id}">Abrir</a></td>
+               </tr>`).join("")}</tbody>
+           </table>
+           </div>
+         `}
+       </div>`,
+      "comercial"
+    );
+  }
+
+  function modalEnviarDocumentoCliente(clienteId) {
+    abrirModal(`
+      <h3>Anexar documento</h3>
+      <form data-form="enviar-documento-cliente" data-id="${clienteId}">
+        <div class="campo"><label>Nome (opcional — usa o nome do arquivo se deixar em branco)</label><input type="text" name="nome"></div>
+        <div class="campo"><label>Arquivo (JPG, PNG, WEBP ou PDF, até 10 MB)</label><input type="file" name="arquivo" accept=".jpg,.jpeg,.png,.webp,.pdf" required></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Enviar</button>
+        </div>
+      </form>`);
+  }
+
+  function modalCriarContratoCliente(clienteId, projetos) {
+    const opcoesProjetos = (projetos || []).map((p) => `<option value="${p.id}">${escapeHtml(p.numero)}</option>`).join("");
+    abrirModal(`
+      <h3>Novo contrato</h3>
+      <form data-form="criar-contrato-cliente" data-id="${clienteId}">
+        <div class="campo"><label>Vincular a um projeto do Monte sua linha (opcional)</label>
+          <select name="projeto_id">
+            <option value="">Nenhum — contrato avulso</option>
+            ${opcoesProjetos}
+          </select>
+          <div class="dica">Escolhendo um projeto, os produtos e a condição comercial do Anexo I já vêm preenchidos automaticamente — dá pra vincular ou trocar depois também.</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar contrato</button>
+        </div>
+      </form>`);
+  }
+
+  function modalVincularProjetoContrato(contratoId, projetos) {
+    const opcoesProjetos = (projetos || []).map((p) => `<option value="${p.id}">${escapeHtml(p.numero)}</option>`).join("");
+    abrirModal(`
+      <h3>Vincular projeto do Monte sua linha</h3>
+      <form data-form="vincular-projeto-contrato" data-id="${contratoId}">
+        <div class="campo"><label>Projeto</label>
+          <select name="projeto_id" required>
+            <option value="">Escolha…</option>
+            ${opcoesProjetos}
+          </select>
+          <div class="dica">Só preenche automaticamente os campos que ainda estiverem vazios — nada que você já editou aqui é sobrescrito.</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Vincular</button>
+        </div>
+      </form>`);
+  }
+
+  async function renderContratoDetalhe(contratoId) {
+    app.innerHTML = '<div class="carregando">Carregando contrato…</div>';
+    const contrato = await chamarApi(`/contratos/${contratoId}`);
+    const [cliente, versoes, link] = await Promise.all([
+      chamarApi(`/comercial/clientes/${contrato.cliente_id}`),
+      chamarApi(`/contratos/${contratoId}/versoes`),
+      chamarApi(`/contratos/${contratoId}/link`),
+    ]);
+    const projeto = contrato.projeto_id ? await chamarApi(`/terceirizacao/projetos/${contrato.projeto_id}`) : null;
+    const podeEditar = temPermissao("terceirizacao", "criar") && contrato.status === "rascunho";
+    const podeGerenciar = temPermissao("terceirizacao", "criar");
+
+    renderShell(
+      `<div class="barra-acoes">
+         <h2 style="margin:0;">${escapeHtml(contrato.numero)} ${seloStatusContrato(contrato.status)} <span class="texto-suave" style="font-weight:400;font-size:13px;">V${contrato.versao}</span></h2>
+         <a class="botao secundario pequeno" href="#/cliente/${cliente.id}">← Voltar pro cliente</a>
+       </div>
+       <p class="texto-suave" style="margin-top:-8px;">Cliente: <strong>${escapeHtml(cliente.razao_social)}</strong></p>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Projeto do Monte sua linha</h3>
+           ${podeEditar && !projeto ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-vincular-projeto-contrato" data-id="${contrato.id}">Vincular projeto</button>` : ""}
+           ${podeEditar && projeto ? `<button type="button" class="botao perigo pequeno" data-acao="desvincular-projeto-contrato" data-id="${contrato.id}">Desvincular</button>` : ""}
+         </div>
+         ${projeto
+           ? `<p>${escapeHtml(projeto.numero)} ${seloStatusTerceirizacao(projeto.status)} — <a href="#/terceirizacao/${projeto.id}">Abrir projeto →</a></p>`
+           : '<p class="texto-suave">Nenhum projeto vinculado — contrato avulso. O vínculo é opcional e só serve pra puxar produtos/condição comercial automaticamente.</p>'}
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Documento</h3>
+           <button type="button" class="botao secundario pequeno" data-acao="ver-pdf-contrato" data-id="${contrato.id}">📄 Ver PDF</button>
+         </div>
+         <div style="display:flex;gap:8px;flex-wrap:wrap;">
+           ${contrato.status === "rascunho" && podeGerenciar ? `<button type="button" class="botao pequeno" data-acao="enviar-assinatura-contrato" data-id="${contrato.id}">Enviar para assinatura</button>` : ""}
+           ${["rascunho", "aguardando_assinatura"].includes(contrato.status) && podeGerenciar ? `<button type="button" class="botao perigo pequeno" data-acao="cancelar-contrato" data-id="${contrato.id}">Cancelar contrato</button>` : ""}
+           ${contrato.status === "assinado" && podeGerenciar ? `<button type="button" class="botao secundario pequeno" data-acao="nova-versao-contrato" data-id="${contrato.id}">Iniciar nova versão</button>` : ""}
+         </div>
+       </div>
+
+       ${podeEditar ? `
+       <div class="cartao">
+         <h3 style="margin-top:0;">Cláusulas</h3>
+         <form data-form="editar-contrato" data-id="${contrato.id}">
+           <div class="campo"><label>Representante da CONTRATANTE (quem assina pelo cliente)</label>
+             <div style="display:flex;gap:8px;">
+               <input type="text" name="representante_nome" placeholder="Nome completo" value="${escapeHtml(contrato.representante_nome || "")}" style="flex:2;">
+               <input type="text" name="representante_cpf" placeholder="CPF" value="${escapeHtml(contrato.representante_cpf || "")}" style="flex:1;">
+             </div>
+           </div>
+           <div class="campo"><label>Texto do contrato</label>
+             <textarea name="texto_clausulas" rows="18" style="font-family:monospace;font-size:12.5px;">${escapeHtml(contrato.texto_clausulas)}</textarea>
+             <p class="texto-suave" style="font-size:11px;margin-top:4px;">Linha começando com "# " vira título; "## " vira cabeçalho de seção; o resto é parágrafo normal. Uma linha em branco separa parágrafos.</p>
+           </div>
+           <div class="campo"><label style="font-weight:normal;"><input type="checkbox" name="incluir_anexo_produtos" ${contrato.incluir_anexo_produtos ? "checked" : ""}> Incluir Anexo I (produtos e condições comerciais) no PDF</label></div>
+           ${projeto ? `
+             <div class="campo"><label>Itens do projeto incluídos no Anexo I</label>
+               <div style="display:flex;flex-direction:column;gap:4px;">
+                 ${(projeto.itens || []).map((it) => `<label style="font-weight:normal;"><input type="checkbox" name="item_anexo" value="${it.id}" ${contrato.itens_anexo_json.includes(it.id) ? "checked" : ""}> ${escapeHtml(it.item ? (it.item.nome_memorial || it.item.descricao) : `Item sem fórmula definida (#${it.id})`)}</label>`).join("") || '<p class="texto-suave">Nenhum item neste projeto ainda.</p>'}
+               </div>
+             </div>
+           ` : '<p class="texto-suave">Vincule um projeto do Monte sua linha pra listar produtos no Anexo I — sem projeto, só os textos abaixo aparecem lá.</p>'}
+           <div class="campo"><label>Condição de pagamento</label><textarea name="condicao_pagamento_texto" rows="2">${escapeHtml(contrato.condicao_pagamento_texto || "")}</textarea></div>
+           <div class="campo"><label>Prazo de produção</label><textarea name="prazo_producao_texto" rows="2">${escapeHtml(contrato.prazo_producao_texto || "")}</textarea></div>
+           <div class="campo"><label>Observações gerais</label><textarea name="observacoes_gerais" rows="2">${escapeHtml(contrato.observacoes_gerais || "")}</textarea></div>
+           <button type="submit" class="botao secundario">Salvar alterações</button>
+         </form>
+       </div>
+       ` : `
+       <div class="cartao">
+         <h3 style="margin-top:0;">Cláusulas</h3>
+         <p class="texto-suave">O texto só é editável enquanto o contrato está em rascunho. Use "Ver PDF" acima pra ler o conteúdo completo.</p>
+       </div>
+       `}
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Link de assinatura</h3>
+         <p class="texto-suave">Link seguro (sem senha) pra o cliente ler e assinar eletronicamente — funciona com ou sem projeto vinculado.</p>
+         ${link.ativo ? `
+           <p>${link.expirado ? '<span class="selo bloqueado">Expirado</span>' : '<span class="selo ativo">Ativo</span>'}
+              ${link.enviado_via_whatsapp ? " — já enviado por WhatsApp" : ""}
+              ${link.ultimo_acesso_em ? ` — último acesso ${fmtData(link.ultimo_acesso_em)}` : " — cliente ainda não abriu"}
+              ${!link.expirado ? ` — expira em ${fmtData(link.expira_em)}` : ""}</p>
+           <div class="campo" style="display:flex;gap:8px;align-items:center;">
+             <input type="text" readonly value="${escapeHtml(link.url)}" style="flex:1;font-size:12px;" onclick="this.select()">
+           </div>
+           ${podeGerenciar ? `
+             <div style="display:flex;gap:8px;">
+               <button type="button" class="botao secundario pequeno" data-acao="gerar-link-contrato" data-id="${contrato.id}" data-whatsapp="1">Reenviar por WhatsApp</button>
+               <button type="button" class="botao perigo pequeno" data-acao="revogar-link-contrato" data-id="${contrato.id}">Revogar link</button>
+             </div>` : ""}
+         ` : `
+           <p class="texto-suave">Nenhum link ativo ainda.</p>
+           ${podeGerenciar ? `
+             <div style="display:flex;gap:8px;">
+               <button type="button" class="botao" data-acao="gerar-link-contrato" data-id="${contrato.id}" data-whatsapp="1">Gerar e enviar por WhatsApp</button>
+               <button type="button" class="botao secundario" data-acao="gerar-link-contrato" data-id="${contrato.id}" data-whatsapp="0">Só gerar link (copiar manualmente)</button>
+             </div>` : ""}
+         `}
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Versões assinadas</h3>
+         ${versoes.length === 0 ? '<p class="texto-suave">Nenhuma versão assinada ainda.</p>' : `
+           <div class="tabela-scroll">
+           <table>
+             <thead><tr><th>Versão</th><th>Assinado por</th><th>CPF</th><th>Quando</th><th>Hash (verificação)</th><th></th></tr></thead>
+             <tbody>${versoes.map((v) => `
+               <tr>
+                 <td>V${v.versao}</td>
+                 <td>${escapeHtml(v.assinante_nome)}${v.assinante_email ? `<br><span class="texto-suave" style="font-size:12px;">${escapeHtml(v.assinante_email)}</span>` : ""}</td>
+                 <td class="mono">${escapeHtml(v.assinante_cpf || "")}</td>
+                 <td class="texto-suave">${fmtData(v.assinado_em)}</td>
+                 <td class="mono texto-suave" style="font-size:11px;word-break:break-all;max-width:180px;">${escapeHtml(v.hash_pdf_sha256)}</td>
+                 <td><button class="botao secundario pequeno" data-acao="baixar-versao-contrato" data-id="${contrato.id}" data-versao="${v.versao}">PDF</button></td>
+               </tr>`).join("")}</tbody>
+           </table>
+           </div>
+         `}
+       </div>`,
+      "comercial"
+    );
+
+    const botaoVincular = app.querySelector('[data-acao="abrir-vincular-projeto-contrato"]');
+    if (botaoVincular) {
+      botaoVincular.addEventListener("click", async () => {
+        const projetos = await chamarApi(`/terceirizacao/projetos?cliente_id=${cliente.id}`).catch(() => []);
+        modalVincularProjetoContrato(contrato.id, projetos);
+      });
     }
   }
 
@@ -13956,6 +14386,7 @@
                ? '<p class="mensagem-erro">Nenhum cliente ativo cadastrado ainda.</p>'
                : `<button class="botao" data-acao="abrir-novo-rascunho-vendas">+ Novo rascunho</button>`}
              <button class="botao secundario" data-acao="abrir-novo-cliente-vendas">+ Cadastrar cliente visitado</button>
+             <button class="botao secundario" data-acao="abrir-anexar-documento-cliente-vendas">📎 Anexar documento a um cliente</button>
            </div>
          </div>`,
         "app-vendas"
@@ -13988,7 +14419,9 @@
     renderShell(
       `<h2>App de Vendas</h2>
        ${bannerPendenteHtml}
-       <p class="texto-suave">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> — ${seloPedido(rascunho.status)}</p>
+       <p class="texto-suave">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> — ${seloPedido(rascunho.status)}
+         <button class="botao secundario pequeno" data-acao="abrir-anexar-documento-cliente-vendas" style="margin-left:8px;">📎 Anexar documento a um cliente</button>
+       </p>
 
        <div class="cartao">
          <div class="barra-acoes">
@@ -14241,6 +14674,54 @@
       } catch (e) {
         areaResultado.innerHTML = `<span class="mensagem-erro">${escapeHtml(e.message)}</span>`;
       }
+    });
+  }
+
+  // Fase 147 — pedido do usuário: "os vendedores externos vão bater foto e
+  // mandar os documentos dos clientes — esses documentos devem ser
+  // anexados também pelo App de Vendas no cadastro do cliente dentro do
+  // ERP". `modalNovoClienteAppVendas` (acima) já cobria isso só na hora
+  // de CRIAR um cliente novo em campo; isto cobre um cliente que JÁ
+  // EXISTE (mesma permissão `comercial.cadastrar_cliente` que o perfil
+  // "Vendedor" já tem, mesma rota que a tela desktop de Comercial usa —
+  // só faltava a tela aqui no app de campo).
+  function modalAnexarDocumentoClienteVendas() {
+    const clientes = state.cache.clientesAtivosAppVendas || [];
+    const wrap = abrirModal(`
+      <h3>Anexar documento a um cliente</h3>
+      <form data-form="anexar-documento-cliente-vendas">
+        <div class="campo">
+          <label>Cliente</label>
+          <input type="text" id="busca-cliente-doc-vendas" placeholder="Digite a razão social…" autocomplete="off" required>
+          <input type="hidden" name="cliente_id" id="cliente-id-doc-vendas" required>
+          <div id="resultados-busca-cliente-doc-vendas" class="lista-busca-resultados"></div>
+        </div>
+        <div class="campo">
+          <label>Documento(s) (foto ou arquivo)</label>
+          <input type="file" name="documentos" accept="image/jpeg,image/png,image/webp,application/pdf" capture="environment" multiple required>
+          <div class="dica">Bata a foto na hora ou anexe um arquivo já existente. JPG, PNG, WEBP ou PDF, até 10 MB cada — pode escolher mais de um de uma vez.</div>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Enviar</button>
+        </div>
+      </form>`);
+    const campoBusca = wrap.querySelector("#busca-cliente-doc-vendas");
+    const listaResultados = wrap.querySelector("#resultados-busca-cliente-doc-vendas");
+    campoBusca.addEventListener("input", () => {
+      const termo = _normalizarBuscaGlobal(campoBusca.value);
+      if (!termo) { listaResultados.innerHTML = ""; return; }
+      const encontrados = clientes.filter((c) => _normalizarBuscaGlobal(c.razao_social).includes(termo)).slice(0, 8);
+      listaResultados.innerHTML = encontrados.length
+        ? encontrados.map((c) => `<button type="button" class="item-busca-resultado" data-id="${c.id}" data-rotulo="${escapeHtml(c.razao_social)}">${escapeHtml(c.razao_social)}</button>`).join("")
+        : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado.</p>';
+    });
+    listaResultados.addEventListener("click", (e) => {
+      const botao = e.target.closest(".item-busca-resultado");
+      if (!botao) return;
+      campoBusca.value = botao.dataset.rotulo;
+      wrap.querySelector("#cliente-id-doc-vendas").value = botao.dataset.id;
+      listaResultados.innerHTML = "";
     });
   }
 
@@ -16908,6 +17389,125 @@
         }
         return renderTerceirizacaoDetalhe(Number(alvo.dataset.id));
       }
+      // Fase 147 — Gerador de Contratos (contrato é do CLIENTE — `data-id`
+      // aqui é sempre o id do CONTRATO, ver renderContratoDetalhe).
+      case "ver-pdf-contrato": {
+        try {
+          await abrirBinarioEmNovaAba(`/contratos/${alvo.dataset.id}/pdf`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir o PDF do contrato.");
+        }
+        return;
+      }
+      case "enviar-assinatura-contrato": {
+        if (!confirm("Isso trava a edição do contrato e libera para o cliente assinar pelo link. Continuar?")) return;
+        try {
+          await chamarApi(`/contratos/${alvo.dataset.id}/enviar-para-assinatura`, { method: "POST" });
+          definirFlash("ok", "Contrato enviado para assinatura.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível enviar para assinatura.");
+        }
+        return renderContratoDetalhe(Number(alvo.dataset.id));
+      }
+      case "cancelar-contrato": {
+        if (!confirm("Cancelar este contrato? Essa ação não pode ser desfeita.")) return;
+        try {
+          await chamarApi(`/contratos/${alvo.dataset.id}/cancelar`, { method: "POST" });
+          definirFlash("ok", "Contrato cancelado.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível cancelar o contrato.");
+        }
+        return renderContratoDetalhe(Number(alvo.dataset.id));
+      }
+      case "nova-versao-contrato": {
+        if (!confirm("Isso abre uma nova versão do contrato pra edição — a versão assinada atual continua guardada pra sempre, intacta. Continuar?")) return;
+        try {
+          await chamarApi(`/contratos/${alvo.dataset.id}/nova-versao`, { method: "POST" });
+          definirFlash("ok", "Nova versão do contrato iniciada — voltou pra rascunho.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível iniciar uma nova versão do contrato.");
+        }
+        return renderContratoDetalhe(Number(alvo.dataset.id));
+      }
+      case "baixar-versao-contrato": {
+        try {
+          await abrirBinarioEmNovaAba(`/contratos/${alvo.dataset.id}/versoes/${alvo.dataset.versao}/documento.pdf`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir o PDF assinado do contrato.");
+        }
+        return;
+      }
+      case "desvincular-projeto-contrato": {
+        if (!confirm("Desvincular este contrato do projeto? O texto e os dados já preenchidos continuam intactos.")) return;
+        try {
+          await chamarApi(`/contratos/${alvo.dataset.id}/desvincular-projeto`, { method: "POST" });
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível desvincular o projeto.");
+        }
+        return renderContratoDetalhe(Number(alvo.dataset.id));
+      }
+      case "gerar-link-contrato": {
+        const enviarWhatsapp = alvo.dataset.whatsapp === "1";
+        try {
+          const resultado = await chamarApi(`/contratos/${alvo.dataset.id}/link`, {
+            method: "POST", body: { enviar_whatsapp: enviarWhatsapp },
+          });
+          if (enviarWhatsapp && resultado.enviado_via_whatsapp) {
+            definirFlash("ok", "Link gerado e enviado por WhatsApp.");
+          } else if (enviarWhatsapp && resultado.erro_envio_whatsapp) {
+            definirFlash("erro", `Link gerado, mas o envio por WhatsApp falhou: ${resultado.erro_envio_whatsapp}`);
+          } else {
+            definirFlash("ok", "Link gerado.");
+          }
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível gerar o link.");
+        }
+        return renderContratoDetalhe(Number(alvo.dataset.id));
+      }
+      case "revogar-link-contrato": {
+        if (!confirm("Revogar o link de assinatura deste contrato? Quem já tiver o link não vai mais conseguir abri-lo.")) return;
+        try {
+          await chamarApi(`/contratos/${alvo.dataset.id}/link/revogar`, { method: "POST" });
+          definirFlash("ok", "Link revogado.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível revogar o link.");
+        }
+        return renderContratoDetalhe(Number(alvo.dataset.id));
+      }
+      case "abrir-criar-contrato-cliente": {
+        modalCriarContratoCliente(Number(alvo.dataset.id), state.cache.projetosParaContratoCliente || []);
+        return;
+      }
+      case "abrir-enviar-documento-cliente": {
+        modalEnviarDocumentoCliente(Number(alvo.dataset.id));
+        return;
+      }
+      case "ver-documento-cliente": {
+        try {
+          await abrirBinarioEmNovaAba(`/comercial/clientes/${alvo.dataset.clienteId}/documentos/${alvo.dataset.id}/download?inline=1`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir o documento.");
+        }
+        return;
+      }
+      case "baixar-documento-cliente": {
+        try {
+          await baixarArquivo(`/comercial/clientes/${alvo.dataset.clienteId}/documentos/${alvo.dataset.id}/download`, alvo.dataset.nome);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível baixar o documento.");
+        }
+        return;
+      }
+      case "excluir-documento-cliente": {
+        if (!confirm("Excluir este documento? Essa ação não pode ser desfeita.")) return;
+        try {
+          await chamarApi(`/comercial/clientes/${alvo.dataset.clienteId}/documentos/${alvo.dataset.id}`, { method: "DELETE" });
+          definirFlash("ok", "Documento excluído.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível excluir o documento.");
+        }
+        return renderClienteDetalhe(Number(alvo.dataset.clienteId));
+      }
       case "gerar-link-cliente": {
         const enviarWhatsapp = alvo.dataset.whatsapp === "1";
         try {
@@ -17288,6 +17888,9 @@
         return;
       case "abrir-novo-cliente-vendas":
         modalNovoClienteAppVendas();
+        return;
+      case "abrir-anexar-documento-cliente-vendas":
+        modalAnexarDocumentoClienteVendas();
         return;
       case "abrir-adicionar-item-rascunho-vendas":
         modalAdicionarItemRascunhoVendas(alvo.dataset.id);
@@ -18855,6 +19458,55 @@
         definirFlash("ok", "Solicitação enviada.");
         return renderTerceirizacaoDetalhe(Number(form.dataset.id));
       }
+      // Fase 147 — Gerador de Contratos (`form.dataset.id` = id do
+      // CONTRATO, não do projeto).
+      case "editar-contrato": {
+        await chamarApi(`/contratos/${form.dataset.id}`, {
+          method: "PUT",
+          body: {
+            texto_clausulas: dados.get("texto_clausulas"),
+            representante_nome: dados.get("representante_nome") || null,
+            representante_cpf: dados.get("representante_cpf") || null,
+            incluir_anexo_produtos: !!dados.get("incluir_anexo_produtos"),
+            itens_anexo_json: dados.getAll("item_anexo").map(Number),
+            condicao_pagamento_texto: dados.get("condicao_pagamento_texto") || null,
+            prazo_producao_texto: dados.get("prazo_producao_texto") || null,
+            observacoes_gerais: dados.get("observacoes_gerais") || null,
+          },
+        });
+        definirFlash("ok", "Contrato atualizado.");
+        return renderContratoDetalhe(Number(form.dataset.id));
+      }
+      case "criar-contrato-cliente": {
+        const projetoId = dados.get("projeto_id");
+        const novo = await chamarApi("/contratos", {
+          method: "POST",
+          body: { cliente_id: Number(form.dataset.id), projeto_id: projetoId ? Number(projetoId) : undefined },
+        });
+        fecharModais();
+        return navegarPara(`#/contrato/${novo.id}`);
+      }
+      case "vincular-projeto-contrato": {
+        if (!dados.get("projeto_id")) throw new Error("Escolha um projeto.");
+        await chamarApi(`/contratos/${form.dataset.id}/vincular-projeto`, {
+          method: "POST", body: { projeto_id: Number(dados.get("projeto_id")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Projeto vinculado — campos ainda vazios foram preenchidos automaticamente.");
+        return renderContratoDetalhe(Number(form.dataset.id));
+      }
+      case "enviar-documento-cliente": {
+        const arquivo = dados.get("arquivo");
+        if (!arquivo || !arquivo.size) throw new Error("Escolha um arquivo.");
+        const dataUrl = await lerArquivoComoBase64(arquivo);
+        await chamarApi(`/comercial/clientes/${form.dataset.id}/documentos`, {
+          method: "POST",
+          body: { nome: dados.get("nome") || arquivo.name, nome_arquivo: arquivo.name, tipo_mime: arquivo.type, dados: dataUrl },
+        });
+        fecharModais();
+        definirFlash("ok", "Documento anexado.");
+        return renderClienteDetalhe(Number(form.dataset.id));
+      }
       case "salvar-embalagem": {
         const tipoEmbalagem = form.dataset.tipo;
         const idEmbalagem = form.dataset.id;
@@ -19518,6 +20170,25 @@
         });
         fecharModais();
         definirFlash("ok", "Cliente cadastrado — o Financeiro ainda precisa liberar o cadastro antes da primeira venda.");
+        return renderAppVendas();
+      }
+      case "anexar-documento-cliente-vendas": {
+        const clienteIdDoc = dados.get("cliente_id");
+        if (!clienteIdDoc) throw new Error("Busque e selecione um cliente.");
+        const arquivosDoc = Array.from(form.querySelector('input[name="documentos"]').files || []);
+        if (arquivosDoc.length === 0) throw new Error("Anexe pelo menos um documento (foto ou arquivo).");
+        // Mesma rota que a tela desktop de Comercial usa — um POST por
+        // arquivo (a rota de anexo a cliente já existente aceita um
+        // documento por vez, diferente da criação atômica de cliente novo).
+        for (const arquivo of arquivosDoc) {
+          const dataUrl = await lerArquivoComoBase64(arquivo);
+          await chamarApi(`/comercial/clientes/${clienteIdDoc}/documentos`, {
+            method: "POST",
+            body: { nome_arquivo: arquivo.name || "documento.jpg", tipo_mime: arquivo.type || "application/octet-stream", dados: dataUrl },
+          });
+        }
+        fecharModais();
+        definirFlash("ok", `${arquivosDoc.length > 1 ? `${arquivosDoc.length} documentos enviados` : "Documento enviado"} para o cadastro do cliente.`);
         return renderAppVendas();
       }
       case "adicionar-item-rascunho-vendas": {

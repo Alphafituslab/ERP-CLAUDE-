@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "146.0"
+VERSAO_SISTEMA = "147.0"
 
 
 def create_app(test_config: dict = None) -> Flask:
@@ -56,7 +56,7 @@ def create_app(test_config: dict = None) -> Flask:
         memorial_anexos, memorial_padronizacao, vendas_app, memorial_administracao, sistema, compras,
         cotacoes, fiscal, boletos, tipos_etapa_producao, painel_tempo_real, painel_executivo,
         solicitacoes_material, fluxo, transportadoras, tabelas_preco, clientes_documentos, terminais,
-        nfe_entrada, terceirizacao, portal_terceirizacao,
+        nfe_entrada, terceirizacao, portal_terceirizacao, contratos, portal_contrato,
     )
     app.register_blueprint(auth.bp)
     app.register_blueprint(usuarios.bp)
@@ -103,6 +103,8 @@ def create_app(test_config: dict = None) -> Flask:
     app.register_blueprint(nfe_entrada.bp)
     app.register_blueprint(terceirizacao.bp)
     app.register_blueprint(portal_terceirizacao.bp)
+    app.register_blueprint(contratos.bp)
+    app.register_blueprint(portal_contrato.bp)
 
     @app.get("/api/v1/saude")
     def saude():
@@ -152,6 +154,13 @@ def create_app(test_config: dict = None) -> Flask:
     @app.get("/portal/terceirizacao/<token>")
     def portal_terceirizacao_pagina(token):
         return send_from_directory(FRONTEND_DIR, "portal_terceirizacao.html")
+
+    # Fase 147 — portal do CONTRATO (mesma receita da linha acima, mas
+    # próprio de cada contrato — funciona com ou sem projeto do Monte sua
+    # linha vinculado, ver app/routes/portal_contrato.py).
+    @app.get("/portal/contrato/<token>")
+    def portal_contrato_pagina(token):
+        return send_from_directory(FRONTEND_DIR, "portal_contrato.html")
 
     if not app.debug:
         logging.basicConfig(level=logging.INFO)

@@ -155,14 +155,21 @@ def enviar_documento(cliente_id):
 @bp.get("/clientes/<int:cliente_id>/documentos/<int:documento_id>/download")
 @requires_permission("comercial", "visualizar")
 def baixar_documento(cliente_id, documento_id):
+    """Fase 147 — pedido do usuário: "poder visualizar sem precisar
+    baixar, mas se precisar pode deixar baixar". `?inline=1` mostra o
+    documento direto no navegador (PDF/imagem — o que a maioria dos
+    documentos de cliente é); sem o parâmetro, continua baixando como
+    sempre (padrão anterior, mantido para não quebrar nenhum link já
+    existente)."""
     conn = get_db()
     _cliente_ou_404(conn, cliente_id)
     documento = _documento_ou_404(conn, cliente_id, documento_id)
     bruto = base64.b64decode(documento["dados"])
+    disposicao = "inline" if request.args.get("inline") == "1" else "attachment"
     return Response(
         bruto,
         mimetype=documento["tipo_mime"] or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{_nome_arquivo_seguro(documento["nome_arquivo"])}"'},
+        headers={"Content-Disposition": f'{disposicao}; filename="{_nome_arquivo_seguro(documento["nome_arquivo"])}"'},
     )
 
 
