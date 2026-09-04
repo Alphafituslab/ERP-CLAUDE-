@@ -1,32 +1,39 @@
 """
-Fase 138 — Terceirização Premium: túnel do portal do cliente como Serviço
-de VERDADE do Windows (não Tarefa Agendada).
+Fase 152 — Terceirização Premium/Contratos: acesso externo ao portal do
+cliente REESCRITO de túnel SSH reverso para um relay HTTP de conexão de
+SAÍDA (substitui por completo a Fase 138).
 
 Contexto (ver [[project_terceirizacao_premium]] na memória da sessão que
-escreveu isto, e o plano completo em
-`C:\\Users\\Oitech\\.claude\\plans\\curious-whistling-moonbeam.md`): o
-portal do cliente da Terceirização Premium só é alcançável de fora porque
-existe um túnel SSH reverso desta máquina até o VPS
-(`whatts.alphafitus.com.br:9445`, Caddy path-restrito a `/portal/*`) — sem
-esse túnel de pé, o link do cliente simplesmente não abre.
+escreveu a Fase 138, e a investigação da Fase 152 na mesma memória): o
+desenho anterior (`ssh -R`, um túnel reverso pro VPS) funcionava
+perfeitamente quando rodado interativamente, mas os dados nunca
+atravessavam quando o MESMO comando rodava dentro de um Serviço do
+Windows/Tarefa Agendada (contexto SYSTEM) — a porta remota ficava
+escutando de verdade, mas a retransmissão de dados travava. Um teste
+isolado (Tarefa Agendada rodando como SYSTEM, só um `curl 127.0.0.1:5000`
+sem SSH nenhum no meio) confirmou que loopback puro FUNCIONA normalmente
+em contexto SYSTEM — o problema era específico do mecanismo de
+retransmissão do SSH sob esse contexto, não de rede em geral.
 
-** LIMITAÇÃO CONHECIDA, NÃO RESOLVIDA (ver a memória linkada acima pro
-relato completo) **: este módulo está tecnicamente correto e FUNCIONA até
-certo ponto — o serviço sobe, autentica no VPS, e a porta remota fica
-escutando de verdade (confirmado com `ss -tlnp` no VPS). Mas dados reais
-não atravessam o túnel quando ele é mantido por este serviço (nem por uma
-Tarefa Agendada, testada antes e removida pelo mesmo motivo) — só quando o
-MESMO comando `ssh` é rodado interativamente (sessão de usuário de
-verdade, primeiro plano). Duas causas raiz REAIS já foram encontradas e
-corrigidas no caminho (path de `__file__` em módulo congelado; dono
-incorreto do arquivo da chave privada rejeitado pelo OpenSSH do Windows)
-— mas depois de corrigir as duas, o sintoma final (porta escuta, dados não
-passam) continuou idêntico. Suspeita não confirmada: Windows Defender
-tratando processos SYSTEM/não-interativos de forma diferente pra esse tipo
-de tráfego. Enquanto isso não for resolvido, o túnel real de produção
-continua sendo mantido manualmente (processo solto, ver a memória) — este
-serviço fica no repositório pronto pra retomar a investigação, mas NÃO
-está instalado/ativo em produção.
+Por isso a Fase 152 abandona SSH por completo. Arquitetura nova:
+
+  1. Esta máquina NUNCA aceita conexão nenhuma de fora — só faz chamadas
+     de SAÍDA (long-polling HTTPS) para um pequeno relay novo no VPS
+     (`portal_relay_vps.py`, ver esse arquivo pro lado de lá).
+  2. O relay recebe as requisições reais dos visitantes do portal (em
+     `whatts.alphafitus.com.br:9445/portal/...`, mesmo Caddy de sempre,
+     só trocando a porta de destino) e as deixa "penduradas" numa fila.
+  3. Este serviço pergunta repetidamente ao relay "tem pedido pendente?"
+     (`GET /agente/proximo`); quando chega um, faz a chamada real contra
+     `http://127.0.0.1:5000` (o próprio AlphafitusOS local) e devolve o
+     resultado (`POST /agente/resposta/<id>`), que acorda o visitante
+     que estava esperando.
+
+Nenhuma chave privada, nenhum ACL de arquivo, nenhum `ssh.exe` — só um
+segredo compartilhado (Bearer token) em `config_ambiente.bat`, o mesmo
+mecanismo já usado para `ALPHAFITUS_JWT_SECRET` e outros segredos deste
+projeto. Isso elimina de vez a lacuna real que a Fase 138 nunca
+conseguiu fechar.
 
 Uso (dentro do venv, num Prompt de Comando/PowerShell como Administrador):
 
@@ -35,100 +42,122 @@ Uso (dentro do venv, num Prompt de Comando/PowerShell como Administrador):
     venv\\Scripts\\python tunel_portal_service.py stop
     venv\\Scripts\\python tunel_portal_service.py remove
 """
+import base64
 import os
-import shutil
-import subprocess
 import sys
+import time
 
 
 def _pasta_instalacao():
-    """Fase 138 — achado real durante o teste: `__file__` de um módulo
-    congelado pelo PyInstaller (com `noarchive=True`/`contents_directory=
-    '.'`, ver installer/alphafitus.spec) resolve para DENTRO de
-    `_internal\\`, não para a pasta real de instalação (onde
-    `tunel_portal\\chave_tunel` de verdade mora, ao lado dos .exe) — isso
-    fazia o `ssh.exe` ser chamado com um caminho de chave que não existe
-    (`FileNotFoundError`), sempre, silenciosamente reiniciando em loop.
-    `sys.executable` (o caminho do .exe em si) é a base certa quando
-    congelado; só cai para `__file__` quando rodando como script .py
-    puro (nunca vai acontecer no serviço real, só em teste local)."""
+    """Mesmo achado real da Fase 138: `__file__` de um módulo congelado
+    pelo PyInstaller resolve para DENTRO de `_internal\\`, não para a
+    pasta real de instalação (onde `config_ambiente.bat` de verdade
+    mora, ao lado dos .exe) — `sys.executable` é a base certa quando
+    congelado; só cai para `__file__` rodando como script .py puro."""
     if getattr(sys, "frozen", False):
         return os.path.dirname(os.path.abspath(sys.executable))
     return os.path.dirname(os.path.abspath(__file__))
 
+
 NOME_SERVICO = "AlphafitusOSTunelPortal"
-NOME_EXIBICAO = "Alphafitus OS (Tunel do Portal do Cliente - Terceirizacao)"
+NOME_EXIBICAO = "Alphafitus OS (Portal do Cliente - Terceirizacao/Contratos)"
 DESCRICAO_SERVICO = (
-    "Mantem aberto o tunel SSH reverso que expoe SO o Portal do Cliente "
-    "(Terceirizacao Premium) publicamente pelo VPS da Alphafitus, sem "
-    "expor o resto do sistema. Sem este servico rodando, o link enviado "
-    "ao cliente nao abre."
+    "Mantem o Portal do Cliente (Terceirizacao Premium/Contratos) acessivel "
+    "de fora, via chamadas de saida para o relay do VPS da Alphafitus (Fase "
+    "152 - substitui o antigo tunel SSH). Sem este servico rodando, o link "
+    "enviado ao cliente nao abre."
 )
 
-# Mesmos valores usados quando o túnel foi testado manualmente pela
-# primeira vez (ver terceirizacao.py::URL_BASE_PORTAL_PUBLICO) — casa com
-# o bloco `whatts.alphafitus.com.br:9445` do Caddy no VPS.
-VPS_HOST = "46.202.151.252"
-VPS_USUARIO = "portaltunnel"
-PORTA_REMOTA = 18500
 PORTA_LOCAL = 5000
-NOME_ARQUIVO_CHAVE = "chave_tunel"  # dentro de tunel_portal/, ao lado deste arquivo/instalação
-SEGUNDOS_ENTRE_TENTATIVAS = 15
+TIMEOUT_LONGPOLL_SEGUNDOS = 35  # um pouco acima do timeout do relay (ver portal_relay_vps.py)
+SEGUNDOS_ESPERA_APOS_ERRO = 5
 
 
-def _caminho_chave(pasta_instalacao):
-    return os.path.join(pasta_instalacao, "tunel_portal", NOME_ARQUIVO_CHAVE)
+def _variaveis_relay(pasta_instalacao):
+    """Carrega ALPHAFITUS_PORTAL_RELAY_URL/SEGREDO de config_ambiente.bat
+    — mesmo parser puro (`ler_variaveis_de_config_ambiente`) que
+    `service_windows.py` já usa pro serviço principal, reaproveitado
+    aqui em vez de duplicar a lógica de leitura do arquivo."""
+    sys.path.insert(0, pasta_instalacao)
+    from service_windows import ler_variaveis_de_config_ambiente
+    caminho = os.path.join(pasta_instalacao, "config_ambiente.bat")
+    variaveis = ler_variaveis_de_config_ambiente(caminho)
+    url = os.environ.get("ALPHAFITUS_PORTAL_RELAY_URL") or variaveis.get("ALPHAFITUS_PORTAL_RELAY_URL")
+    segredo = os.environ.get("ALPHAFITUS_PORTAL_RELAY_SEGREDO") or variaveis.get("ALPHAFITUS_PORTAL_RELAY_SEGREDO")
+    return url, segredo
 
 
-def _caminho_ssh():
-    """Resolve o ssh.exe do PATH primeiro (mesmo binário usado quando o
-    túnel foi testado manualmente com sucesso); cai pro caminho padrão do
-    OpenSSH Client embutido no Windows 10/11 se não encontrar no PATH —
-    nunca assume que é a MESMA máquina de desenvolvimento."""
-    encontrado = shutil.which("ssh")
-    if encontrado:
-        return encontrado
-    caminho_padrao = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "System32", "OpenSSH", "ssh.exe")
-    if os.path.isfile(caminho_padrao):
-        return caminho_padrao
-    raise RuntimeError(
-        "ssh.exe não encontrado (nem no PATH, nem no OpenSSH Client padrão do Windows) — "
-        "instale o 'Cliente OpenSSH' em Configurações > Aplicativos > Recursos Opcionais."
-    )
+def _processar_pedido(sessao, url_relay, headers_auth, pedido, log):
+    """Executa a requisição real contra o AlphafitusOS local e devolve o
+    resultado pro relay — qualquer falha na chamada local vira uma
+    resposta 502 pro visitante (nunca deixa o pedido pendurado pra
+    sempre no relay, que tem seu próprio timeout como rede de segurança)."""
+    corpo = base64.b64decode(pedido["corpo_b64"])
+    headers_locais = {k: v for k, v in pedido["headers"].items() if k.lower() not in ("host", "content-length")}
+    try:
+        resposta_local = sessao.request(
+            pedido["metodo"], f"http://127.0.0.1:{PORTA_LOCAL}{pedido['path']}",
+            headers=headers_locais, data=corpo, timeout=60, allow_redirects=False,
+        )
+        payload = {
+            "status_code": resposta_local.status_code,
+            "headers": {k: v for k, v in resposta_local.headers.items()},
+            "corpo_b64": base64.b64encode(resposta_local.content).decode("ascii"),
+        }
+    except Exception as erro:
+        log(f"Falha ao chamar o AlphafitusOS local para o pedido {pedido['id']}: {erro!r}")
+        payload = {
+            "status_code": 502,
+            "headers": {"Content-Type": "text/plain; charset=utf-8"},
+            "corpo_b64": base64.b64encode(f"Erro ao processar localmente: {erro}".encode("utf-8")).decode("ascii"),
+        }
+    try:
+        sessao.post(f"{url_relay}/agente/resposta/{pedido['id']}", headers=headers_auth, json=payload, timeout=15)
+    except Exception as erro:
+        log(f"Falha ao devolver a resposta do pedido {pedido['id']} ao relay: {erro!r}")
 
 
-def montar_comando_tunel(pasta_instalacao):
-    # Fase 138 — o serviço roda como LocalSystem (conta sem perfil de
-    # usuário de verdade: sem HOME/USERPROFILE utilizável) — sem apontar
-    # explicitamente onde gravar o known_hosts, o ssh.exe não sabia onde
-    # persistir a chave do host na primeira conexão e o túnel nunca
-    # chegava a conectar de verdade (ficava "Running" no SCM, mas o
-    # processo ssh interno travava). Aponta pro MESMO lugar onde já fica
-    # a chave privada — pasta que o serviço garantidamente consegue ler
-    # e escrever.
-    caminho_known_hosts = os.path.join(pasta_instalacao, "tunel_portal", "known_hosts")
-    return [
-        _caminho_ssh(),
-        "-o", "StrictHostKeyChecking=accept-new",
-        "-o", f"UserKnownHostsFile={caminho_known_hosts}",
-        "-o", "ServerAliveInterval=30",
-        "-o", "ServerAliveCountMax=3",
-        "-o", "ExitOnForwardFailure=yes",
-        "-i", _caminho_chave(pasta_instalacao),
-        "-R", f"127.0.0.1:{PORTA_REMOTA}:localhost:{PORTA_LOCAL}",
-        "-N",
-        f"{VPS_USUARIO}@{VPS_HOST}",
-    ]
+def loop_agente(deve_parar, log):
+    """Loop principal: pergunta ao relay se tem pedido, processa, repete.
+    `deve_parar()` é chamado entre iterações para permitir parada
+    responsiva (mesmo espírito do polling curto que a Fase 138 já usava
+    pra não bloquear `SvcStop` — só que aqui não tem processo filho pra
+    matar, é tudo síncrono dentro deste laço)."""
+    import requests
+
+    pasta_instalacao = _pasta_instalacao()
+    url_relay, segredo = _variaveis_relay(pasta_instalacao)
+    if not url_relay or not segredo:
+        log("ALPHAFITUS_PORTAL_RELAY_URL/ALPHAFITUS_PORTAL_RELAY_SEGREDO não configurados em config_ambiente.bat — nada a fazer.")
+        return
+    url_relay = url_relay.rstrip("/")
+    headers_auth = {"Authorization": f"Bearer {segredo}"}
+    sessao = requests.Session()
+
+    log(f"Conectando ao relay do portal em {url_relay}...")
+    while not deve_parar():
+        try:
+            resp = sessao.get(f"{url_relay}/agente/proximo", headers=headers_auth, timeout=TIMEOUT_LONGPOLL_SEGUNDOS)
+            if resp.status_code == 204:
+                continue  # sem pedido pendente agora — o long-poll do relay já esperou, tenta de novo na hora
+            if resp.status_code == 401:
+                log("Relay recusou o segredo (401) — confira ALPHAFITUS_PORTAL_RELAY_SEGREDO.")
+                time.sleep(30)
+                continue
+            if resp.status_code != 200:
+                time.sleep(SEGUNDOS_ESPERA_APOS_ERRO)
+                continue
+            _processar_pedido(sessao, url_relay, headers_auth, resp.json(), log)
+        except requests.RequestException as erro:
+            log(f"Relay indisponível ({erro!r}) — tentando de novo em {SEGUNDOS_ESPERA_APOS_ERRO}s...")
+            time.sleep(SEGUNDOS_ESPERA_APOS_ERRO)
 
 
 if os.name == "nt":
-    import sys
-    import threading
-
-    import servicemanager
     import win32event
     import win32service
     import win32serviceutil
+    import servicemanager
 
     class AlphafitusOSTunelPortalService(win32serviceutil.ServiceFramework):
         _svc_name_ = NOME_SERVICO
@@ -138,16 +167,10 @@ if os.name == "nt":
         def __init__(self, args):
             win32serviceutil.ServiceFramework.__init__(self, args)
             self.evento_parar = win32event.CreateEvent(None, 1, 0, None)  # manual-reset
-            self.processo_atual = None
 
         def SvcStop(self):
             self.ReportServiceStatus(win32service.SERVICE_STOP_PENDING)
             win32event.SetEvent(self.evento_parar)
-            try:
-                if self.processo_atual is not None and self.processo_atual.poll() is None:
-                    self.processo_atual.terminate()
-            except Exception:
-                pass
 
         def SvcDoRun(self):
             servicemanager.LogMsg(
@@ -156,32 +179,19 @@ if os.name == "nt":
                 (self._svc_name_, ""),
             )
             self.ReportServiceStatus(win32service.SERVICE_RUNNING)
-            self._loop_manter_tunel()
 
-        def _loop_manter_tunel(self):
-            pasta_instalacao = _pasta_instalacao()
-            comando = montar_comando_tunel(pasta_instalacao)
+            def deve_parar():
+                return win32event.WaitForSingleObject(self.evento_parar, 0) == win32event.WAIT_OBJECT_0
 
-            while win32event.WaitForSingleObject(self.evento_parar, 0) != win32event.WAIT_OBJECT_0:
+            def log(mensagem):
+                servicemanager.LogMsg(servicemanager.EVENTLOG_INFORMATION_TYPE, 0, (mensagem, ""))
+
+            while not deve_parar():
                 try:
-                    servicemanager.LogMsg(servicemanager.EVENTLOG_INFORMATION_TYPE, 0, ("Conectando o tunel do portal...", ""))
-                    self.processo_atual = subprocess.Popen(
-                        comando, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                        creationflags=subprocess.CREATE_NO_WINDOW,
-                    )
-                    # Espera o processo cair OU o serviço ser mandado parar
-                    # — o que vier primeiro. `Popen.wait` é bloqueante puro
-                    # (não escuta o evento de parada), então fazemos
-                    # polling curto em vez disso.
-                    while self.processo_atual.poll() is None:
-                        if win32event.WaitForSingleObject(self.evento_parar, 2000) == win32event.WAIT_OBJECT_0:
-                            self.processo_atual.terminate()
-                            return
+                    loop_agente(deve_parar, log)
                 except Exception as erro:
-                    servicemanager.LogMsg(servicemanager.EVENTLOG_ERROR_TYPE, 0, (f"Erro no tunel do portal: {erro!r}", ""))
-
-                servicemanager.LogMsg(servicemanager.EVENTLOG_WARNING_TYPE, 0, ("Tunel do portal caiu - tentando de novo...", ""))
-                if win32event.WaitForSingleObject(self.evento_parar, SEGUNDOS_ENTRE_TENTATIVAS * 1000) == win32event.WAIT_OBJECT_0:
+                    servicemanager.LogMsg(servicemanager.EVENTLOG_ERROR_TYPE, 0, (f"Erro fatal no loop do agente: {erro!r}", ""))
+                if win32event.WaitForSingleObject(self.evento_parar, SEGUNDOS_ESPERA_APOS_ERRO * 1000) == win32event.WAIT_OBJECT_0:
                     return
 
     def main():
@@ -196,7 +206,7 @@ else:
     def main():
         raise RuntimeError(
             "tunel_portal_service.py só funciona no Windows (usa pywin32) — "
-            "em outro sistema, gerencie o túnel SSH com o gerenciador de serviço nativo dele."
+            "em outro sistema, rode loop_agente() diretamente dentro do gerenciador de serviço nativo dele."
         )
 
 
