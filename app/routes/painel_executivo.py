@@ -42,6 +42,12 @@ from flask import Blueprint, g, jsonify, request
 from ..context import ApiError, get_db
 from ..permissions import requires_auth, usuario_tem_permissao
 from .producao import _etapas_da_ordem
+from .painel_tempo_real import (
+    _col_aprovacao_financeira, _col_expedicao_coleta, _col_pedidos_compra,
+    _col_sugestoes_compra, _col_lotes_quarentena, _col_producao_etapas, _col_estoque_minimo,
+)
+from .financeiro import _hoje_iso_data, _total_baixado
+from .terceirizacao import DEPARTAMENTOS_APROVACAO, ROTULOS_DEPARTAMENTO, PERMISSAO_POR_DEPARTAMENTO
 
 bp = Blueprint("painel_executivo", __name__, url_prefix="/api/v1/painel-executivo")
 
@@ -528,3 +534,224 @@ def linha_do_tempo_ordem(ordem_id):
         },
         "eventos": eventos,
     })
+
+
+# ============================================================
+# Fase 151 — Feed de "Pendências por Setor"
+# ============================================================
+# Pedido do usuário: "cada setor fica sempre a par do que precisa ser
+# feito". O sistema não tem (nem precisa ter) uma tabela de setores —
+# mesma decisão já documentada em solicitacoes_material.py: "setor" aqui
+# é só um rótulo de apresentação usado pra AGRUPAR pendências que já
+# existem, cada uma numa coluna de status real de uma tabela que já
+# existia antes desta fase (mesmo princípio do Painel Tempo Real, Fase
+# 75/90: nada fica pré-calculado em tabela nova, tudo é consultado ao
+# vivo). Vários grupos abaixo reaproveitam literalmente as mesmas
+# funções de coluna do Painel Tempo Real — o dado é o mesmo, só a forma
+# de agrupar (por setor, não por etapa do pipeline) é diferente.
+#
+# Cada grupo é gated pela MESMA permissão que já controla a tela normal
+# daquele dado (nunca uma permissão nova "ver tudo") — um perfil estreito
+# continua vendo só os setores que já fazem sentido pra ele.
+def _pend_cotacoes_abertas(conn):
+    rows = conn.execute(
+        """
+        SELECT c.id, c.numero, c.observacoes, c.criado_em
+        FROM cotacoes c
+        WHERE c.status = 'aberta'
+        ORDER BY c.id DESC LIMIT 50
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _pend_solicitacoes_material(conn):
+    rows = conn.execute(
+        """
+        SELECT sm.id, sm.numero, sm.setor_solicitante, sm.prioridade, sm.justificativa, sm.criado_em,
+               u.nome AS solicitante_nome
+        FROM solicitacoes_material sm JOIN usuarios u ON u.id = sm.solicitante_id
+        WHERE sm.status = 'pendente'
+        ORDER BY sm.id DESC LIMIT 50
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _pend_analises_aguardando_resultado(conn):
+    rows = conn.execute(
+        """
+        SELECT a.id, a.tipo, a.criado_em, l.codigo_lote, i.codigo AS item_codigo, i.descricao AS item_descricao
+        FROM analises a
+        JOIN lotes l ON l.id = a.lote_id
+        JOIN itens i ON i.id = l.item_id
+        WHERE a.status = 'aguardando_resultado'
+        ORDER BY a.id DESC LIMIT 50
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _pend_desvios_abertos(conn):
+    rows = conn.execute(
+        """
+        SELECT d.id, d.numero, d.origem, d.criticidade, d.descricao, d.status, d.prazo, d.criado_em,
+               i.codigo AS item_codigo, i.descricao AS item_descricao
+        FROM desvios d
+        LEFT JOIN itens i ON i.id = d.item_id
+        WHERE d.status IN ('aberto', 'em_tratativa')
+        ORDER BY (d.prazo IS NULL), d.prazo, d.id DESC LIMIT 50
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _pend_contas_receber_vencidas(conn):
+    hoje = _hoje_iso_data()
+    rows = conn.execute(
+        """
+        SELECT cr.id, cr.numero, cr.valor_total, cr.vencimento, c.razao_social AS cliente_nome
+        FROM contas_receber cr JOIN clientes c ON c.id = cr.cliente_id
+        WHERE cr.status IN ('aberto', 'pago_parcial') AND cr.vencimento < ?
+        ORDER BY cr.vencimento ASC LIMIT 50
+        """,
+        (hoje,),
+    ).fetchall()
+    resultado = []
+    for r in rows:
+        conta = dict(r)
+        conta["saldo_aberto"] = conta["valor_total"] - _total_baixado(conn, "contas_receber_baixas", "conta_receber_id", conta["id"])
+        resultado.append(conta)
+    return resultado
+
+
+def _pend_contas_pagar_vencidas(conn):
+    hoje = _hoje_iso_data()
+    rows = conn.execute(
+        """
+        SELECT cp.id, cp.numero, cp.descricao, cp.valor_total, cp.vencimento, f.nome AS fornecedor_nome
+        FROM contas_pagar cp JOIN fornecedores f ON f.id = cp.fornecedor_id
+        WHERE cp.status IN ('aberto', 'pago_parcial') AND cp.vencimento < ?
+        ORDER BY cp.vencimento ASC LIMIT 50
+        """,
+        (hoje,),
+    ).fetchall()
+    resultado = []
+    for r in rows:
+        conta = dict(r)
+        conta["saldo_aberto"] = conta["valor_total"] - _total_baixado(conn, "contas_pagar_baixas", "conta_pagar_id", conta["id"])
+        resultado.append(conta)
+    return resultado
+
+
+def _pend_boletos_pendentes_remessa(conn):
+    rows = conn.execute(
+        """
+        SELECT b.id, b.nosso_numero, b.valor, b.vencimento, c.razao_social AS cliente_nome
+        FROM boletos b JOIN clientes c ON c.id = b.cliente_id
+        WHERE b.status = 'pendente'
+        ORDER BY b.vencimento ASC LIMIT 50
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _pend_ajustes_contagem(conn):
+    rows = conn.execute(
+        """
+        SELECT ci.id AS item_id, ci.contagem_id, c.numero AS contagem_numero,
+               ci.saldo_sistema_no_inicio, ci.quantidade_contada, ci.contado_em
+        FROM contagens_inventario_itens ci JOIN contagens_inventario c ON c.id = ci.contagem_id
+        WHERE ci.aprovacao_status = 'pendente'
+        ORDER BY ci.contado_em LIMIT 50
+        """
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _pend_terceirizacao_por_departamento(conn, departamento):
+    rows = conn.execute(
+        """
+        SELECT ta.id, ta.projeto_id, tp.numero AS projeto_numero, c.razao_social AS cliente_nome
+        FROM terceirizacao_aprovacoes ta
+        JOIN terceirizacao_projetos tp ON tp.id = ta.projeto_id
+        JOIN clientes c ON c.id = tp.cliente_id
+        WHERE ta.status = 'pendente' AND ta.departamento = ?
+        ORDER BY ta.id LIMIT 50
+        """,
+        (departamento,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+# (chave, título, função da coluna, (módulo, ação) da permissão), agrupado
+# por setor. Vários grupos aqui são as MESMAS funções do Painel Tempo Real
+# (mesmo dado, só reagrupado) — ver bloco de comentário acima.
+SETORES_PENDENCIAS = (
+    ("comercial", "Comercial", (
+        ("aprovacao_financeira", "Pedidos aguardando aprovação de crédito", _col_aprovacao_financeira, ("comercial", "visualizar")),
+        ("expedicao_coleta", "Expedidos, aguardando coleta", _col_expedicao_coleta, ("comercial", "visualizar")),
+    )),
+    ("compras", "Compras", (
+        ("pedidos_compra_andamento", "Pedidos de compra em andamento", _col_pedidos_compra, ("compras", "visualizar")),
+        ("cotacoes_abertas", "Cotações abertas", _pend_cotacoes_abertas, ("compras", "visualizar")),
+    )),
+    ("producao", "Produção", (
+        ("etapas_paradas", "Etapas de produção paradas", _col_producao_etapas, ("producao", "visualizar")),
+        ("sugestoes_compra", "Sugestões de compra (MRP) pendentes", _col_sugestoes_compra, ("producao", "visualizar")),
+        ("solicitacoes_material", "Solicitações de material pendentes", _pend_solicitacoes_material, ("solicitacoes_material", "visualizar")),
+    )),
+    ("qualidade", "Qualidade", (
+        ("lotes_quarentena", "Lotes em quarentena/aguardando aprovação", _col_lotes_quarentena, ("lotes", "visualizar")),
+        ("analises_pendentes", "Análises aguardando resultado", _pend_analises_aguardando_resultado, ("analises", "visualizar")),
+        ("desvios_abertos", "Desvios abertos", _pend_desvios_abertos, ("desvios", "visualizar")),
+    )),
+    ("financeiro", "Financeiro", (
+        ("contas_receber_vencidas", "Contas a receber vencidas", _pend_contas_receber_vencidas, ("financeiro", "visualizar")),
+        ("contas_pagar_vencidas", "Contas a pagar vencidas", _pend_contas_pagar_vencidas, ("financeiro", "visualizar")),
+        ("boletos_remessa", "Boletos pendentes de remessa", _pend_boletos_pendentes_remessa, ("financeiro", "gerar_boleto")),
+    )),
+    ("estoque", "Estoque", (
+        ("estoque_minimo", "Abaixo do estoque mínimo", _col_estoque_minimo, ("itens", "visualizar")),
+        ("ajustes_contagem", "Ajustes de contagem pendentes de aprovação", _pend_ajustes_contagem, ("estoque", "visualizar")),
+    )),
+)
+
+
+@bp.get("/pendencias-por-setor")
+@requires_auth
+def pendencias_por_setor():
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+
+    setores_resultado = []
+    for chave_setor, titulo_setor, grupos in SETORES_PENDENCIAS:
+        grupos_resultado = []
+        for chave_grupo, titulo_grupo, funcao_grupo, (modulo, acao) in grupos:
+            if not usuario_tem_permissao(conn, usuario_atual["id"], modulo, acao):
+                continue
+            itens = funcao_grupo(conn)
+            grupos_resultado.append({"chave": chave_grupo, "titulo": titulo_grupo, "itens": itens, "contagem": len(itens)})
+        if grupos_resultado:
+            setores_resultado.append({
+                "chave": chave_setor, "titulo": titulo_setor, "grupos": grupos_resultado,
+                "total_pendencias": sum(g["contagem"] for g in grupos_resultado),
+            })
+
+    # Aprovação de Terceirização por departamento — único conceito do
+    # sistema que já é nativamente "por setor" (ver terceirizacao.py); cada
+    # departamento vira seu próprio setor no feed (P&D e Regulatório não
+    # existem em nenhum outro lugar do sistema, então aparecem só aqui).
+    for departamento in DEPARTAMENTOS_APROVACAO:
+        acao_permissao = PERMISSAO_POR_DEPARTAMENTO[departamento]
+        if not usuario_tem_permissao(conn, usuario_atual["id"], "terceirizacao", acao_permissao):
+            continue
+        itens = _pend_terceirizacao_por_departamento(conn, departamento)
+        titulo_setor = f"Terceirização — {ROTULOS_DEPARTAMENTO[departamento]}"
+        grupo = {"chave": "aprovacao_terceirizacao", "titulo": "Projetos aguardando aceite", "itens": itens, "contagem": len(itens)}
+        setores_resultado.append({
+            "chave": f"terceirizacao_{departamento}", "titulo": titulo_setor,
+            "grupos": [grupo], "total_pendencias": len(itens),
+        })
+
+    return jsonify({"setores": setores_resultado})

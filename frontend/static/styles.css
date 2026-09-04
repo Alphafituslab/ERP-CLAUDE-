@@ -1067,3 +1067,28 @@ tr.linha-selecionada td { background: #e6eef7; }
   .pe-grid-cards { grid-template-columns: 1fr; }
   .pe-grid-cards .pe-card { grid-column: span 1 !important; }
 }
+
+/* Fase 151 — Pendências por Setor */
+.pe-pendencia-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 14px; margin-bottom: 24px; }
+.pe-pendencia-card-titulo { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.pe-pendencia-card-titulo h3 { margin: 0; }
+.pe-pendencia-badge {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 7px;
+  border-radius: 999px; font-size: 12px; font-weight: 700; background: rgba(255,255,255,0.1); color: #b7c0e0;
+}
+.pe-pendencia-badge.tem-pendencia { background: rgba(255, 107, 129, 0.22); color: #ff96a6; }
+.pe-pendencia-grupo { margin-bottom: 10px; }
+.pe-pendencia-grupo:last-child { margin-bottom: 0; }
+.pe-pendencia-grupo-titulo {
+  display: flex; justify-content: space-between; font-size: 12px; opacity: .8; margin-bottom: 4px; cursor: pointer; user-select: none;
+  list-style: none;
+}
+.pe-pendencia-grupo-titulo::-webkit-details-marker { display: none; }
+.pe-pendencia-grupo-titulo:hover { opacity: 1; }
+.pe-pendencia-grupo-titulo .contagem { font-weight: 700; }
+.pe-pendencia-item {
+  font-size: 12px; padding: 5px 0 5px 10px; border-left: 2px solid rgba(255,255,255,.15); color: #dfe4f7;
+}
+.pe-pendencia-item + .pe-pendencia-item { border-top: 1px dashed rgba(255,255,255,.06); }
+.pe-pendencia-item .sub { display: block; opacity: .65; font-size: 11px; margin-top: 1px; }
+.pe-pendencia-vazio { font-size: 12px; opacity: .55; }

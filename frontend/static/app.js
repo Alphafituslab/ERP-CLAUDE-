@@ -15976,6 +15976,79 @@
     return `${dias}d${horasRestantes ? ` ${horasRestantes}h` : ""}`;
   }
 
+  // Fase 151 — Pendências por Setor: uma linha curta por item, formatada
+  // de acordo com o tipo (cada `chaveGrupo` vem de um dado diferente do
+  // backend — ver SETORES_PENDENCIAS em painel_executivo.py). Sem link de
+  // detalhe próprio ainda (os dados já têm tela dedicada em outro lugar
+  // do sistema) — é um FEED de "o que existe", não uma tela de ação.
+  function linhaPendenciaHtml(chaveGrupo, item) {
+    switch (chaveGrupo) {
+      case "aprovacao_financeira":
+        return `<strong>Pedido ${escapeHtml(item.numero)}</strong> — ${escapeHtml(item.cliente_nome)}<span class="sub">${fmtMoeda(item.valor_pedido)} · ${escapeHtml(item.motivo_solicitacao || "")}</span>`;
+      case "expedicao_coleta":
+        return `<strong>Pedido ${escapeHtml(item.numero)}</strong> — ${escapeHtml(item.cliente_nome)}<span class="sub">Expedido em ${fmtData(item.expedido_em)}</span>`;
+      case "pedidos_compra_andamento":
+        return `<strong>${escapeHtml(item.numero)}</strong> — ${escapeHtml(item.fornecedor_nome)}<span class="sub">Status: ${escapeHtml(item.status)}</span>`;
+      case "cotacoes_abertas":
+        return `<strong>${escapeHtml(item.numero)}</strong>${item.observacoes ? `<span class="sub">${escapeHtml(item.observacoes)}</span>` : ""}`;
+      case "etapas_paradas":
+        return `<strong>OP ${escapeHtml(item.numero)}</strong> — ${escapeHtml(item.item_descricao)}<span class="sub">Etapa: ${escapeHtml(item.nome)}${item.centro_trabalho_nome ? " · " + escapeHtml(item.centro_trabalho_nome) : ""}</span>`;
+      case "sugestoes_compra":
+        return `<strong>${escapeHtml(item.item_codigo)}</strong> — ${escapeHtml(item.item_descricao)}<span class="sub">Sugerido: ${item.quantidade_sugerida}</span>`;
+      case "solicitacoes_material":
+        return `<strong>${escapeHtml(item.numero)}</strong> — ${escapeHtml(item.solicitante_nome)}<span class="sub">Prioridade: ${escapeHtml(item.prioridade)}${item.setor_solicitante ? " · " + escapeHtml(item.setor_solicitante) : ""}</span>`;
+      case "lotes_quarentena":
+        return `<strong>Lote ${escapeHtml(item.codigo_lote)}</strong> — ${escapeHtml(item.item_descricao)}<span class="sub">Status: ${escapeHtml(item.status)}</span>`;
+      case "analises_pendentes":
+        return `<strong>Lote ${escapeHtml(item.codigo_lote)}</strong> — ${escapeHtml(item.item_descricao)}<span class="sub">Análise: ${escapeHtml(item.tipo)}</span>`;
+      case "desvios_abertos":
+        return `<strong>${escapeHtml(item.numero)}</strong> — ${escapeHtml(item.descricao)}<span class="sub">Criticidade: ${escapeHtml(item.criticidade)}${item.prazo ? " · Prazo: " + fmtData(item.prazo) : ""}</span>`;
+      case "contas_receber_vencidas":
+        return `<strong>${escapeHtml(item.cliente_nome)}</strong> — ${fmtMoeda(item.saldo_aberto)}<span class="sub">Venceu em ${fmtData(item.vencimento)}</span>`;
+      case "contas_pagar_vencidas":
+        return `<strong>${escapeHtml(item.fornecedor_nome)}</strong> — ${fmtMoeda(item.saldo_aberto)}<span class="sub">Venceu em ${fmtData(item.vencimento)}</span>`;
+      case "boletos_remessa":
+        return `<strong>${escapeHtml(item.cliente_nome)}</strong> — ${fmtMoeda(item.valor)}<span class="sub">Vence em ${fmtData(item.vencimento)}</span>`;
+      case "estoque_minimo":
+        return `<strong>${escapeHtml(item.codigo)}</strong> — ${escapeHtml(item.descricao)}<span class="sub">${item.estoque_atual} / ${item.estoque_minimo} ${escapeHtml(item.unidade_medida)}</span>`;
+      case "ajustes_contagem":
+        return `<strong>Contagem ${escapeHtml(item.contagem_numero)}</strong><span class="sub">Sistema: ${item.saldo_sistema_no_inicio} · Contado: ${item.quantidade_contada}</span>`;
+      case "aprovacao_terceirizacao":
+        return `<strong>Projeto ${escapeHtml(item.projeto_numero)}</strong> — ${escapeHtml(item.cliente_nome)}`;
+      default:
+        return `<strong>${escapeHtml(item.numero || item.codigo_lote || String(item.id))}</strong>`;
+    }
+  }
+
+  function renderPendenciasPorSetorHtml(setores) {
+    if (!setores.length) {
+      return '<p class="texto-suave">Seu usuário não tem permissão para ver pendências de nenhum setor.</p>';
+    }
+    const cards = setores.map((setor) => {
+      const gruposHtml = setor.grupos.map((grupo) => {
+        const itensHtml = grupo.itens.length
+          ? grupo.itens.slice(0, 5).map((item) => `<div class="pe-pendencia-item">${linhaPendenciaHtml(grupo.chave, item)}</div>`).join("")
+              + (grupo.itens.length > 5 ? `<div class="pe-pendencia-item texto-suave">+ ${grupo.itens.length - 5} mais…</div>` : "")
+          : '<div class="pe-pendencia-vazio">Nada pendente aqui.</div>';
+        return `<details class="pe-pendencia-grupo">
+          <summary class="pe-pendencia-grupo-titulo">
+            <span>${escapeHtml(grupo.titulo)}</span>
+            <span class="contagem" style="${grupo.contagem > 0 ? "color:#ff96a6;" : "opacity:.5;"}">${grupo.contagem}</span>
+          </summary>
+          ${itensHtml}
+        </details>`;
+      }).join("");
+      return `<div class="pe-card">
+        <div class="pe-pendencia-card-titulo">
+          <h3>${escapeHtml(setor.titulo)}</h3>
+          <span class="pe-pendencia-badge ${setor.total_pendencias > 0 ? "tem-pendencia" : ""}">${setor.total_pendencias}</span>
+        </div>
+        ${gruposHtml}
+      </div>`;
+    }).join("");
+    return `<div class="pe-pendencia-grid">${cards}</div>`;
+  }
+
   async function renderPainelExecutivo(ano, mes) {
     app.innerHTML = '<div class="carregando">Carregando painel executivo…</div>';
     const hoje = new Date();
@@ -15986,7 +16059,10 @@
 
     const qs = new URLSearchParams({ ano: String(ano) });
     if (mes) qs.set("mes", String(mes));
-    const dados = await chamarApi("/painel-executivo?" + qs.toString());
+    const [dados, pendencias] = await Promise.all([
+      chamarApi("/painel-executivo?" + qs.toString()),
+      chamarApi("/painel-executivo/pendencias-por-setor"),
+    ]);
 
     const secComercial = dados.secoes.find((s) => s.chave === "comercial");
     const secProducao = dados.secoes.find((s) => s.chave === "producao");
@@ -16069,6 +16145,8 @@
         : '<p class="texto-suave">Nenhuma ordem liberada ou em produção agora.</p>';
     }
 
+    const pendenciasHtml = renderPendenciasPorSetorHtml(pendencias.setores);
+
     renderShell(
       `<div class="pe-shell">
          <div class="pe-topo">
@@ -16079,6 +16157,9 @@
              <button type="submit" class="botao secundario pequeno">Filtrar</button>
            </form>
          </div>
+
+         <h3 style="color:#e7ecff;opacity:.9;">Pendências por Setor — o que cada setor precisa fazer agora</h3>
+         ${pendenciasHtml}
 
          ${secComercial ? `
            <h3 style="color:#e7ecff;opacity:.9;">Vendas &amp; Faturamento</h3>
