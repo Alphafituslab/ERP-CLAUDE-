@@ -172,6 +172,7 @@ SCHEMA_FILES = [
     "schema_fase146.sql",  # Fase 146 — Terceirização Premium: múltiplos itens por projeto (fórmula+embalagem própria cada)
     "schema_fase147.sql",  # Fase 147 — Gerador de Contratos (a partir de um projeto do Monte sua linha, assinatura eletrônica reaproveitada)
     "schema_fase150.sql",  # Fase 150 — App de Vendas: crédito pessoal do vendedor ("gordurinha") + check-in de visita por geolocalização
+    "schema_fase153.sql",  # Fase 153 — Galeria de mídia dos itens (múltiplas fotos + vídeo)
 ]
 
 

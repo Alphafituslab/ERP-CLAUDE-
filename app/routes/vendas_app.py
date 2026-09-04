@@ -503,6 +503,18 @@ def portfolio():
     for item in itens:
         item = dict(item)
         item["saldo_disponivel_para_venda"] = _saldo_disponivel_para_venda(conn, item["id"], excluir_pedido_id)
+        # Fase 153 — capa do card vem da galeria (`itens_midias`, a
+        # primeira FOTO por `ordem` — um vídeo nunca vira capa sozinho,
+        # não faz sentido como thumbnail) quando existir; sem nenhuma
+        # linha lá ainda, cai pro `itens.imagem` de sempre (Fase 114) —
+        # nenhum item perde a foto que já tinha.
+        midias_item = conn.execute(
+            "SELECT tipo, conteudo FROM itens_midias WHERE item_id = ? ORDER BY ordem, id", (item["id"],)
+        ).fetchall()
+        primeira_foto = next((m["conteudo"] for m in midias_item if m["tipo"] == "foto"), None)
+        item["imagem"] = primeira_foto or item["imagem"]
+        item["total_midias"] = len(midias_item)
+        item["tem_video"] = any(m["tipo"] == "video" for m in midias_item)
         categoria = item["categoria"] or CATEGORIA_PADRAO_PORTFOLIO
         categorias.setdefault(categoria, []).append(item)
 

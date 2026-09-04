@@ -678,7 +678,7 @@ tr.linha-alerta td { background: #fdecea; }
 .portfolio-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-bottom: 8px; }
 .portfolio-card {
   background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio);
-  box-shadow: var(--sombra); display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: var(--sombra); display: flex; flex-direction: column; overflow: hidden; position: relative;
 }
 .portfolio-card-imagem {
   width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--fundo-suave, rgba(0,0,0,0.04));
@@ -687,6 +687,19 @@ tr.linha-alerta td { background: #fdecea; }
   display: flex; align-items: center; justify-content: center;
   font-size: 40px; font-weight: 700; color: var(--texto-suave);
 }
+/* Fase 153 — galeria de mídia (múltiplas fotos + vídeo) do item */
+.portfolio-card-galeria-badge {
+  position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.6); color: #fff;
+  font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 999px; pointer-events: none;
+}
+.galeria-midia-lista { display: flex; flex-direction: column; gap: 10px; margin-bottom: 16px; }
+.galeria-midia-linha {
+  display: flex; align-items: center; gap: 10px; padding: 8px; border: 1px solid var(--borda); border-radius: var(--raio);
+}
+.galeria-midia-thumb { width: 56px; height: 56px; object-fit: cover; border-radius: 6px; flex-shrink: 0; background: var(--fundo-suave, rgba(0,0,0,0.04)); }
+.galeria-midia-thumb-video { display: flex; align-items: center; justify-content: center; font-size: 22px; }
+.galeria-midia-info { display: flex; flex-direction: column; flex: 1; gap: 2px; }
+.galeria-midia-acoes { display: flex; gap: 6px; flex-shrink: 0; }
 .portfolio-card-corpo { padding: 14px; display: flex; flex-direction: column; flex: 1; }
 .portfolio-card-topo { display: flex; justify-content: space-between; align-items: center; }
 .portfolio-card h4 { flex: 1; font-size: 14px; line-height: 1.3; }

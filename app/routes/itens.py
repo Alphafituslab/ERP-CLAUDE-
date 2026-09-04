@@ -4,7 +4,7 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import audit
 from ..context import ApiError, client_device, client_ip, get_db
-from ..imagens import validar_imagem_base64
+from ..imagens import validar_imagem_base64, validar_midia_galeria_item_base64
 from ..permissions import requires_permission
 from .estoque import saldo_total_disponivel_item
 
@@ -220,3 +220,110 @@ def editar(item_id):
                      acao="item_editado", valor_anterior=anterior, valor_novo=dict(novo_row),
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(dict(novo_row))
+
+
+# ============================================================
+# Fase 153 — Galeria de mídia do item (múltiplas fotos + vídeo)
+# ============================================================
+# `itens.imagem` (Fase 114) continua existindo como a foto ÚNICA/capa de
+# fallback — isto aqui é uma galeria PARALELA, pensada pro Portfólio do
+# App de Vendas poder mostrar mais de uma foto (e um vídeo curto) por
+# produto, pedido do usuário depois de ver a tela em mobile. Sem tabela
+# de "setor" nem nada além do necessário: cada linha é uma mídia, `ordem`
+# controla a sequência de exibição/qual foto vira capa.
+def _item_ou_404(conn, item_id):
+    if conn.execute("SELECT 1 FROM itens WHERE id = ?", (item_id,)).fetchone() is None:
+        raise ApiError("Item não encontrado.", status=404)
+
+
+@bp.get("/<int:item_id>/midias")
+@requires_permission("itens", "visualizar")
+def listar_midias(item_id):
+    conn = get_db()
+    _item_ou_404(conn, item_id)
+    rows = conn.execute(
+        "SELECT id, tipo, mime_tipo, conteudo, tamanho_bytes, ordem, criado_em FROM itens_midias WHERE item_id = ? ORDER BY ordem, id",
+        (item_id,),
+    ).fetchall()
+    resultado = []
+    for r in rows:
+        midia = dict(r)
+        # Foto é pequena (≤2MB, ver app/imagens.py) e a galeria normalmente
+        # tem poucas — cabe embutir o conteúdo direto na listagem, mesmo
+        # padrão já aceito em `itens.imagem`. Vídeo (até 20MB) fica de fora
+        # daqui de propósito; quem for tocar/baixar busca ele sozinho em
+        # GET /<item_id>/midias/<midia_id>.
+        if midia["tipo"] == "video":
+            midia["conteudo"] = None
+        resultado.append(midia)
+    return jsonify(resultado)
+
+
+@bp.get("/<int:item_id>/midias/<int:midia_id>")
+@requires_permission("itens", "visualizar")
+def obter_midia(item_id, midia_id):
+    conn = get_db()
+    row = conn.execute("SELECT * FROM itens_midias WHERE id = ? AND item_id = ?", (midia_id, item_id)).fetchone()
+    if row is None:
+        raise ApiError("Mídia não encontrada.", status=404)
+    return jsonify(dict(row))
+
+
+@bp.post("/<int:item_id>/midias")
+@requires_permission("itens", "editar")
+def adicionar_midia(item_id):
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    conn = get_db()
+    _item_ou_404(conn, item_id)
+
+    tipo = dados.get("tipo")
+    tipo_mime, tamanho_bytes = validar_midia_galeria_item_base64(dados.get("conteudo"), tipo)
+
+    proxima_ordem = conn.execute(
+        "SELECT COALESCE(MAX(ordem), -1) + 1 AS proxima FROM itens_midias WHERE item_id = ?", (item_id,)
+    ).fetchone()["proxima"]
+    cur = conn.execute(
+        "INSERT INTO itens_midias (item_id, tipo, mime_tipo, conteudo, tamanho_bytes, ordem, criado_por) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (item_id, tipo, tipo_mime, dados.get("conteudo"), tamanho_bytes, proxima_ordem, usuario_atual["id"]),
+    )
+    midia_id = cur.lastrowid
+    audit.registrar(conn, tabela="itens_midias", registro_id=midia_id, usuario_id=usuario_atual["id"],
+                     acao="midia_item_adicionada",
+                     valor_novo={"item_id": item_id, "tipo": tipo, "mime_tipo": tipo_mime, "tamanho_bytes": tamanho_bytes},
+                     ip=client_ip(), dispositivo=client_device())
+    row = conn.execute(
+        "SELECT id, tipo, mime_tipo, tamanho_bytes, ordem, criado_em FROM itens_midias WHERE id = ?", (midia_id,)
+    ).fetchone()
+    return jsonify(dict(row)), 201
+
+
+@bp.delete("/<int:item_id>/midias/<int:midia_id>")
+@requires_permission("itens", "editar")
+def remover_midia(item_id, midia_id):
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    row = conn.execute("SELECT * FROM itens_midias WHERE id = ? AND item_id = ?", (midia_id, item_id)).fetchone()
+    if row is None:
+        raise ApiError("Mídia não encontrada.", status=404)
+    conn.execute("DELETE FROM itens_midias WHERE id = ?", (midia_id,))
+    audit.registrar(conn, tabela="itens_midias", registro_id=midia_id, usuario_id=usuario_atual["id"],
+                     acao="midia_item_removida", valor_anterior={"item_id": item_id, "tipo": row["tipo"]},
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True})
+
+
+@bp.put("/<int:item_id>/midias/ordem")
+@requires_permission("itens", "editar")
+def reordenar_midias(item_id):
+    conn = get_db()
+    _item_ou_404(conn, item_id)
+    dados = request.get_json(silent=True) or {}
+    ids_na_ordem = dados.get("ids") or []
+    existentes = {r["id"] for r in conn.execute("SELECT id FROM itens_midias WHERE item_id = ?", (item_id,)).fetchall()}
+    if set(ids_na_ordem) != existentes:
+        raise ApiError("A lista de ids não bate com as mídias existentes deste item.", status=400)
+    for posicao, midia_id in enumerate(ids_na_ordem):
+        conn.execute("UPDATE itens_midias SET ordem = ? WHERE id = ?", (posicao, midia_id))
+    return jsonify({"ok": True})

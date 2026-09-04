@@ -2213,6 +2213,8 @@
               ${item.imagem ? '<label style="font-weight:400;"><input type="checkbox" name="remover_imagem"> Remover foto atual</label>' : ""}
             </div>
           </div>
+          <p class="dica">Essa é só a foto única/capa de fallback. Pra mostrar VÁRIAS fotos (e um vídeo curto) no
+          Portfólio do App de Vendas, use a <button type="button" style="background:none;border:none;padding:0;text-decoration:underline;cursor:pointer;color:inherit;font:inherit;" data-acao="abrir-galeria-midia-item" data-id="${item.id}">galeria de mídia</button>.</p>
         </div>
         <div class="campo"><label>Status</label>
           <select name="status">
@@ -2251,6 +2253,87 @@
           <button type="submit" class="botao">Salvar</button>
         </div>
       </form>`, { largo: true });
+  }
+
+  // Fase 153 — galeria de mídia do item (múltiplas fotos + vídeo curto),
+  // pedido do usuário depois de ver o Portfólio do App de Vendas em
+  // mobile: cada item continua tendo a "foto única" de sempre (Fase 114,
+  // usada como fallback quando a galeria está vazia), mas agora pode
+  // ganhar quantas fotos quiser + um vídeo curto, exibidos em sequência
+  // no card do Portfólio. Reabre a si mesma (fecha e reabre o modal)
+  // depois de cada ação, sempre com dado fresco do servidor — mesmo
+  // padrão usado em telas de lista-dentro-de-modal deste sistema.
+  async function modalGaleriaMidiaItem(item) {
+    const midias = await chamarApi(`/itens/${item.id}/midias`);
+    // A capa do card no Portfólio é sempre a PRIMEIRA FOTO por `ordem`
+    // (ver app/routes/vendas_app.py::portfolio) — um vídeo nunca vira
+    // capa sozinho, mesmo estando na frente na ordem, então o rótulo
+    // "capa atual" só pode marcar essa foto específica, não o índice 0.
+    const idPrimeiraFoto = midias.find((m) => m.tipo === "foto")?.id;
+    const itensHtml = midias.length
+      ? midias.map((m, i) => `
+          <div class="galeria-midia-linha">
+            ${m.tipo === "foto"
+              ? `<img src="${m.conteudo}" class="galeria-midia-thumb" alt="">`
+              : `<div class="galeria-midia-thumb galeria-midia-thumb-video">🎬</div>`}
+            <div class="galeria-midia-info">
+              <strong>${m.tipo === "foto" ? "Foto" : "Vídeo"}</strong>
+              <span class="texto-suave">${(m.tamanho_bytes / (1024 * 1024)).toFixed(1)} MB${m.id === idPrimeiraFoto ? " — capa atual" : ""}</span>
+            </div>
+            <div class="galeria-midia-acoes">
+              <button type="button" class="botao secundario pequeno" data-acao="mover-midia-item" data-item-id="${item.id}" data-midia-id="${m.id}" data-direcao="cima" ${i === 0 ? "disabled" : ""}>↑</button>
+              <button type="button" class="botao secundario pequeno" data-acao="mover-midia-item" data-item-id="${item.id}" data-midia-id="${m.id}" data-direcao="baixo" ${i === midias.length - 1 ? "disabled" : ""}>↓</button>
+              <button type="button" class="botao perigo pequeno" data-acao="remover-midia-item" data-item-id="${item.id}" data-midia-id="${m.id}">Remover</button>
+            </div>
+          </div>`).join("")
+      : '<p class="texto-suave">Nenhuma mídia na galeria ainda — o card do Portfólio usa a foto única/capa cadastrada na aba de edição.</p>';
+
+    fecharModais();
+    abrirModal(`
+      <h3>Galeria de mídia — ${escapeHtml(item.codigo)}</h3>
+      <p class="dica">Aparece no Portfólio do App de Vendas nesta ordem — a primeira foto vira a capa do card.
+      Fotos até 2 MB (JPEG/PNG/WEBP). Vídeo curto até 20 MB (MP4/WEBM/MOV).</p>
+      <div class="galeria-midia-lista">${itensHtml}</div>
+      <form data-form="adicionar-midia-item" data-item-id="${item.id}">
+        <div class="campo"><label>Adicionar foto</label><input type="file" name="arquivo_foto" accept="image/png,image/jpeg,image/webp"></div>
+        <div class="campo"><label>Adicionar vídeo</label><input type="file" name="arquivo_video" accept="video/mp4,video/webm,video/quicktime"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+          <button type="submit" class="botao">Adicionar à galeria</button>
+        </div>
+      </form>`, { largo: true });
+  }
+
+  // Visualização (só leitura) da galeria de um item, aberta a partir do
+  // card do Portfólio do App de Vendas — carrega a lista uma vez e navega
+  // entre as mídias trocando só o slide; o conteúdo do vídeo (pesado) só
+  // é buscado na hora em que aquele slide específico é mostrado.
+  async function abrirGaleriaVisualizacaoItem(itemId, nomeItem) {
+    const midias = await chamarApi(`/itens/${itemId}/midias`);
+    if (!midias.length) return;
+    state.cache.galeriaVisualizacaoAtual = { midias, indice: 0, itemId };
+    await renderSlideGaleriaVisualizacao(nomeItem);
+  }
+
+  async function renderSlideGaleriaVisualizacao(nomeItem) {
+    const estado = state.cache.galeriaVisualizacaoAtual;
+    let midia = estado.midias[estado.indice];
+    if (midia.tipo === "video" && !midia.conteudo) {
+      midia = await chamarApi(`/itens/${estado.itemId}/midias/${midia.id}`);
+      estado.midias[estado.indice] = midia;
+    }
+    const conteudoHtml = midia.tipo === "foto"
+      ? `<img src="${midia.conteudo}" style="max-width:100%;max-height:65vh;display:block;margin:0 auto;">`
+      : `<video src="${midia.conteudo}" controls style="max-width:100%;max-height:65vh;display:block;margin:0 auto;"></video>`;
+    fecharModais();
+    abrirModal(`
+      <h3>${escapeHtml(nomeItem)} — ${estado.indice + 1}/${estado.midias.length}</h3>
+      ${conteudoHtml}
+      <div class="rodape-modal" style="justify-content:space-between;">
+        <button type="button" class="botao secundario" data-acao="galeria-visualizacao-anterior" data-nome="${escapeHtml(nomeItem)}" ${estado.indice === 0 ? "disabled" : ""}>← Anterior</button>
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+        <button type="button" class="botao secundario" data-acao="galeria-visualizacao-proxima" data-nome="${escapeHtml(nomeItem)}" ${estado.indice === estado.midias.length - 1 ? "disabled" : ""}>Próxima →</button>
+      </div>`, { largo: true });
   }
 
   // =======================================================================
@@ -14644,8 +14727,10 @@
         <div class="portfolio-grade">
           ${cat.itens.map((item) => `
             <div class="portfolio-card">
+              ${item.total_midias > 0 ? `<span class="portfolio-card-galeria-badge">📷 ${item.total_midias}${item.tem_video ? " 🎬" : ""}</span>` : ""}
               ${item.imagem
-                ? `<img class="portfolio-card-imagem" src="${item.imagem}" alt="">`
+                ? `<img class="portfolio-card-imagem" src="${item.imagem}" alt=""
+                    ${item.total_midias > 0 ? `data-acao="abrir-galeria-visualizacao-item" data-id="${item.id}" data-nome="${escapeHtml(item.descricao)}" style="cursor:pointer;"` : ""}>`
                 : `<div class="portfolio-card-imagem portfolio-card-imagem-vazia" aria-hidden="true">${escapeHtml((item.descricao || "?")[0].toUpperCase())}</div>`}
               <div class="portfolio-card-corpo">
                 <div class="portfolio-card-topo">
@@ -17070,6 +17155,36 @@
         modalEditarItem(item);
         return;
       }
+      case "abrir-galeria-midia-item": {
+        const item = await chamarApi(`/itens/${alvo.dataset.id}`);
+        return modalGaleriaMidiaItem(item);
+      }
+      case "mover-midia-item": {
+        const itemId = alvo.dataset.itemId;
+        const midias = await chamarApi(`/itens/${itemId}/midias`);
+        const ids = midias.map((m) => m.id);
+        const indiceAtual = ids.indexOf(Number(alvo.dataset.midiaId));
+        const indiceTroca = alvo.dataset.direcao === "cima" ? indiceAtual - 1 : indiceAtual + 1;
+        if (indiceTroca < 0 || indiceTroca >= ids.length) return;
+        [ids[indiceAtual], ids[indiceTroca]] = [ids[indiceTroca], ids[indiceAtual]];
+        await chamarApi(`/itens/${itemId}/midias/ordem`, { method: "PUT", body: { ids } });
+        const item = await chamarApi(`/itens/${itemId}`);
+        return modalGaleriaMidiaItem(item);
+      }
+      case "remover-midia-item": {
+        if (!confirm("Remover esta mídia da galeria?")) return;
+        await chamarApi(`/itens/${alvo.dataset.itemId}/midias/${alvo.dataset.midiaId}`, { method: "DELETE" });
+        const item = await chamarApi(`/itens/${alvo.dataset.itemId}`);
+        return modalGaleriaMidiaItem(item);
+      }
+      case "abrir-galeria-visualizacao-item":
+        return abrirGaleriaVisualizacaoItem(Number(alvo.dataset.id), alvo.dataset.nome);
+      case "galeria-visualizacao-anterior":
+        state.cache.galeriaVisualizacaoAtual.indice -= 1;
+        return renderSlideGaleriaVisualizacao(alvo.dataset.nome);
+      case "galeria-visualizacao-proxima":
+        state.cache.galeriaVisualizacaoAtual.indice += 1;
+        return renderSlideGaleriaVisualizacao(alvo.dataset.nome);
 
       // ---- Fase 2: Fornecedores ----
       case "novo-fornecedor":
@@ -18863,6 +18978,32 @@
         fecharModais();
         definirFlash("ok", "Item atualizado.");
         return renderItens();
+      }
+      case "adicionar-midia-item": {
+        const itemIdGaleria = form.dataset.itemId;
+        const arquivoFoto = form.querySelector('input[name="arquivo_foto"]').files[0];
+        const arquivoVideo = form.querySelector('input[name="arquivo_video"]').files[0];
+        if (!arquivoFoto && !arquivoVideo) {
+          definirFlash("erro", "Escolha uma foto ou um vídeo para adicionar.");
+          return;
+        }
+        try {
+          if (arquivoFoto) {
+            await chamarApi(`/itens/${itemIdGaleria}/midias`, {
+              method: "POST", body: { tipo: "foto", conteudo: await lerArquivoComoBase64(arquivoFoto) },
+            });
+          }
+          if (arquivoVideo) {
+            await chamarApi(`/itens/${itemIdGaleria}/midias`, {
+              method: "POST", body: { tipo: "video", conteudo: await lerArquivoComoBase64(arquivoVideo) },
+            });
+          }
+          definirFlash("ok", "Mídia adicionada à galeria.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível adicionar a mídia.");
+        }
+        const itemAtualizado = await chamarApi(`/itens/${itemIdGaleria}`);
+        return modalGaleriaMidiaItem(itemAtualizado);
       }
 
       // ---- Fase 2: Fornecedores ----
