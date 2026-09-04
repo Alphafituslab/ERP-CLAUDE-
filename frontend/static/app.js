@@ -14341,6 +14341,40 @@
     if (pendente) tentarEnviarPedidoPendente(pendente.pedidoId, pendente.formaPagamento);
   });
 
+  // Fase 149 — pedido do usuário: "já puxar o preço cadastrado no ERP" (em
+  // vez do vendedor digitar na mão) e "poder ver se o cliente está com
+  // boletos ou parcelas atrasadas". Busca os dois de uma vez só, e SÓ de
+  // novo quando o cliente do rascunho muda — reaproveita exatamente as
+  // mesmas rotas que a tela desktop já usa (`.../tabela-preco`, Fase 99;
+  // `.../desempenho`, Fase 64), nenhuma rota nova precisou ser criada.
+  // `comercial.visualizar` já é permissão do perfil "Vendedor" — sem isso
+  // as duas chamadas falham silenciosas (`.catch(() => null)`) e a tela
+  // simplesmente não mostra preço sugerido/alerta, nunca quebra o resto.
+  async function garantirDadosClienteAppVendas(clienteId) {
+    if (!clienteId) return { tabelaPreco: null, desempenho: null };
+    if (state.cache.dadosClienteAppVendasId === clienteId) {
+      return { tabelaPreco: state.cache.tabelaPrecoAppVendas, desempenho: state.cache.desempenhoClienteAppVendas };
+    }
+    const [tabelaPreco, desempenho] = await Promise.all([
+      temPermissao("comercial", "visualizar") ? chamarApi(`/comercial/clientes/${clienteId}/tabela-preco`).catch(() => null) : null,
+      temPermissao("comercial", "visualizar") ? chamarApi(`/comercial/clientes/${clienteId}/desempenho`).catch(() => null) : null,
+    ]);
+    state.cache.dadosClienteAppVendasId = clienteId;
+    state.cache.tabelaPrecoAppVendas = tabelaPreco;
+    state.cache.desempenhoClienteAppVendas = desempenho;
+    return { tabelaPreco, desempenho };
+  }
+
+  // Selo de alerta de boleto/parcela atrasada — mesmo dado que o scorecard
+  // desktop já calcula (`contas_em_atraso_no_momento`), só que num formato
+  // curto o bastante pra caber ao lado do nome do cliente no celular.
+  function seloAtrasoClienteAppVendas(desempenho) {
+    if (!desempenho || !desempenho.pagamentos) return "";
+    const n = desempenho.pagamentos.contas_em_atraso_no_momento;
+    if (!n) return "";
+    return ` <span class="selo bloqueado" title="Contas a receber vencidas e ainda não pagas">⚠️ ${n} conta${n > 1 ? "s" : ""} em atraso</span>`;
+  }
+
   async function renderAppVendas(silencioso) {
     if (!silencioso) app.innerHTML = '<div class="carregando">Carregando aplicativo de vendas…</div>';
     let rascunhoResp, clientes;
@@ -14394,11 +14428,12 @@
       return;
     }
 
-    let catalogo, verba;
+    let catalogo, verba, dadosCliente;
     try {
-      [catalogo, verba] = await Promise.all([
+      [catalogo, verba, dadosCliente] = await Promise.all([
         chamarApi("/vendas-app/catalogo"),
         chamarApi(`/vendas-app/clientes/${rascunho.cliente_id}/verba`),
+        garantirDadosClienteAppVendas(rascunho.cliente_id),
       ]);
     } catch (erro) {
       if (silencioso) return;
@@ -14419,7 +14454,7 @@
     renderShell(
       `<h2>App de Vendas</h2>
        ${bannerPendenteHtml}
-       <p class="texto-suave">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> — ${seloPedido(rascunho.status)}
+       <p class="texto-suave">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> — ${seloPedido(rascunho.status)}${seloAtrasoClienteAppVendas(dadosCliente.desempenho)}
          <button class="botao secundario pequeno" data-acao="abrir-anexar-documento-cliente-vendas" style="margin-left:8px;">📎 Anexar documento a um cliente</button>
        </p>
 
@@ -14533,6 +14568,9 @@
       return;
     }
 
+    const dadosCliente = await garantirDadosClienteAppVendas(rascunho.cliente_id);
+    state.cache.tabelaPrecoParaPortfolio = dadosCliente.tabelaPreco;
+
     const categorias = dadosPortfolio.categorias || [];
     const filtro = state.cache.portfolioFiltroCategoria || "";
     const abasCategoriaHtml = categorias.length > 1
@@ -14574,7 +14612,7 @@
          <div class="barra-acoes">
            <p style="margin:0;">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> —
              ${(rascunho.itens || []).length} ${(rascunho.itens || []).length === 1 ? "item" : "itens"} —
-             <strong>${fmtMoeda(rascunho.valor_total)}</strong></p>
+             <strong>${fmtMoeda(rascunho.valor_total)}</strong>${seloAtrasoClienteAppVendas(dadosCliente.desempenho)}</p>
            <a class="botao secundario pequeno" href="#/app-vendas">Ver pedido completo</a>
          </div>
        </div>
@@ -14585,13 +14623,25 @@
   }
 
   function modalSelecionarItemPortfolio(item) {
+    // Fase 149 — pedido do usuário: "já puxar o preço cadastrado no ERP"
+    // em vez do vendedor digitar de cabeça — mesma tabela de preço do
+    // cliente já usada no pedido desktop (Fase 99); sem tabela configurada
+    // pro cliente (ou item fora dela), o campo continua em branco e
+    // editável normalmente, nunca trava o vendedor.
+    const tabelaPreco = state.cache.tabelaPrecoParaPortfolio;
+    const precoSugerido = tabelaPreco && tabelaPreco.itens.find((i) => i.item_id === Number(item.id));
     abrirModal(`
       <h3>Adicionar ao pedido</h3>
       <p class="texto-suave">${escapeHtml(item.codigo)} — ${escapeHtml(item.descricao)} (disponível: ${item.disponivel})</p>
       <form data-form="selecionar-item-portfolio" data-id="${item.id}">
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required autofocus></div>
         <div class="campo"><label>Unidade</label><input name="unidade" value="un" required></div>
-        <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div class="campo"><label>Preço unitário (R$)</label>
+          <input name="preco_unitario" type="number" step="0.01" min="0.01" required value="${precoSugerido ? precoSugerido.preco : ""}">
+          ${precoSugerido
+            ? `<div class="dica">Preço da tabela "${escapeHtml(tabelaPreco.tabela_preco_nome)}" deste cliente — pode ajustar se precisar.</div>`
+            : '<div class="dica">Sem preço cadastrado na tabela deste cliente — informe manualmente.</div>'}
+        </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Adicionar e continuar no portfólio</button>
@@ -14730,7 +14780,7 @@
     const opcoesItem = catalogo
       .map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)} (disponível: ${i.saldo_disponivel_para_venda})</option>`)
       .join("");
-    abrirModal(`
+    const wrap = abrirModal(`
       <h3>Adicionar item ao rascunho</h3>
       ${catalogo.length === 0 ? '<p class="mensagem-erro">Nenhum produto vendável ativo cadastrado ainda.</p>' : ""}
       <form data-form="adicionar-item-rascunho-vendas" data-id="${rascunhoId}">
@@ -14738,12 +14788,33 @@
         <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
         <div class="campo"><label>Unidade</label><input name="unidade" value="un" required></div>
         <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
+        <div id="dica-preco-item-rascunho"></div>
         <div class="dica">O "disponível" já desconta o que outros vendedores têm reservado em rascunhos abertos agora — sincronize antes de confiar num número que já faz um tempo que você olhou.</div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Adicionar</button>
         </div>
       </form>`);
+    // Fase 149 — mesmo preço puxado da tabela do cliente que o Portfólio já
+    // usa (ver `garantirDadosClienteAppVendas`), agora reagindo à troca do
+    // <select> (aqui o item só é escolhido depois do modal já aberto).
+    const tabelaPreco = state.cache.tabelaPrecoAppVendas;
+    const selectItem = wrap.querySelector('select[name="item_id"]');
+    const campoPreco = wrap.querySelector('input[name="preco_unitario"]');
+    const dicaPreco = wrap.querySelector("#dica-preco-item-rascunho");
+    const atualizarPrecoSugerido = () => {
+      const preco = tabelaPreco && tabelaPreco.itens.find((i) => i.item_id === Number(selectItem.value));
+      if (preco) {
+        campoPreco.value = preco.preco;
+        dicaPreco.innerHTML = `<div class="dica">Preço da tabela "${escapeHtml(tabelaPreco.tabela_preco_nome)}" deste cliente — pode ajustar se precisar.</div>`;
+      } else {
+        dicaPreco.innerHTML = '<div class="dica">Sem preço cadastrado na tabela deste cliente — informe manualmente.</div>';
+      }
+    };
+    if (selectItem) {
+      selectItem.addEventListener("change", atualizarPrecoSugerido);
+      if (selectItem.value) atualizarPrecoSugerido();
+    }
   }
 
   function modalAplicarVerbaVendas(rascunho, verba) {
