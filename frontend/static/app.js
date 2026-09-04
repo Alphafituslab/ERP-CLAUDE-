@@ -14536,7 +14536,7 @@
            <h3 style="margin:0;">Meu crédito pessoal</h3>
            <button class="botao secundario pequeno" data-acao="abrir-aplicar-credito-vendas">Aplicar meu crédito neste pedido</button>
          </div>
-         <p class="texto-suave">Saldo disponível: <strong>${fmtMoeda(credito.saldo_disponivel)}</strong> — gerado automaticamente quando você vende acima da tabela de preço do cliente; pode usar em pedido de QUALQUER cliente, não só o que gerou o crédito.</p>
+         <p class="texto-suave">Saldo disponível: <strong>${fmtMoeda(credito.saldo_disponivel)}</strong> — gerado automaticamente quando você vende acima da tabela de preço do cliente; só pode ser usado em pedidos de clientes onde você é o vendedor responsável.</p>
        </div>
 
        <div class="cartao">
