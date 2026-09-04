@@ -785,6 +785,246 @@ def aplicar_verba_rascunho(pedido_id):
     return jsonify({"rascunho": pedido_detalhado})
 
 
+# ============================================================
+# CRÉDITO PESSOAL DO VENDEDOR ("gordurinha") — Fase 150.
+# ============================================================
+# Mesmo desenho da verba comercial do cliente acima, só que o saldo é do
+# VENDEDOR LOGADO (não de um cliente específico) — pedido do usuário:
+# "consegue utilizar esse crédito... com quem ele realmente precisa",
+# ou seja, em pedido de QUALQUER cliente, não só o de origem da venda que
+# gerou o crédito. Gerado automaticamente na expedição (ver comercial.py
+# ::expedir) quando o vendedor vende acima da tabela de preço do cliente.
+def _saldo_credito_vendedor_disponivel(conn, vendedor_id):
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(CASE WHEN tipo = 'gerado' THEN valor ELSE -valor END), 0) AS saldo
+        FROM creditos_vendedor_lancamentos WHERE vendedor_id = ?
+        """,
+        (vendedor_id,),
+    ).fetchone()
+    return row["saldo"]
+
+
+@bp.get("/meu-credito")
+@requires_permission("vendas_app", "usar")
+def meu_credito():
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    saldo = _saldo_credito_vendedor_disponivel(conn, usuario_atual["id"])
+    extrato = conn.execute(
+        "SELECT * FROM creditos_vendedor_lancamentos WHERE vendedor_id = ? ORDER BY id DESC LIMIT 200",
+        (usuario_atual["id"],),
+    ).fetchall()
+    return jsonify({"saldo_disponivel": saldo, "extrato": [dict(r) for r in extrato]})
+
+
+@bp.post("/rascunhos/<int:pedido_id>/credito")
+@requires_permission("vendas_app", "usar")
+def aplicar_credito_rascunho(pedido_id):
+    """Define quanto do saldo de crédito PESSOAL do vendedor logado será
+    usado para abater o valor deste rascunho — mesmo mecanismo de
+    `aplicar_verba_rascunho` acima (chamar de novo SUBSTITUI o valor
+    anterior; nada é lançado no ledger ainda, só uma intenção congelada em
+    `pedidos_venda.credito_vendedor_utilizado`, lançada de verdade na
+    expedição). Só o saldo do PRÓPRIO vendedor logado pode ser usado.
+
+    Revisão do usuário (2026-09-04): "o vendedor só pode usar o seu
+    crédito gerado e para os seus clientes" — só funciona se este cliente
+    tiver o vendedor logado como `vendedor_responsavel_id` ("dono da
+    conta"); sem isso definido no cadastro do cliente, ninguém consegue
+    aplicar crédito nele por aqui (o admin pode liberar isso editando o
+    cliente em Comercial, ou transferir saldo entre vendedores — ver
+    `relatorios.transferir_credito_vendedor`)."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    valor = dados.get("valor")
+    conn = get_db()
+    _expirar_sessoes_rascunho_vencidas(conn)
+    sessao = _sessao_do_pedido_ou_erro(conn, pedido_id, usuario_atual["id"])
+    pedido = _pedido_ou_404(conn, pedido_id)
+
+    try:
+        valor = float(valor)
+    except (TypeError, ValueError):
+        raise ApiError("Informe valor numérico de crédito a aplicar (0 para remover).", status=400)
+
+    if valor > 0.0000001:
+        cliente_do_pedido = conn.execute("SELECT vendedor_responsavel_id FROM clientes WHERE id = ?", (pedido["cliente_id"],)).fetchone()
+        if not cliente_do_pedido or cliente_do_pedido["vendedor_responsavel_id"] != usuario_atual["id"]:
+            raise ApiError(
+                "Você só pode usar seu crédito pessoal em pedidos de clientes onde você é o vendedor responsável "
+                "— peça para o administrador definir isso no cadastro do cliente (Comercial > editar cliente).",
+                status=403, codigo="nao_e_vendedor_responsavel",
+            )
+    if valor < 0:
+        raise ApiError("valor não pode ser negativo.", status=400)
+
+    itens_pedido = conn.execute(
+        "SELECT quantidade, preco_unitario FROM pedido_venda_itens WHERE pedido_id = ?", (pedido_id,)
+    ).fetchall()
+    valor_bruto = sum(i["quantidade"] * i["preco_unitario"] for i in itens_pedido)
+    if valor > valor_bruto + 0.0000001:
+        raise ApiError(f"O valor de crédito ({valor}) não pode ser maior que o valor do pedido ({valor_bruto}).", status=400)
+
+    saldo_credito = _saldo_credito_vendedor_disponivel(conn, usuario_atual["id"])
+    if valor > saldo_credito + 0.0000001:
+        raise ApiError(f"Você só tem R$ {saldo_credito:.2f} de crédito pessoal disponível.", status=400)
+
+    conn.execute("UPDATE pedidos_venda SET credito_vendedor_utilizado = ? WHERE id = ?", (valor, pedido_id))
+    nova_expiracao = _tocar_sessao(conn, sessao["id"])
+    audit.registrar(conn, tabela="pedidos_venda", registro_id=pedido_id, usuario_id=usuario_atual["id"],
+                     acao="credito_vendedor_aplicado_no_rascunho", valor_anterior={"credito_vendedor_utilizado": pedido["credito_vendedor_utilizado"]},
+                     valor_novo={"credito_vendedor_utilizado": valor}, ip=client_ip(), dispositivo=client_device())
+
+    pedido_detalhado = _pedido_detalhado(conn, pedido_id)
+    pedido_detalhado["sessao_expira_em"] = nova_expiracao
+    return jsonify({"rascunho": pedido_detalhado})
+
+
+# ============================================================
+# CHECK-IN / CHECK-OUT DE VISITA (geolocalização) — Fase 150.
+# ============================================================
+# Pedido do usuário: "ao chegar no cliente... acionar que chegou... ao
+# chegar ele avisa e ao sair ele avisa, não podendo ter dois clientes
+# abertos". O navegador captura lat/long (Geolocation API, ver frontend)
+# — mas nem chegada nem saída dependem disso funcionar (permissão
+# negada, sem GPS, timeout): o horário sozinho já vale, a coordenada só
+# enriquece quando disponível.
+def _visita_aberta_do_vendedor(conn, vendedor_id):
+    row = conn.execute(
+        "SELECT vc.*, c.razao_social AS cliente_razao_social FROM visitas_clientes vc "
+        "JOIN clientes c ON c.id = vc.cliente_id WHERE vc.vendedor_id = ? AND vc.saida_em IS NULL",
+        (vendedor_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
+@bp.get("/minha-visita-aberta")
+@requires_permission("vendas_app", "usar")
+def minha_visita_aberta():
+    conn = get_db()
+    return jsonify(_visita_aberta_do_vendedor(conn, g.usuario_atual["id"]))
+
+
+@bp.post("/clientes/<int:cliente_id>/visitas")
+@requires_permission("vendas_app", "usar")
+def registrar_chegada_cliente(cliente_id):
+    """Check-in — só permite abrir uma visita nova se o vendedor não
+    tiver NENHUMA outra em aberto agora (índice único no banco também
+    garante isso, mesmo numa corrida de dois cliques). Se já tiver uma
+    aberta noutro cliente, devolve 409 com os dados dela pra tela poder
+    orientar "encerre a visita em X antes de chegar em Y"."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    _cliente_ou_404(conn, cliente_id)
+    dados = request.get_json(silent=True) or {}
+
+    aberta = _visita_aberta_do_vendedor(conn, usuario_atual["id"])
+    if aberta:
+        if aberta["cliente_id"] == cliente_id:
+            raise ApiError(
+                f"Você já marcou chegada neste cliente às {aberta['chegada_em']} e ainda não marcou saída.",
+                status=409, codigo="visita_ja_aberta_aqui",
+            )
+        raise ApiError(
+            f"Você tem uma visita em aberto em \"{aberta['cliente_razao_social']}\" desde {aberta['chegada_em']} — "
+            "marque a saída de lá antes de chegar em outro cliente.",
+            status=409, codigo="visita_aberta_em_outro_cliente",
+        )
+
+    latitude = dados.get("latitude")
+    longitude = dados.get("longitude")
+    try:
+        cur = conn.execute(
+            """
+            INSERT INTO visitas_clientes (cliente_id, vendedor_id, chegada_latitude, chegada_longitude, chegada_precisao_metros)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (cliente_id, usuario_atual["id"], latitude, longitude, dados.get("precisao_metros")),
+        )
+    except Exception as erro:
+        # Defesa contra corrida (dois cliques quase simultâneos) — o
+        # índice único é quem garante de verdade, esta mensagem só
+        # traduz o erro de banco pra algo legível caso escape da
+        # checagem acima.
+        if "UNIQUE" in str(erro):
+            raise ApiError("Você já tem uma visita em aberto — atualize a tela e tente de novo.", status=409, codigo="visita_ja_aberta")
+        raise
+    visita_id = cur.lastrowid
+    audit.registrar(conn, tabela="visitas_clientes", registro_id=visita_id, usuario_id=usuario_atual["id"],
+                     acao="visita_chegada_registrada", valor_novo={"cliente_id": cliente_id, "com_geolocalizacao": latitude is not None},
+                     ip=client_ip(), dispositivo=client_device())
+
+    nova = conn.execute("SELECT * FROM visitas_clientes WHERE id = ?", (visita_id,)).fetchone()
+    return jsonify(dict(nova)), 201
+
+
+@bp.post("/visitas/<int:visita_id>/saida")
+@requires_permission("vendas_app", "usar")
+def registrar_saida_visita(visita_id):
+    """Check-out pelo PRÓPRIO vendedor — mesma ação serve tanto pra
+    "voltei no local e vou marcar a saída" quanto pra "esqueci de marcar
+    e só lembrei depois": não exige estar fisicamente no cliente, a
+    coordenada é só um bônus quando o navegador consegue capturar. Fechar
+    a visita de OUTRO vendedor é uma ação separada, só pra quem administra
+    (ver `relatorios.encerrar_visita_pelo_erp`)."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    visita = conn.execute("SELECT * FROM visitas_clientes WHERE id = ?", (visita_id,)).fetchone()
+    if visita is None:
+        raise ApiError("Visita não encontrada.", status=404)
+    if visita["vendedor_id"] != usuario_atual["id"]:
+        raise ForbiddenError("Esta visita não é sua — só quem administra pode encerrar a visita de outro vendedor.")
+    if visita["saida_em"] is not None:
+        raise ApiError("Esta visita já foi encerrada.", status=409)
+
+    dados = request.get_json(silent=True) or {}
+    conn.execute(
+        """
+        UPDATE visitas_clientes
+        SET saida_em = ?, saida_latitude = ?, saida_longitude = ?, saida_precisao_metros = ?, saida_registrada_por = ?
+        WHERE id = ?
+        """,
+        (datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"), dados.get("latitude"), dados.get("longitude"), dados.get("precisao_metros"), usuario_atual["id"], visita_id),
+    )
+    audit.registrar(conn, tabela="visitas_clientes", registro_id=visita_id, usuario_id=usuario_atual["id"],
+                     acao="visita_saida_registrada", valor_novo={"cliente_id": visita["cliente_id"]},
+                     ip=client_ip(), dispositivo=client_device())
+
+    atualizada = conn.execute("SELECT * FROM visitas_clientes WHERE id = ?", (visita_id,)).fetchone()
+    return jsonify(dict(atualizada))
+
+
+@bp.get("/clientes/<int:cliente_id>/visitas")
+@requires_permission("vendas_app", "usar")
+def listar_visitas_cliente(cliente_id):
+    conn = get_db()
+    _cliente_ou_404(conn, cliente_id)
+    visitas = conn.execute(
+        "SELECT vc.*, u.nome AS vendedor_nome FROM visitas_clientes vc JOIN usuarios u ON u.id = vc.vendedor_id "
+        "WHERE vc.cliente_id = ? ORDER BY vc.chegada_em DESC LIMIT 50",
+        (cliente_id,),
+    ).fetchall()
+    return jsonify([dict(v) for v in visitas])
+
+
+@bp.get("/minhas-visitas")
+@requires_permission("vendas_app", "usar")
+def minhas_visitas():
+    """Últimas visitas do vendedor logado, em qualquer cliente — visão
+    pessoal simples (o relatório de desempenho comparando vendedores entre
+    si é uma tela à parte, pra quem administra a equipe, não para o
+    próprio vendedor)."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    visitas = conn.execute(
+        "SELECT vc.*, c.razao_social AS cliente_razao_social FROM visitas_clientes vc "
+        "JOIN clientes c ON c.id = vc.cliente_id WHERE vc.vendedor_id = ? ORDER BY vc.chegada_em DESC LIMIT 50",
+        (usuario_atual["id"],),
+    ).fetchall()
+    return jsonify([dict(v) for v in visitas])
+
+
 @bp.post("/rascunhos/<int:pedido_id>/abandonar")
 @requires_permission("vendas_app", "usar")
 def abandonar_rascunho(pedido_id):

@@ -476,6 +476,8 @@
           case "financeiro-retorno-cnab": return renderRetornoCnab();
           case "conciliacao-bancaria": return param ? renderConciliacaoBancariaDetalhe(Number(param)) : renderConciliacaoBancaria();
           case "painel-gerencial": return renderPainelGerencial();
+          case "visitas-vendedores": return renderVisitasVendedores();
+          case "creditos-vendedores": return renderCreditosVendedores();
           case "rastreabilidade": return renderRastreabilidade();
           case "custeio": return param ? renderCustoProdutoDetalhe(Number(param)) : renderCustoProdutos();
           case "dre": return renderDre();
@@ -673,6 +675,8 @@
       tipo: "grupo", chave: "grupo-relatorios", nome: "Relatórios & Custos",
       itens: [
         { rota: "#/painel-gerencial", chave: "painel-gerencial", label: "Painel Gerencial (BI)", permissao: ["relatorios", "visualizar"] },
+        { rota: "#/visitas-vendedores", chave: "visitas-vendedores", label: "Visitas dos Vendedores", permissao: ["relatorios", "visualizar"], apelidos: ["geolocalizacao", "check-in", "desempenho vendedor"] },
+        { rota: "#/creditos-vendedores", chave: "creditos-vendedores", label: "Crédito dos Vendedores", permissao: ["relatorios", "visualizar"], apelidos: ["gordurinha", "credito pessoal"] },
         { rota: "#/rastreabilidade", chave: "rastreabilidade", label: "Rastreabilidade (Recall)", permissao: ["rastreabilidade", "visualizar"] },
         { rota: "#/custeio", chave: "custeio", label: "Custo do Produto", permissao: ["custeio", "visualizar"] },
       ],
@@ -1190,11 +1194,12 @@
     if (temPermissao("tabelas_preco", "visualizar")) {
       state.cache.tabelasPrecoParaCliente = await chamarApi("/tabelas-preco");
     }
-    const [metodosParaCliente, condicoesParaCliente] = await Promise.all([
+    const [metodosParaCliente, condicoesParaCliente, vendedoresParaCliente] = await Promise.all([
       chamarApi(`/comercial/metodos-pagamento?ativos=1&cliente_id=${clienteId}`),
       chamarApi(`/comercial/condicoes-pagamento?ativos=1&cliente_id=${clienteId}`),
+      chamarApi("/comercial/vendedores").catch(() => []),
     ]);
-    modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente);
+    modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente, vendedoresParaCliente);
   }
 
   // =======================================================================
@@ -12852,7 +12857,7 @@
     });
   }
 
-  function modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente) {
+  function modalEditarCliente(cliente, metodosParaCliente, condicoesParaCliente, vendedoresParaCliente) {
     const tabelasPreco = state.cache.tabelasPrecoParaCliente || [];
     const opcoesTabelaPreco = tabelasPreco
       .map((t) => `<option value="${t.id}" ${cliente.tabela_preco_id === t.id ? "selected" : ""}>${escapeHtml(t.nome)}</option>`)
@@ -12863,12 +12868,22 @@
     const opcoesCondicao = (condicoesParaCliente || [])
       .map((c) => `<option value="${c.id}" ${cliente.condicao_pagamento_padrao_id === c.id ? "selected" : ""}>${escapeHtml(c.nome)}</option>`)
       .join("");
+    const opcoesVendedor = (vendedoresParaCliente || [])
+      .map((v) => `<option value="${v.id}" ${cliente.vendedor_responsavel_id === v.id ? "selected" : ""}>${escapeHtml(v.nome)}</option>`)
+      .join("");
     abrirModal(`
       <h3>Editar ${escapeHtml(cliente.razao_social)}</h3>
       <form data-form="editar-cliente" data-id="${cliente.id}">
         <div class="campo"><label>Nome fantasia</label><input name="nome_fantasia" value="${escapeHtml(cliente.nome_fantasia || "")}"></div>
         <div class="campo"><label>E-mail</label><input name="email" type="email" value="${escapeHtml(cliente.email || "")}"></div>
         <div class="campo"><label>Endereço</label><input name="endereco" value="${escapeHtml(cliente.endereco || "")}"></div>
+        <div class="campo"><label>Vendedor responsável (dono da conta, opcional)</label>
+          <select name="vendedor_responsavel_id">
+            <option value="">Nenhum definido ainda</option>
+            ${opcoesVendedor}
+          </select>
+          <div class="dica">Fase 150 — só o vendedor responsável consegue usar o crédito pessoal dele ("gordurinha") em pedidos deste cliente. Sem ninguém definido aqui, nenhum vendedor consegue aplicar crédito neste cliente.</div>
+        </div>
         ${tabelasPreco.length ? `
         <div class="campo"><label>Tabela de preço</label>
           <select name="tabela_preco_id">
@@ -14375,13 +14390,29 @@
     return ` <span class="selo bloqueado" title="Contas a receber vencidas e ainda não pagas">⚠️ ${n} conta${n > 1 ? "s" : ""} em atraso</span>`;
   }
 
+  // Fase 150 — cartão persistente com a visita em aberto (ou não) do
+  // vendedor logado, reaproveitado nas duas telas do App de Vendas (com
+  // e sem rascunho aberto) — a visita é um conceito independente do
+  // pedido, "ao chegar no cliente" pode acontecer antes de montar
+  // qualquer carrinho.
+  function htmlBannerVisitaAberta(visitaAberta) {
+    if (!visitaAberta) return "";
+    const desde = fmtData(visitaAberta.chegada_em);
+    return `<div class="cartao">
+      <p style="margin:0;">📍 Visita em andamento em <strong>${escapeHtml(visitaAberta.cliente_razao_social)}</strong> desde ${desde}
+        <button class="botao secundario pequeno" data-acao="marcar-saida-vendas" data-visita-id="${visitaAberta.id}" style="margin-left:8px;">🚪 Marcar saída</button>
+      </p>
+    </div>`;
+  }
+
   async function renderAppVendas(silencioso) {
     if (!silencioso) app.innerHTML = '<div class="carregando">Carregando aplicativo de vendas…</div>';
-    let rascunhoResp, clientes;
+    let rascunhoResp, clientes, visitaAberta;
     try {
-      [rascunhoResp, clientes] = await Promise.all([
+      [rascunhoResp, clientes, visitaAberta] = await Promise.all([
         chamarApi("/vendas-app/meu-rascunho"),
         chamarApi("/comercial/clientes"),
+        chamarApi("/vendas-app/minha-visita-aberta"),
       ]);
     } catch (erro) {
       // Numa sincronização silenciosa em segundo plano, um erro (rede
@@ -14392,6 +14423,7 @@
       throw erro;
     }
     state.cache.clientesAtivosAppVendas = clientes.filter((c) => c.status === "ativo");
+    state.cache.visitaAbertaAppVendas = visitaAberta;
     const rascunho = rascunhoResp.rascunho;
     state.cache.rascunhoAppVendas = rascunho;
 
@@ -14409,6 +14441,7 @@
       renderShell(
         `<h2>App de Vendas</h2>
          ${bannerPendenteHtml}
+         ${htmlBannerVisitaAberta(visitaAberta)}
          <div class="cartao">
            <h3 style="margin-top:0;">Nenhum rascunho aberto</h3>
            <p class="texto-suave">Escolha um cliente para começar um novo pedido. Enquanto você monta o
@@ -14428,12 +14461,13 @@
       return;
     }
 
-    let catalogo, verba, dadosCliente;
+    let catalogo, verba, dadosCliente, credito;
     try {
-      [catalogo, verba, dadosCliente] = await Promise.all([
+      [catalogo, verba, dadosCliente, credito] = await Promise.all([
         chamarApi("/vendas-app/catalogo"),
         chamarApi(`/vendas-app/clientes/${rascunho.cliente_id}/verba`),
         garantirDadosClienteAppVendas(rascunho.cliente_id),
+        chamarApi("/vendas-app/meu-credito"),
       ]);
     } catch (erro) {
       if (silencioso) return;
@@ -14451,10 +14485,25 @@
       </tr>`)
       .join("");
 
+    // Fase 150 — o botão de visita é sensível ao estado: sem visita
+    // aberta, "Marcar chegada" (pro cliente deste rascunho); com visita
+    // aberta NESTE MESMO cliente, o banner persistente acima já mostra
+    // "Marcar saída", então não duplica o botão aqui; com visita aberta
+    // em OUTRO cliente, mostra aviso pra fechar aquela antes.
+    let botaoVisitaHtml;
+    if (!visitaAberta) {
+      botaoVisitaHtml = `<button class="botao secundario pequeno" data-acao="marcar-chegada-vendas" data-cliente-id="${rascunho.cliente_id}" style="margin-left:8px;">📍 Marcar chegada</button>`;
+    } else if (visitaAberta.cliente_id === rascunho.cliente_id) {
+      botaoVisitaHtml = "";
+    } else {
+      botaoVisitaHtml = ` <span class="selo bloqueado" title="Marque a saída de lá antes de chegar aqui">📍 Visita aberta em ${escapeHtml(visitaAberta.cliente_razao_social)}</span>`;
+    }
+
     renderShell(
       `<h2>App de Vendas</h2>
        ${bannerPendenteHtml}
-       <p class="texto-suave">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> — ${seloPedido(rascunho.status)}${seloAtrasoClienteAppVendas(dadosCliente.desempenho)}
+       ${htmlBannerVisitaAberta(visitaAberta)}
+       <p class="texto-suave">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> — ${seloPedido(rascunho.status)}${seloAtrasoClienteAppVendas(dadosCliente.desempenho)}${botaoVisitaHtml}
          <button class="botao secundario pequeno" data-acao="abrir-anexar-documento-cliente-vendas" style="margin-left:8px;">📎 Anexar documento a um cliente</button>
        </p>
 
@@ -14471,7 +14520,7 @@
            <thead><tr><th>Item</th><th>Quantidade</th><th>Preço unit.</th><th>Valor total</th><th></th></tr></thead>
            <tbody>${itensHtml || '<tr><td colspan="5" class="texto-suave">Nenhum item ainda.</td></tr>'}</tbody>
          </table>
-         <p><strong>Valor total do pedido:</strong> ${fmtMoeda(rascunho.valor_total)}${rascunho.verba_utilizada > 0 ? ` (já descontando ${fmtMoeda(rascunho.verba_utilizada)} de verba aplicada)` : ""}</p>
+         <p><strong>Valor total do pedido:</strong> ${fmtMoeda(rascunho.valor_total)}${rascunho.verba_utilizada > 0 ? ` (já descontando ${fmtMoeda(rascunho.verba_utilizada)} de verba)` : ""}${rascunho.credito_vendedor_utilizado > 0 ? ` (já descontando ${fmtMoeda(rascunho.credito_vendedor_utilizado)} do seu crédito pessoal)` : ""}</p>
        </div>
 
        <div class="cartao">
@@ -14480,6 +14529,14 @@
            <button class="botao secundario pequeno" data-acao="abrir-aplicar-verba-vendas">Aplicar verba neste pedido</button>
          </div>
          <p class="texto-suave">Saldo disponível: <strong>${fmtMoeda(verba.saldo_disponivel)}</strong> — gerado em vendas anteriores deste cliente, pode ser usado para abater o valor desta ou de uma venda futura.</p>
+       </div>
+
+       <div class="cartao">
+         <div class="barra-acoes">
+           <h3 style="margin:0;">Meu crédito pessoal</h3>
+           <button class="botao secundario pequeno" data-acao="abrir-aplicar-credito-vendas">Aplicar meu crédito neste pedido</button>
+         </div>
+         <p class="texto-suave">Saldo disponível: <strong>${fmtMoeda(credito.saldo_disponivel)}</strong> — gerado automaticamente quando você vende acima da tabela de preço do cliente; pode usar em pedido de QUALQUER cliente, não só o que gerou o crédito.</p>
        </div>
 
        <div class="cartao">
@@ -14825,6 +14882,27 @@
       <form data-form="aplicar-verba-vendas" data-id="${rascunho.id}">
         <div class="campo"><label>Valor de verba a aplicar (R$, 0 para remover)</label>
           <input name="valor" type="number" step="0.01" min="0" value="${rascunho.verba_utilizada || 0}" required>
+        </div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+  }
+
+  // Fase 150 — "gordurinha": crédito PESSOAL do vendedor (vender acima da
+  // tabela de preço gera saldo próprio, usável em pedido de QUALQUER
+  // cliente) — mesmo modal de `modalAplicarVerbaVendas` acima, só que o
+  // saldo é do vendedor logado, não do cliente deste rascunho.
+  function modalAplicarCreditoVendas(rascunho, credito) {
+    abrirModal(`
+      <h3>Aplicar meu crédito</h3>
+      <p class="texto-suave">Seu saldo de crédito pessoal: <strong>${fmtMoeda(credito.saldo_disponivel)}</strong>.
+      Valor atual do pedido: <strong>${fmtMoeda(rascunho.valor_total)}</strong>.</p>
+      <p class="texto-suave">Gerado automaticamente sempre que você vende acima da tabela de preço do cliente — pode usar em pedido de qualquer cliente, não só o de origem.</p>
+      <form data-form="aplicar-credito-vendas" data-id="${rascunho.id}">
+        <div class="campo"><label>Valor de crédito a aplicar (R$, 0 para remover)</label>
+          <input name="valor" type="number" step="0.01" min="0" value="${rascunho.credito_vendedor_utilizado || 0}" required>
         </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
@@ -16118,6 +16196,134 @@
     </div>`;
   }
 
+  // =============================================================================
+  // Fase 150 — Visitas dos Vendedores (check-in/check-out por
+  // geolocalização do App de Vendas). Pedido do usuário: "conseguimos
+  // monitorar todas as visitas e o tempo entre as visitas... avaliar
+  // desempenho por usuário do app" — tela pra quem administra a equipe
+  // (`relatorios.visualizar`, nunca o próprio vendedor comparando com
+  // colegas, ver nota em app/routes/relatorios.py).
+  // =============================================================================
+  async function renderVisitasVendedores(filtros) {
+    app.innerHTML = '<div class="carregando">Carregando visitas…</div>';
+    filtros = filtros || {};
+    const query = new URLSearchParams();
+    if (filtros.data_inicio) query.set("data_inicio", filtros.data_inicio);
+    if (filtros.data_fim) query.set("data_fim", filtros.data_fim);
+    const [relatorio, abertas] = await Promise.all([
+      chamarApi(`/relatorios/visitas-vendedores${query.toString() ? "?" + query.toString() : ""}`),
+      chamarApi("/relatorios/visitas-abertas"),
+    ]);
+
+    const linhasVendedores = relatorio.vendedores.map((v) => `<tr>
+      <td>${escapeHtml(v.vendedor_nome)}</td>
+      <td>${v.total_visitas}</td>
+      <td>${v.clientes_distintos}</td>
+      <td class="texto-suave">${fmtData(v.primeira_visita_em)}</td>
+      <td class="texto-suave">${fmtData(v.ultima_visita_em)}</td>
+      <td>${v.media_horas_entre_visitas != null ? `${v.media_horas_entre_visitas}h` : '<span class="texto-suave">—</span>'}</td>
+      <td>${v.media_horas_duracao_visita != null ? `${v.media_horas_duracao_visita}h` : '<span class="texto-suave">—</span>'}</td>
+      <td>${v.visitas_ainda_abertas > 0 ? `<span class="selo bloqueado">${v.visitas_ainda_abertas} aberta${v.visitas_ainda_abertas > 1 ? "s" : ""}</span>` : "—"}</td>
+    </tr>`).join("");
+
+    const linhasAbertas = abertas.map((v) => `<tr>
+      <td>${escapeHtml(v.vendedor_nome)}</td>
+      <td>${escapeHtml(v.cliente_razao_social)}</td>
+      <td class="texto-suave">${fmtData(v.chegada_em)}</td>
+      <td><button class="botao perigo pequeno" data-acao="encerrar-visita-erp" data-id="${v.id}">Encerrar (esqueceu de marcar saída)</button></td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Visitas dos Vendedores</h2>
+       <div class="cartao">
+         <form id="filtros-visitas-vendedores" style="display:flex;gap:10px;flex-wrap:wrap;align-items:end;">
+           <div class="campo" style="margin:0;"><label>De</label><input type="date" name="data_inicio" value="${escapeHtml(filtros.data_inicio || relatorio.data_inicio)}"></div>
+           <div class="campo" style="margin:0;"><label>Até</label><input type="date" name="data_fim" value="${escapeHtml(filtros.data_fim || relatorio.data_fim)}"></div>
+           <button type="submit" class="botao secundario">Filtrar</button>
+         </form>
+       </div>
+
+       ${abertas.length > 0 ? `
+       <div class="cartao">
+         <h3 style="margin-top:0;">Visitas em aberto agora (${abertas.length})</h3>
+         <p class="texto-suave">Vendedor ainda não marcou saída — pode ter esquecido. Clique em "Encerrar" pra fechar em nome dele.</p>
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Vendedor</th><th>Cliente</th><th>Chegada</th><th></th></tr></thead>
+           <tbody>${linhasAbertas}</tbody>
+         </table>
+         </div>
+       </div>` : ""}
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Por vendedor</h3>
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Vendedor</th><th>Total visitas</th><th>Clientes distintos</th><th>Primeira</th><th>Última</th><th>Média entre visitas</th><th>Média duração</th><th>Em aberto</th></tr></thead>
+           <tbody>${linhasVendedores || '<tr><td colspan="8" class="texto-suave">Nenhuma visita registrada neste período.</td></tr>'}</tbody>
+         </table>
+         </div>
+       </div>`,
+      "visitas-vendedores"
+    );
+
+    document.getElementById("filtros-visitas-vendedores").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const dados = new FormData(e.currentTarget);
+      renderVisitasVendedores({ data_inicio: dados.get("data_inicio"), data_fim: dados.get("data_fim") });
+    });
+  }
+
+  // =============================================================================
+  // Fase 150 — Crédito dos Vendedores ("gordurinha"): saldo de cada
+  // vendedor + transferência entre eles pelo admin. Pedido do usuário:
+  // "o admin, por dentro do sistema, pode transferir essas verbas caso
+  // necessário para outro vendedor".
+  // =============================================================================
+  async function renderCreditosVendedores() {
+    app.innerHTML = '<div class="carregando">Carregando créditos…</div>';
+    const vendedores = await chamarApi("/relatorios/creditos-vendedores");
+    state.cache.vendedoresParaTransferirCredito = vendedores;
+
+    const linhas = vendedores.map((v) => `<tr>
+      <td>${escapeHtml(v.vendedor_nome)}</td>
+      <td>${fmtMoeda(v.saldo_disponivel)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<div class="barra-acoes">
+         <h2 style="margin:0;">Crédito dos Vendedores</h2>
+         <button class="botao secundario" data-acao="abrir-transferir-credito-vendedor">Transferir crédito entre vendedores</button>
+       </div>
+       <p class="texto-suave" style="margin-top:-6px;">Crédito pessoal ("gordurinha") gerado automaticamente quando um vendedor vende acima da tabela de preço do cliente — só pode ser usado por ele mesmo, em pedidos de clientes onde ele é o vendedor responsável. Use "Transferir" para mover saldo entre vendedores quando fizer sentido.</p>
+       <div class="cartao">
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Vendedor</th><th>Saldo disponível</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="2" class="texto-suave">Nenhum vendedor com acesso ao App de Vendas cadastrado ainda.</td></tr>'}</tbody>
+         </table>
+         </div>
+       </div>`,
+      "creditos-vendedores"
+    );
+  }
+
+  function modalTransferirCreditoVendedor(vendedores) {
+    const opcoes = vendedores.map((v) => `<option value="${v.vendedor_id}">${escapeHtml(v.vendedor_nome)} (${fmtMoeda(v.saldo_disponivel)})</option>`).join("");
+    abrirModal(`
+      <h3>Transferir crédito entre vendedores</h3>
+      <form data-form="transferir-credito-vendedor">
+        <div class="campo"><label>De (origem)</label><select name="vendedor_origem_id" required>${opcoes}</select></div>
+        <div class="campo"><label>Para (destino)</label><select name="vendedor_destino_id" required>${opcoes}</select></div>
+        <div class="campo"><label>Valor (R$)</label><input type="number" name="valor" step="0.01" min="0.01" required></div>
+        <div class="campo"><label>Observação (opcional)</label><input type="text" name="observacao" placeholder="Motivo da transferência"></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Transferir</button>
+        </div>
+      </form>`);
+  }
+
   async function renderRastreabilidade() {
     app.innerHTML = '<div class="carregando">Carregando rastreabilidade…</div>';
     const podeSimular = temPermissao("rastreabilidade", "simular_recall");
@@ -16406,6 +16612,20 @@
         alvo.textContent = estaMostrando ? "👁️" : "🙈";
         alvo.setAttribute("aria-label", estaMostrando ? "Mostrar senha" : "Ocultar senha");
         return;
+      }
+      case "encerrar-visita-erp": {
+        if (!confirm("Encerrar esta visita em aberto? Isso marca a saída agora, em nome do vendedor (sem localização — ele esqueceu de fechar).")) return;
+        try {
+          await chamarApi(`/relatorios/visitas/${alvo.dataset.id}/encerrar`, { method: "POST" });
+          definirFlash("ok", "Visita encerrada.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível encerrar a visita.");
+        }
+        return renderVisitasVendedores();
+      }
+      case "abrir-transferir-credito-vendedor": {
+        const vendedores = state.cache.vendedoresParaTransferirCredito || (await chamarApi("/relatorios/creditos-vendedores"));
+        return modalTransferirCreditoVendedor(vendedores);
       }
       case "atualizar-painel-gerencial":
         return renderPainelGerencial({
@@ -18005,6 +18225,72 @@
         modalAplicarVerbaVendas(rascunho, verba);
         return;
       }
+      case "abrir-aplicar-credito-vendas": {
+        const rascunho = state.cache.rascunhoAppVendas;
+        const credito = await chamarApi("/vendas-app/meu-credito");
+        modalAplicarCreditoVendas(rascunho, credito);
+        return;
+      }
+      case "marcar-chegada-vendas": {
+        const clienteIdVisita = Number(alvo.dataset.clienteId);
+        alvo.disabled = true;
+        alvo.textContent = "📍 Registrando…";
+        // Fase 150 — pedido do usuário: "acionar que chegou" — pede a
+        // localização do navegador, mas o check-in NUNCA fica esperando
+        // por isso indefinidamente nem trava se a permissão for negada;
+        // o horário da chegada é o que realmente importa, a coordenada só
+        // enriquece o registro quando disponível.
+        const posicao = await new Promise((resolve) => {
+          if (!navigator.geolocation) { resolve(null); return; }
+          navigator.geolocation.getCurrentPosition(
+            (p) => resolve(p),
+            () => resolve(null),
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+          );
+        });
+        try {
+          await chamarApi(`/vendas-app/clientes/${clienteIdVisita}/visitas`, {
+            method: "POST",
+            body: posicao ? {
+              latitude: posicao.coords.latitude, longitude: posicao.coords.longitude,
+              precisao_metros: posicao.coords.accuracy,
+            } : {},
+          });
+          definirFlash("ok", `Chegada marcada${posicao ? "" : " (sem localização — GPS indisponível ou não autorizado)"}.`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível marcar a chegada.");
+        }
+        return renderAppVendas();
+      }
+      case "marcar-saida-vendas": {
+        const visitaId = Number(alvo.dataset.visitaId);
+        alvo.disabled = true;
+        alvo.textContent = "🚪 Registrando…";
+        // Mesma ação serve tanto pra "saindo agora, de verdade" quanto
+        // pra "esqueci de marcar e só lembrei depois" — não exige estar
+        // no local, a coordenada é só um bônus quando disponível.
+        const posicao = await new Promise((resolve) => {
+          if (!navigator.geolocation) { resolve(null); return; }
+          navigator.geolocation.getCurrentPosition(
+            (p) => resolve(p),
+            () => resolve(null),
+            { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 },
+          );
+        });
+        try {
+          await chamarApi(`/vendas-app/visitas/${visitaId}/saida`, {
+            method: "POST",
+            body: posicao ? {
+              latitude: posicao.coords.latitude, longitude: posicao.coords.longitude,
+              precisao_metros: posicao.coords.accuracy,
+            } : {},
+          });
+          definirFlash("ok", "Saída marcada.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível marcar a saída.");
+        }
+        return renderAppVendas();
+      }
       case "remover-item-rascunho-vendas":
         if (!confirm("Remover este item do rascunho?")) return;
         await chamarApi(`/vendas-app/rascunhos/${alvo.dataset.pedidoId}/itens/${alvo.dataset.linhaId}`, { method: "DELETE" });
@@ -19463,6 +19749,8 @@
         const corpoEdicaoCliente = {
           nome_fantasia: dados.get("nome_fantasia") || null, endereco: dados.get("endereco") || null,
           email: dados.get("email") || null, status: dados.get("status"),
+          // Fase 150 — "vendedor dono da conta" (opcional, em branco = ninguém definido ainda).
+          vendedor_responsavel_id: dados.get("vendedor_responsavel_id") ? Number(dados.get("vendedor_responsavel_id")) : null,
           // Fase 63 — campo em branco limpa o limite (envia null); com valor, converte para número.
           limite_credito: dados.get("limite_credito") ? Number(dados.get("limite_credito")) : null,
           // Fase 70 — dados fiscais (destinatário da NF-e).
@@ -20297,6 +20585,32 @@
         fecharModais();
         definirFlash("ok", "Verba aplicada ao rascunho.");
         return renderAppVendas();
+      }
+      case "aplicar-credito-vendas": {
+        await chamarApi(`/vendas-app/rascunhos/${form.dataset.id}/credito`, {
+          method: "POST", body: { valor: Number(dados.get("valor")) },
+        });
+        fecharModais();
+        definirFlash("ok", "Crédito pessoal aplicado ao rascunho.");
+        return renderAppVendas();
+      }
+      case "transferir-credito-vendedor": {
+        try {
+          await chamarApi("/relatorios/creditos-vendedor/transferir", {
+            method: "POST",
+            body: {
+              vendedor_origem_id: Number(dados.get("vendedor_origem_id")),
+              vendedor_destino_id: Number(dados.get("vendedor_destino_id")),
+              valor: Number(dados.get("valor")),
+              observacao: dados.get("observacao") || null,
+            },
+          });
+          fecharModais();
+          definirFlash("ok", "Crédito transferido entre vendedores.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível transferir o crédito.");
+        }
+        return renderCreditosVendedores();
       }
       case "enviar-rascunho-vendas": {
         const pedidoId = Number(form.dataset.id);

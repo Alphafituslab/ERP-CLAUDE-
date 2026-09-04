@@ -1138,3 +1138,212 @@ def dashboard_xlsx():
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{nome_arquivo}"'},
     )
+
+
+# =============================================================================
+# Fase 150 — desempenho de visitas por vendedor do App de Vendas ("assim
+# conseguimos monitorar todas as visitas e o tempo entre as visitas...
+# avaliar desempenho por usuário do app", pedido do usuário). Deliberadamente
+# em `relatorios.visualizar` (não `comercial.visualizar`, que o perfil
+# "Vendedor" também tem) — mesmo raciocínio do resto deste arquivo: é uma
+# visão que COMPARA pessoas entre si, não a operação de um vendedor sobre um
+# cliente específico; um vendedor não deveria ver o desempenho dos colegas
+# só por ter acesso ao app de vendas.
+# =============================================================================
+def _horas_entre(iso_inicio, iso_fim):
+    inicio = datetime.datetime.strptime(iso_inicio[:19], "%Y-%m-%dT%H:%M:%S")
+    fim = datetime.datetime.strptime(iso_fim[:19], "%Y-%m-%dT%H:%M:%S")
+    return (fim - inicio).total_seconds() / 3600
+
+
+@bp.get("/visitas-vendedores")
+@requires_permission("relatorios", "visualizar")
+def relatorio_visitas_vendedores():
+    conn = get_db()
+    data_inicio = request.args.get("data_inicio") or (datetime.datetime.utcnow() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    data_fim = request.args.get("data_fim") or _hoje_iso_data()
+
+    visitas = conn.execute(
+        """
+        SELECT vc.vendedor_id, u.nome AS vendedor_nome, vc.cliente_id, vc.chegada_em, vc.saida_em
+        FROM visitas_clientes vc
+        JOIN usuarios u ON u.id = vc.vendedor_id
+        WHERE date(vc.chegada_em) BETWEEN ? AND ?
+        ORDER BY vc.vendedor_id, vc.chegada_em
+        """,
+        (data_inicio, data_fim),
+    ).fetchall()
+
+    por_vendedor = {}
+    for v in visitas:
+        info = por_vendedor.setdefault(v["vendedor_id"], {
+            "vendedor_id": v["vendedor_id"], "vendedor_nome": v["vendedor_nome"],
+            "total_visitas": 0, "clientes_distintos": set(), "visitas_ainda_abertas": 0,
+            "_chegadas": [], "_duracoes_horas": [],
+        })
+        info["total_visitas"] += 1
+        info["clientes_distintos"].add(v["cliente_id"])
+        info["_chegadas"].append(v["chegada_em"])
+        if v["saida_em"]:
+            info["_duracoes_horas"].append(_horas_entre(v["chegada_em"], v["saida_em"]))
+        else:
+            info["visitas_ainda_abertas"] += 1
+
+    resultado = []
+    for info in por_vendedor.values():
+        chegadas = sorted(info.pop("_chegadas"))
+        duracoes = info.pop("_duracoes_horas")
+        info["clientes_distintos"] = len(info["clientes_distintos"])
+        info["primeira_visita_em"] = chegadas[0]
+        info["ultima_visita_em"] = chegadas[-1]
+        # Tempo médio ENTRE visitas consecutivas (qualquer cliente) — "o
+        # tempo entre as visitas", pedido do usuário — e tempo médio de
+        # DURAÇÃO de cada visita (chegada→saída) como métrica extra.
+        if len(chegadas) >= 2:
+            intervalos = [_horas_entre(chegadas[i - 1], chegadas[i]) for i in range(1, len(chegadas))]
+            info["media_horas_entre_visitas"] = round(sum(intervalos) / len(intervalos), 1)
+        else:
+            info["media_horas_entre_visitas"] = None
+        info["media_horas_duracao_visita"] = round(sum(duracoes) / len(duracoes), 1) if duracoes else None
+        resultado.append(info)
+
+    resultado.sort(key=lambda r: r["total_visitas"], reverse=True)
+    return jsonify({"data_inicio": data_inicio, "data_fim": data_fim, "vendedores": resultado})
+
+
+@bp.get("/visitas-abertas")
+@requires_permission("relatorios", "visualizar")
+def relatorio_visitas_abertas():
+    """Visitas que ainda não foram encerradas — inclusive as esquecidas há
+    dias. Base pra `encerrar_visita_pelo_erp` abaixo."""
+    conn = get_db()
+    abertas = conn.execute(
+        """
+        SELECT vc.*, u.nome AS vendedor_nome, c.razao_social AS cliente_razao_social
+        FROM visitas_clientes vc
+        JOIN usuarios u ON u.id = vc.vendedor_id
+        JOIN clientes c ON c.id = vc.cliente_id
+        WHERE vc.saida_em IS NULL
+        ORDER BY vc.chegada_em
+        """,
+    ).fetchall()
+    return jsonify([dict(v) for v in abertas])
+
+
+@bp.post("/visitas/<int:visita_id>/encerrar")
+@requires_permission("relatorios", "visualizar")
+def encerrar_visita_pelo_erp(visita_id):
+    """"Esqueci de apontar minha saída" resolvido por quem administra,
+    de dentro do ERP — pedido explícito do usuário: "ou então solicitar
+    que seja feito por dentro do ERP ao usuário da empresa que tem acesso,
+    bastando clicar". Nunca captura coordenada (quem clica não está no
+    cliente) — só fecha o registro com o horário de agora, marcado como
+    encerrado pelo ERP, não pelo próprio vendedor."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    visita = conn.execute("SELECT * FROM visitas_clientes WHERE id = ?", (visita_id,)).fetchone()
+    if visita is None:
+        raise ApiError("Visita não encontrada.", status=404)
+    if visita["saida_em"] is not None:
+        raise ApiError("Esta visita já foi encerrada.", status=409)
+
+    agora = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    conn.execute(
+        "UPDATE visitas_clientes SET saida_em = ?, saida_registrada_por = ?, saida_encerrada_pelo_erp = 1 WHERE id = ?",
+        (agora, usuario_atual["id"], visita_id),
+    )
+    audit.registrar(conn, tabela="visitas_clientes", registro_id=visita_id, usuario_id=usuario_atual["id"],
+                     acao="visita_encerrada_pelo_erp", valor_novo={"vendedor_id": visita["vendedor_id"], "cliente_id": visita["cliente_id"]},
+                     ip=client_ip(), dispositivo=client_device())
+
+    atualizada = conn.execute("SELECT * FROM visitas_clientes WHERE id = ?", (visita_id,)).fetchone()
+    return jsonify(dict(atualizada))
+
+
+# =============================================================================
+# Fase 150 — crédito pessoal do vendedor ("gordurinha"): visão de quem
+# administra + transferência entre vendedores. Revisão do usuário: "o
+# vendedor só pode usar seu crédito com seus clientes, onde o admin pode
+# transferir essas verbas caso necessário para outro vendedor" — a
+# transferência em si é só um par de lançamentos no MESMO ledger append-
+# only que a geração automática usa (`creditos_vendedor_lancamentos`),
+# nunca edita/apaga nada — mesmo raciocínio do resto do arquivo.
+# =============================================================================
+def _saldo_credito_vendedor(conn, vendedor_id):
+    row = conn.execute(
+        "SELECT COALESCE(SUM(CASE WHEN tipo = 'gerado' THEN valor ELSE -valor END), 0) AS saldo "
+        "FROM creditos_vendedor_lancamentos WHERE vendedor_id = ?",
+        (vendedor_id,),
+    ).fetchone()
+    return row["saldo"]
+
+
+@bp.get("/creditos-vendedores")
+@requires_permission("relatorios", "visualizar")
+def relatorio_creditos_vendedores():
+    conn = get_db()
+    vendedores = conn.execute(
+        """
+        SELECT DISTINCT u.id, u.nome FROM usuarios u
+        JOIN usuario_perfil up ON up.usuario_id = u.id
+        JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
+        JOIN permissoes p ON p.id = pp.permissao_id
+        WHERE p.modulo = 'vendas_app' AND p.acao = 'usar' AND u.status = 'ativo'
+        ORDER BY u.nome
+        """
+    ).fetchall()
+    return jsonify([{"vendedor_id": v["id"], "vendedor_nome": v["nome"], "saldo_disponivel": _saldo_credito_vendedor(conn, v["id"])} for v in vendedores])
+
+
+@bp.post("/creditos-vendedor/transferir")
+@requires_permission("relatorios", "visualizar")
+def transferir_credito_vendedor():
+    """Move saldo do crédito pessoal de um vendedor pra outro — grava como
+    'utilizado' pra origem e 'gerado' pro destino, os dois com a MESMA
+    observação linkando um ao outro, pra sempre dar pra rastrear a
+    transferência olhando o extrato de qualquer um dos dois lados."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    dados = request.get_json(silent=True) or {}
+    vendedor_origem_id = dados.get("vendedor_origem_id")
+    vendedor_destino_id = dados.get("vendedor_destino_id")
+    valor = dados.get("valor")
+    observacao = (dados.get("observacao") or "").strip()
+
+    if not vendedor_origem_id or not vendedor_destino_id:
+        raise ApiError("Informe vendedor_origem_id e vendedor_destino_id.", status=400)
+    if vendedor_origem_id == vendedor_destino_id:
+        raise ApiError("Origem e destino não podem ser o mesmo vendedor.", status=400)
+    try:
+        valor = float(valor)
+    except (TypeError, ValueError):
+        raise ApiError("Informe um valor numérico maior que zero.", status=400)
+    if valor <= 0:
+        raise ApiError("O valor a transferir precisa ser maior que zero.", status=400)
+
+    for vendedor_id in (vendedor_origem_id, vendedor_destino_id):
+        if not conn.execute("SELECT 1 FROM usuarios WHERE id = ? AND status = 'ativo'", (vendedor_id,)).fetchone():
+            raise ApiError(f"Vendedor {vendedor_id} não encontrado ou inativo.", status=404)
+
+    saldo_origem = _saldo_credito_vendedor(conn, vendedor_origem_id)
+    if valor > saldo_origem + 0.0000001:
+        raise ApiError(f"O vendedor de origem só tem R$ {saldo_origem:.2f} de crédito disponível.", status=400)
+
+    texto_observacao = f"Transferência entre vendedores" + (f" — {observacao}" if observacao else "") + f" (feita por {usuario_atual['nome']})"
+    conn.execute(
+        "INSERT INTO creditos_vendedor_lancamentos (vendedor_id, tipo, valor, observacao, criado_por) VALUES (?, 'utilizado', ?, ?, ?)",
+        (vendedor_origem_id, valor, texto_observacao, usuario_atual["id"]),
+    )
+    conn.execute(
+        "INSERT INTO creditos_vendedor_lancamentos (vendedor_id, tipo, valor, observacao, criado_por) VALUES (?, 'gerado', ?, ?, ?)",
+        (vendedor_destino_id, valor, texto_observacao, usuario_atual["id"]),
+    )
+    audit.registrar(conn, tabela="creditos_vendedor_lancamentos", registro_id=None, usuario_id=usuario_atual["id"],
+                     acao="credito_vendedor_transferido",
+                     valor_novo={"vendedor_origem_id": vendedor_origem_id, "vendedor_destino_id": vendedor_destino_id, "valor": valor, "observacao": observacao},
+                     ip=client_ip(), dispositivo=client_device())
+
+    return jsonify({
+        "vendedor_origem_id": vendedor_origem_id, "saldo_origem_apos": _saldo_credito_vendedor(conn, vendedor_origem_id),
+        "vendedor_destino_id": vendedor_destino_id, "saldo_destino_apos": _saldo_credito_vendedor(conn, vendedor_destino_id),
+    })

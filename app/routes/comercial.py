@@ -554,6 +554,16 @@ def editar_cliente(cliente_id):
         if not conn.execute("SELECT 1 FROM condicoes_pagamento WHERE id = ? AND ativo = 1", (condicao_pagamento_padrao_id,)).fetchone():
             raise ApiError("Condição de pagamento não encontrada ou inativa.", status=404)
 
+    # Fase 150 — "vendedor dono da conta" deste cliente (opcional; sem
+    # isso definido, nenhum vendedor consegue usar crédito pessoal
+    # ["gordurinha"] neste cliente, ver vendas_app.py::aplicar_credito_
+    # rascunho) — diferente de pedidos_venda.vendedor_id, que é só quem
+    # processou UMA venda específica.
+    vendedor_responsavel_id = dados.get("vendedor_responsavel_id", anterior["vendedor_responsavel_id"])
+    if vendedor_responsavel_id is not None:
+        if not conn.execute("SELECT 1 FROM usuarios WHERE id = ? AND status = 'ativo'", (vendedor_responsavel_id,)).fetchone():
+            raise ApiError("Vendedor responsável não encontrado ou inativo.", status=404)
+
     # Fase 63 — limite_credito é sempre OPCIONAL: `None`/omitido significa
     # "sem limite configurado" (nenhuma confirmação de pedido deste
     # cliente nunca fica pendente por conta de crédito), mesmo raciocínio
@@ -580,12 +590,12 @@ def editar_cliente(cliente_id):
     conn.execute(
         f"""
         UPDATE clientes SET nome_fantasia = ?, endereco = ?, email = ?, status = ?, limite_credito = ?, tabela_preco_id = ?,
-               metodo_pagamento_padrao_id = ?, condicao_pagamento_padrao_id = ?,
+               metodo_pagamento_padrao_id = ?, condicao_pagamento_padrao_id = ?, vendedor_responsavel_id = ?,
                {', '.join(f'{c} = ?' for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS)}
         WHERE id = ?
         """,
         (nome_fantasia, endereco, email, status, limite_credito, tabela_preco_id,
-         metodo_pagamento_padrao_id, condicao_pagamento_padrao_id,
+         metodo_pagamento_padrao_id, condicao_pagamento_padrao_id, vendedor_responsavel_id,
          *[valores_fiscais[c] for c in CAMPOS_FISCAIS_CLIENTE_EDITAVEIS], cliente_id),
     )
     novo = _cliente_ou_404(conn, cliente_id)
@@ -1511,7 +1521,13 @@ def expedir(pedido_id):
     # verba_utilizada = 0, então este `min()` nunca muda o comportamento
     # de nenhum pedido que já existia).
     verba_utilizada_pedido = min(pedido["verba_utilizada"], valor_bruto_pedido)
-    valor_total_conta = valor_bruto_pedido - verba_utilizada_pedido
+    # Fase 150 — mesmo raciocínio acima, agora pro crédito PESSOAL do
+    # vendedor ("gordurinha") aplicado neste pedido: também abate o valor
+    # faturado ao cliente, depois da verba (a ordem entre os dois não
+    # importa pro resultado, soma é comutativa) — o `max(..., 0)` evita
+    # ficar negativo se os dois juntos passarem do valor bruto.
+    credito_vendedor_utilizado_pedido = min(pedido["credito_vendedor_utilizado"], max(valor_bruto_pedido - verba_utilizada_pedido, 0))
+    valor_total_conta = valor_bruto_pedido - verba_utilizada_pedido - credito_vendedor_utilizado_pedido
     if valor_total_conta <= 0.0000001:
         raise ApiError(
             "Este pedido não tem valor (preço unitário) definido em nenhum item, ou a verba usada cobre o "
@@ -1621,6 +1637,52 @@ def expedir(pedido_id):
             (pedido["cliente_id"], valor_verba_gerada, pedido_id,
              f"Gerada pela venda do pedido {pedido['numero']} ({percentual_verba}% sobre R$ {valor_total_conta:.2f})",
              usuario_atual["id"]),
+        )
+
+    # Fase 150 — pedido do usuário: "fazer uma gordurinha ao vender um
+    # produto acima do valor acordado" vira crédito PESSOAL do vendedor
+    # (não do cliente), gerado AUTOMATICAMENTE aqui, no mesmo momento da
+    # verba acima (nunca antes: cancelar um pedido antes de expedir não
+    # deixa nada pra desfazer). Só pedidos com `vendedor_id` (criados pelo
+    # App de Vendas) geram crédito — um pedido lançado pela tela desktop
+    # de sempre nunca passa por aqui. Só compara contra a tabela de preço
+    # do CLIENTE deste pedido — sem tabela configurada (ou item fora
+    # dela), não há preço "combinado" pra comparar, então nenhum crédito é
+    # gerado por aquele item (nunca inventa um preço de referência).
+    if pedido["vendedor_id"]:
+        cliente_do_pedido = conn.execute("SELECT tabela_preco_id FROM clientes WHERE id = ?", (pedido["cliente_id"],)).fetchone()
+        if cliente_do_pedido and cliente_do_pedido["tabela_preco_id"]:
+            precos_tabela = {
+                r["item_id"]: r["preco"] for r in conn.execute(
+                    "SELECT item_id, preco FROM tabelas_preco_itens WHERE tabela_preco_id = ?",
+                    (cliente_do_pedido["tabela_preco_id"],),
+                ).fetchall()
+            }
+            itens_com_item_id = conn.execute(
+                "SELECT item_id, quantidade, preco_unitario FROM pedido_venda_itens WHERE pedido_id = ?", (pedido_id,)
+            ).fetchall()
+            valor_gordurinha = sum(
+                (i["preco_unitario"] - precos_tabela[i["item_id"]]) * i["quantidade"]
+                for i in itens_com_item_id
+                if i["item_id"] in precos_tabela and i["preco_unitario"] > precos_tabela[i["item_id"]]
+            )
+            if valor_gordurinha > 0.0000001:
+                conn.execute(
+                    """
+                    INSERT INTO creditos_vendedor_lancamentos (vendedor_id, tipo, valor, pedido_venda_id, observacao, criado_por)
+                    VALUES (?, 'gerado', ?, ?, ?, ?)
+                    """,
+                    (pedido["vendedor_id"], valor_gordurinha, pedido_id,
+                     f"Vendido acima da tabela de preço no pedido {pedido['numero']}", usuario_atual["id"]),
+                )
+    if credito_vendedor_utilizado_pedido > 0.0000001:
+        conn.execute(
+            """
+            INSERT INTO creditos_vendedor_lancamentos (vendedor_id, tipo, valor, pedido_venda_id, observacao, criado_por)
+            VALUES (?, 'utilizado', ?, ?, ?, ?)
+            """,
+            (pedido["vendedor_id"], credito_vendedor_utilizado_pedido, pedido_id,
+             f"Abatimento no pedido {pedido['numero']}", usuario_atual["id"]),
         )
     return jsonify(_pedido_detalhado(conn, pedido_id))
 
