@@ -1,0 +1,17 @@
+{
+  "name": "Alpha Connect",
+  "short_name": "Alpha Connect",
+  "description": "App de Vendas da Alphafitus para vendedores externos — instale no celular ou tablet para abrir como um aplicativo, sem precisar digitar o endereço no navegador todas as vezes.",
+  "start_url": "/vendas#/app-vendas",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f6f8",
+  "theme_color": "#00875f",
+  "lang": "pt-BR",
+  "icons": [
+    { "src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

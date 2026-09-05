@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "153.0"
+VERSAO_SISTEMA = "154.0"
 
 
 def create_app(test_config: dict = None) -> Flask:
@@ -137,6 +137,19 @@ def create_app(test_config: dict = None) -> Flask:
     @app.get("/manifest.json")
     def frontend_manifest():
         return send_from_directory(FRONTEND_DIR, "manifest.json")
+
+    # Fase 154 — casca própria pro App de Vendas externo (mesmo app.js/
+    # backend de sempre, só uma "pele"/identidade diferente pra instalar
+    # no celular/tablet do vendedor — ver comentário completo em
+    # frontend/vendas.html). Pedido do usuário: o ERP/desktop continua
+    # "Alphafitus OS", só o app instalado em campo vira "Alpha Connect".
+    @app.get("/vendas")
+    def frontend_vendas_index():
+        return send_from_directory(FRONTEND_DIR, "vendas.html")
+
+    @app.get("/manifest_vendas.json")
+    def frontend_manifest_vendas():
+        return send_from_directory(FRONTEND_DIR, "manifest_vendas.json")
 
     @app.get("/sw.js")
     def frontend_service_worker():

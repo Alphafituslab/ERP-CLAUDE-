@@ -124,6 +124,51 @@ body::before {
   color: var(--azul);
 }
 
+/* Título "Seja Alpha Connect" da tela de login — pedido final do usuário:
+   manter a MESMA letra/degradê da versão da placa escura, só tirar o
+   fundo preto — o texto fica solto direto no branco do cartão, sem
+   caixa/moldura nenhuma. Centralização robusta (bloco 100% de largura +
+   text-align, sem inline-block); brilho sutil atravessando UMA VEZ ao
+   abrir a tela. */
+.cartao-login h1.titulo-login-faixa {
+  margin: 10px 0 14px;
+  animation: entradaFaixaLogin .6s cubic-bezier(.2, .8, .2, 1) both;
+}
+.cartao-login .titulo-login-faixa-texto {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 4px 0;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+}
+.cartao-login .titulo-login-faixa-texto span {
+  background:
+    linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, .8) 45%, rgba(255, 255, 255, .8) 55%, transparent 80%) 0 0 / 280% 100%,
+    linear-gradient(180deg, #00A886 0%, #00785F 30%, #00432F 55%, #00A886 78%, #00291C 100%) 0 0 / 100% 100%;
+  background-repeat: no-repeat;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: brilhoChipLogin 1.6s ease-out .5s 1 both;
+}
+
+@keyframes entradaFaixaLogin {
+  0% { opacity: 0; transform: scaleX(.85); }
+  100% { opacity: 1; transform: scaleX(1); }
+}
+@keyframes brilhoChipLogin {
+  0% { background-position: 160% 0, 0 0; }
+  100% { background-position: -60% 0, 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .cartao-login h1.titulo-login-faixa,
+  .cartao-login .titulo-login-faixa-texto span { animation: none; }
+}
+
 .cartao-login .subtitulo {
   color: var(--texto-suave);
   margin: 0 0 24px;

@@ -1259,11 +1259,20 @@
 
   function renderLogin() {
     const emailLembrado = localStorage.getItem(CHAVE_EMAIL_LEMBRADO) || "";
+    // Fase 154 — mesma tela de login pro ERP/desktop e pro App de Vendas
+    // externo (mesmo app.js/backend), mas com "peles" diferentes: o
+    // marcador `window.__ORIGEM_APP__` só existe quando a página foi
+    // aberta a partir de /vendas (ver frontend/vendas.html) — o app
+    // instalado no celular/tablet do vendedor. Sem ele (acesso normal
+    // pelo ERP/desktop), continua "Alphafitus OS" como sempre foi.
+    const tituloHtml = window.__ORIGEM_APP__ === "vendas"
+      ? `<h1 class="titulo-login-faixa"><span class="titulo-login-faixa-texto"><span>Seja Alpha Connect</span></span></h1>`
+      : `<h1>Alphafitus OS</h1>`;
     app.innerHTML = `
       <div class="tela-login">
         <div class="cartao-login">
           <img class="logo-marca" src="/static/img/logo_alphafitus.png" alt="Alphafitus">
-          <h1>Alphafitus OS</h1>
+          ${tituloHtml}
           <p class="subtitulo">Sistema Integrado de Gestão</p>
           ${state.flash ? `<p class="mensagem-erro">${escapeHtml(state.flash.texto)}</p>` : ""}
           <form data-form="login">
