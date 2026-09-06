@@ -73,7 +73,7 @@ import datetime
 
 from flask import Blueprint, g, jsonify, request
 
-from .. import audit
+from .. import audit, backup_service
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..permissions import requires_permission
 from .clientes_documentos import _inserir_documento_cliente, _validar_e_decodificar_documento
@@ -474,6 +474,37 @@ def catalogo():
 CATEGORIA_PADRAO_PORTFOLIO = "Outros"
 
 
+def _catalogo_visivel_para_vendedor(conn, catalogo, usuario_id):
+    if catalogo["visibilidade"] == "todos":
+        return True
+    return conn.execute(
+        "SELECT 1 FROM catalogos_vendas_vendedores WHERE catalogo_id = ? AND usuario_id = ?",
+        (catalogo["id"], usuario_id),
+    ).fetchone() is not None
+
+
+@bp.get("/catalogos")
+@requires_permission("vendas_app", "usar")
+def listar_catalogos_visiveis():
+    """Fase 155 — só os catálogos ATIVOS que este vendedor específico pode
+    ver (visibilidade 'todos', ou 'restrita' com ele na lista permitida) —
+    nunca devolve um catálogo restrito pra quem não está autorizado, nem
+    como contagem nem como conteúdo."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    todos = conn.execute("SELECT * FROM catalogos_vendas WHERE status = 'ativo' ORDER BY ordem, nome").fetchall()
+    resultado = []
+    for row in todos:
+        catalogo = dict(row)
+        if not _catalogo_visivel_para_vendedor(conn, catalogo, usuario_atual["id"]):
+            continue
+        catalogo["total_itens"] = conn.execute(
+            "SELECT COUNT(*) AS n FROM catalogos_vendas_itens WHERE catalogo_id = ?", (catalogo["id"],)
+        ).fetchone()["n"]
+        resultado.append(catalogo)
+    return jsonify(resultado)
+
+
 @bp.get("/portfolio")
 @requires_permission("vendas_app", "usar")
 def portfolio():
@@ -481,19 +512,30 @@ def portfolio():
     conn = get_db()
     _expirar_sessoes_rascunho_vencidas(conn)
     busca = (request.args.get("busca") or "").strip()
+    catalogo_id = request.args.get("catalogo_id", type=int)
 
     sessao_ativa = _sessao_ativa_do_vendedor(conn, usuario_atual["id"])
     excluir_pedido_id = sessao_ativa["pedido_venda_id"] if sessao_ativa else None
 
-    clausula_busca = ""
+    clausula_catalogo = ""
     params = []
+    if catalogo_id:
+        catalogo = conn.execute("SELECT * FROM catalogos_vendas WHERE id = ?", (catalogo_id,)).fetchone()
+        if catalogo is None:
+            raise ApiError("Catálogo não encontrado.", status=404)
+        if not _catalogo_visivel_para_vendedor(conn, dict(catalogo), usuario_atual["id"]):
+            raise ApiError("Você não tem acesso a este catálogo.", status=403)
+        clausula_catalogo = "AND i.id IN (SELECT item_id FROM catalogos_vendas_itens WHERE catalogo_id = ?)"
+        params.append(catalogo_id)
+
+    clausula_busca = ""
     if busca:
         clausula_busca = "AND (i.codigo LIKE ? OR i.descricao LIKE ? OR i.categoria LIKE ?)"
         params.extend([f"%{busca}%", f"%{busca}%", f"%{busca}%"])
     itens = conn.execute(
         f"""
         SELECT i.* FROM itens i
-        WHERE i.status = 'ativo' AND i.tipo = 'produto_acabado' {clausula_busca}
+        WHERE i.status = 'ativo' AND i.tipo = 'produto_acabado' {clausula_catalogo} {clausula_busca}
         ORDER BY COALESCE(i.categoria, '{CATEGORIA_PADRAO_PORTFOLIO}'), i.descricao
         """,
         params,
@@ -702,7 +744,17 @@ def adicionar_item_rascunho(pedido_id):
         (pedido_id, item_id),
     ).fetchone()["total"]
     saldo_disponivel = _saldo_disponivel_para_venda(conn, item_id, excluir_pedido_id=pedido_id)
-    if ja_no_rascunho + quantidade > saldo_disponivel + 0.0000001:
+    saldo_insuficiente = ja_no_rascunho + quantidade > saldo_disponivel + 0.0000001
+    # Fase 155 — pedido do usuário: no App de Vendas, saldo insuficiente
+    # não trava mais o vendedor sem alternativa — ele é AVISADO (o front
+    # mostra o mesmo texto de erro de sempre como confirmação, não como
+    # bloqueio final) e pode optar por colocar no pedido mesmo assim
+    # (`forcar: true`). A reserva soft-hold desta tela sempre foi só uma
+    # ESTIMATIVA pra evitar disputa entre vendedores; quem decide de
+    # verdade se hoje existe estoque físico pra cumprir é a alocação FEFO
+    # de verdade, lá na hora de confirmar o pedido (`_alocar_fefo`) — essa
+    # continua bloqueando sem exceção, nunca promete o que não existe.
+    if saldo_insuficiente and not dados.get("forcar"):
         raise ApiError(
             f"Saldo insuficiente: você já tem {ja_no_rascunho} deste item no seu rascunho e está pedindo mais "
             f"{quantidade}, mas o saldo disponível para venda agora é {saldo_disponivel} (descontando o que "
@@ -715,6 +767,11 @@ def adicionar_item_rascunho(pedido_id):
         "INSERT INTO pedido_venda_itens (pedido_id, item_id, quantidade, unidade, preco_unitario) VALUES (?, ?, ?, ?, ?)",
         (pedido_id, item_id, quantidade, unidade, preco_unitario),
     )
+    if saldo_insuficiente:
+        audit.registrar(conn, tabela="pedido_venda_itens", registro_id=cur.lastrowid, usuario_id=usuario_atual["id"],
+                         acao="item_adicionado_acima_do_saldo_disponivel",
+                         valor_novo={"pedido_id": pedido_id, "item_id": item_id, "quantidade": quantidade, "saldo_disponivel": saldo_disponivel},
+                         ip=client_ip(), dispositivo=client_device())
     nova_expiracao = _tocar_sessao(conn, sessao["id"])
     audit.registrar(conn, tabela="pedido_venda_itens", registro_id=cur.lastrowid, usuario_id=usuario_atual["id"],
                      acao="item_pedido_adicionado_via_app_vendas",
@@ -1122,6 +1179,61 @@ def enviar_rascunho(pedido_id):
                      acao="sessao_rascunho_enviada", valor_novo={"motivo_encerramento": "enviado"},
                      ip=client_ip(), dispositivo=client_device())
     return jsonify({"pedido": pedido}), status_http
+
+
+# ============================================================
+# Fase 155 — "espelho do pedido" por WhatsApp
+# ============================================================
+# Pedido do usuário: depois de fechar o pedido (cliente + itens + forma de
+# pagamento), o vendedor precisa poder mandar um resumo pro WhatsApp do
+# cliente — mesmo mecanismo (Evolution API) já usado pra mandar o link do
+# portal de Terceirização/Contratos, nunca uma conta separada. Texto puro
+# (sem PDF) de propósito: mais rápido de mandar, e o cliente já recebe os
+# valores exatos sem precisar abrir nada.
+def _texto_espelho_pedido(pedido):
+    linhas = [
+        f"*Espelho do pedido {pedido['numero']}* — {pedido['cliente_razao_social']}",
+        "",
+    ]
+    for item in pedido["itens"]:
+        linhas.append(
+            f"• {item['item_descricao']} — {item['quantidade']:g} {item['unidade']} x "
+            f"R$ {item['preco_unitario']:.2f} = R$ {item['valor_total']:.2f}"
+        )
+    linhas.append("")
+    linhas.append(f"*Total: R$ {pedido['valor_total']:.2f}*")
+    if pedido.get("forma_pagamento"):
+        linhas.append(f"Forma de pagamento: {pedido['forma_pagamento']}")
+    return "\n".join(linhas)
+
+
+@bp.post("/pedidos/<int:pedido_id>/enviar-espelho-whatsapp")
+@requires_permission("vendas_app", "usar")
+def enviar_espelho_pedido_whatsapp(pedido_id):
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    pedido = _pedido_detalhado(conn, pedido_id)
+    if pedido["vendedor_id"] != usuario_atual["id"]:
+        raise ForbiddenError("Você só pode enviar o espelho de pedidos que você mesmo fez.")
+
+    cliente = conn.execute("SELECT telefone FROM clientes WHERE id = ?", (pedido["cliente_id"],)).fetchone()
+    telefone = (cliente["telefone"] or "").strip() if cliente else ""
+    if not telefone:
+        raise ApiError(
+            "Este cliente não tem telefone cadastrado (Comercial > editar cliente).", status=400,
+            codigo="cliente_sem_telefone",
+        )
+
+    config = backup_service.obter_configuracao(conn)
+    try:
+        backup_service.enviar_texto_whatsapp(config, telefone, _texto_espelho_pedido(pedido))
+    except (ValueError, RuntimeError) as erro:
+        raise ApiError(str(erro), status=502, codigo="falha_envio_whatsapp")
+
+    audit.registrar(conn, tabela="pedidos_venda", registro_id=pedido_id, usuario_id=usuario_atual["id"],
+                     acao="espelho_pedido_enviado_whatsapp", valor_novo={"telefone": telefone},
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True})
 
 
 # ============================================================

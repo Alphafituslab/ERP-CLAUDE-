@@ -173,6 +173,7 @@ SCHEMA_FILES = [
     "schema_fase147.sql",  # Fase 147 — Gerador de Contratos (a partir de um projeto do Monte sua linha, assinatura eletrônica reaproveitada)
     "schema_fase150.sql",  # Fase 150 — App de Vendas: crédito pessoal do vendedor ("gordurinha") + check-in de visita por geolocalização
     "schema_fase153.sql",  # Fase 153 — Galeria de mídia dos itens (múltiplas fotos + vídeo)
+    "schema_fase155.sql",  # Fase 155 — Catálogos nomeados do App de Vendas (visibilidade por vendedor)
 ]
 
 

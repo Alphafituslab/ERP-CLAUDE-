@@ -553,6 +553,15 @@ PERMISSOES_PADRAO = [
     ("terceirizacao", "aprovar_pd", "Dar o aceite de P&D num projeto de terceirização", 0),
     ("terceirizacao", "aprovar_qualidade", "Dar o aceite de Qualidade num projeto de terceirização", 0),
     ("terceirizacao", "aprovar_regulatorio", "Dar o aceite de Regulatório num projeto de terceirização", 0),
+
+    # Fase 155 — Catálogos nomeados do App de Vendas (administração: criar
+    # catálogo, escolher itens, escolher vendedores permitidos quando
+    # restrito). Visualização/uso do CATÁLOGO em si pelo vendedor continua
+    # gated por "vendas_app.usar" (ver app/routes/vendas_app.py) — isto
+    # aqui é só quem pode MONTAR os catálogos.
+    ("catalogos_vendas", "visualizar", "Ver os catálogos do App de Vendas e sua composição", 0),
+    ("catalogos_vendas", "cadastrar", "Criar novos catálogos do App de Vendas", 0),
+    ("catalogos_vendas", "editar", "Editar catálogo, seus itens e vendedores permitidos", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)

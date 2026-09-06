@@ -354,6 +354,18 @@
     else location.hash = hash;
   }
 
+  // Fase 155 — pra onde ir depois de autenticado sem uma rota específica
+  // em mente (hash vazio ao abrir, ou logo após o login). Sem o marcador
+  // (acesso normal pelo ERP), sempre foi "#/dashboard"; a partir de
+  // /vendas (App de Vendas externo, ver window.__ORIGEM_APP__ em
+  // frontend/vendas.html), some direto pro App de Vendas — inclusive
+  // quando o celular já tinha sessão salva daquela mesma origem e o hash
+  // veio vazio (sem isso, caía direto no Painel do ERP, sem nunca passar
+  // pela tela do vendedor).
+  function rotaInicialPosLogin() {
+    return window.__ORIGEM_APP__ === "vendas" ? "#/app-vendas" : "#/dashboard";
+  }
+
   window.addEventListener("hashchange", montarRota);
 
   async function montarRota() {
@@ -395,7 +407,7 @@
       }
     }
 
-    if (rota === "#/login") return navegarPara("#/dashboard");
+    if (rota === "#/login") return navegarPara(rotaInicialPosLogin());
 
     // Fase 37 — inicia (uma única vez por sessão logada) o polling da
     // contagem de notificações não lidas, para o sino da barra superior
@@ -452,7 +464,10 @@
           case "lancar-faturar": return renderLancarFaturarPedidos();
           case "tabelas-preco": return param ? renderTabelaPrecoDetalhe(Number(param)) : renderTabelasPreco();
           case "pedido": return param ? renderPedidoDetalhe(Number(param)) : renderComercial();
-          case "app-vendas": return param === "portfolio" ? renderPortfolioVendas() : renderAppVendas();
+          case "app-vendas":
+            if (param === "portfolio") return renderPortfolioVendas();
+            if (param === "catalogos") return renderCatalogosVendas();
+            return renderAppVendas();
           case "minhas-comissoes": return renderMinhasComissoes();
           case "financeiro": return renderFinanceiro();
           case "fiscal": return param ? renderNotaFiscalDetalhe(Number(param)) : renderNotasFiscais();
@@ -639,6 +654,7 @@
         { rota: "#/tabelas-preco", chave: "tabelas-preco", label: "Tabelas de Preço", permissao: ["tabelas_preco", "visualizar"] },
         { rota: "#/pagamentos", chave: "pagamentos", label: "Métodos & Condições de Pagamento", permissao: ["comercial", "visualizar"] },
         { rota: "#/app-vendas", chave: "app-vendas", label: "App de Vendas", permissao: ["vendas_app", "usar"] },
+        { rota: "#/app-vendas/catalogos", chave: "app-vendas-catalogos", label: "Catálogos", permissao: ["vendas_app", "usar"] },
         { rota: "#/app-vendas/portfolio", chave: "app-vendas-portfolio", label: "Portfólio", permissao: ["vendas_app", "usar"] },
         { rota: "#/minhas-comissoes", chave: "minhas-comissoes", label: "Minhas Comissões", permissao: ["vendas_app", "usar"] },
         // Fase 70 — Fiscal (NF-e).
@@ -834,7 +850,24 @@
       }
       return !sub.permissao || temPermissao(sub.permissao[0], sub.permissao[1]);
     };
-    const linksHtml = ITENS_MENU.map((it) => {
+    // Fase 155 — no App de Vendas externo (window.__ORIGEM_APP__==="vendas",
+    // ver frontend/vendas.html), o menu lateral NUNCA mostra o ERP inteiro,
+    // mesmo que o usuário logado tenha permissão de admin pra tudo — só o
+    // que é "conveniente ao App" (pedido do usuário): catálogos, portfólio,
+    // pedido/rascunho, comissões. Itens fora dessa lista somem do menu
+    // (o item de menu, não a rota em si — ninguém navegando direto pela
+    // URL fica bloqueado, só não aparece pra descobrir por aqui).
+    const CHAVES_MENU_APP_VENDAS = ["app-vendas", "app-vendas-portfolio", "app-vendas-catalogos", "minhas-comissoes"];
+    const itensMenuEfetivo = window.__ORIGEM_APP__ !== "vendas" ? ITENS_MENU : ITENS_MENU
+      .map((it) => {
+        if (it.tipo === "grupo") {
+          const itensPermitidos = it.itens.filter((sub) => CHAVES_MENU_APP_VENDAS.includes(sub.chave));
+          return itensPermitidos.length ? { ...it, itens: itensPermitidos } : null;
+        }
+        return CHAVES_MENU_APP_VENDAS.includes(it.chave) ? it : null;
+      })
+      .filter(Boolean);
+    const linksHtml = itensMenuEfetivo.map((it) => {
       if (it.tipo === "grupo") {
         const itensVisiveis = it.itens.filter(temPermissaoItemOuSubgrupo);
         if (!itensVisiveis.length) return "";
@@ -14679,16 +14712,86 @@
   // continua adicionando itens sem perder o lugar onde estava navegando,
   // só acompanhando o resumo do pedido fixo no topo.
   // ============================================================
+  // Fase 155 — pedido do usuário: "mesmo que o saldo for insuficiente,
+  // avisar o vendedor; se ele optar, deixar colocar no pedido". Tenta
+  // adicionar normal; se o backend recusar por saldo insuficiente
+  // (codigo "saldo_insuficiente"), mostra a MESMA mensagem de erro como
+  // uma pergunta de confirmação — se o vendedor topar, reenvia com
+  // `forcar: true` (aí o backend deixa passar, gravado em auditoria). A
+  // trava de estoque que NUNCA pode ser furada continua intacta: é a
+  // alocação FEFO de verdade, na hora de confirmar o pedido — isto aqui é
+  // só a reserva temporária/estimativa do carrinho. Devolve `true` se o
+  // item acabou entrando no rascunho (com ou sem forçar), `false` se o
+  // vendedor desistiu.
+  async function confirmarSaldoInsuficienteVendas(pedidoId, corpoItem) {
+    try {
+      await chamarApi(`/vendas-app/rascunhos/${pedidoId}/itens`, { method: "POST", body: corpoItem });
+      return true;
+    } catch (erro) {
+      if (erro.codigo !== "saldo_insuficiente") throw erro;
+      if (!confirm(`${erro.message}\n\nDeseja colocar no pedido mesmo assim?`)) return false;
+      await chamarApi(`/vendas-app/rascunhos/${pedidoId}/itens`, {
+        method: "POST", body: { ...corpoItem, forcar: true },
+      });
+      return true;
+    }
+  }
+
+  // Fase 155 — depois de enviar o pedido, oferece mandar o resumo (itens,
+  // valores, forma de pagamento) pro WhatsApp do cliente — mesmo mecanismo
+  // (Evolution API) já usado pra mandar link do portal de Terceirização/
+  // Contratos, texto puro, sem PDF (mais rápido de mandar em campo).
+  function modalEnviarEspelhoPedidoWhatsapp(pedidoId) {
+    abrirModal(`
+      <h3>Pedido enviado!</h3>
+      <p class="texto-suave">Quer mandar o resumo deste pedido (itens, valores e forma de pagamento) pro WhatsApp do cliente agora?</p>
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Agora não</button>
+        <button type="button" class="botao" data-acao="enviar-espelho-pedido-whatsapp" data-id="${pedidoId}">Enviar por WhatsApp</button>
+      </div>`);
+  }
+
+  // Fase 155 — tela "Catálogos" do App de Vendas: lista só os catálogos
+  // que ESTE vendedor pode ver (o backend já filtra por visibilidade, ver
+  // GET /vendas-app/catalogos) — clicar num catálogo abre o Portfólio de
+  // sempre, só que filtrado pra mostrar apenas os itens daquele catálogo.
+  async function renderCatalogosVendas() {
+    app.innerHTML = '<div class="carregando">Carregando catálogos…</div>';
+    state.cache.catalogoFiltroPortfolio = null;
+    const catalogos = await chamarApi("/vendas-app/catalogos");
+    const cardsHtml = catalogos.length
+      ? catalogos.map((c) => `
+          <button type="button" class="cartao catalogo-vendas-card" data-acao="abrir-catalogo-vendas" data-id="${c.id}" data-nome="${escapeHtml(c.nome)}">
+            <h3 style="margin:0 0 4px;">${escapeHtml(c.nome)}</h3>
+            ${c.descricao ? `<p class="texto-suave" style="margin:0 0 8px;">${escapeHtml(c.descricao)}</p>` : ""}
+            <span class="texto-suave" style="font-size:12px;">${c.total_itens} ${c.total_itens === 1 ? "item" : "itens"}</span>
+          </button>`).join("")
+      : '<p class="texto-suave">Nenhum catálogo disponível pra você ainda — fale com o administrador.</p>';
+    renderShell(
+      `<h2>Catálogos</h2>
+       <p class="texto-suave">Escolha um catálogo para ver os produtos dele. Quer ver o portfólio inteiro? <a href="#/app-vendas/portfolio">Clique aqui</a>.</p>
+       <div class="catalogo-vendas-grade">${cardsHtml}</div>`,
+      "app-vendas-catalogos"
+    );
+  }
+
   async function renderPortfolioVendas(manterCache) {
     if (!manterCache) app.innerHTML = '<div class="carregando">Carregando portfólio…</div>';
+    // Fase 155 — quando chega aqui a partir da tela "Catálogos"
+    // (state.cache.catalogoFiltroPortfolio setado por "abrir-catalogo-
+    // vendas"), o portfólio mostra só os itens DAQUELE catálogo — a MESMA
+    // tela de sempre, só filtrada, pra não duplicar toda a lógica de
+    // categoria/busca/capa que o portfólio geral já tem.
+    const catalogoAtivo = state.cache.catalogoFiltroPortfolio || null;
     let rascunho, dadosPortfolio;
     if (manterCache && state.cache.portfolioVendas && state.cache.rascunhoAppVendas !== undefined) {
       dadosPortfolio = state.cache.portfolioVendas;
       rascunho = state.cache.rascunhoAppVendas;
     } else {
+      const qs = catalogoAtivo ? `?catalogo_id=${catalogoAtivo.id}` : "";
       const [rascunhoResp, portfolioResp] = await Promise.all([
         chamarApi("/vendas-app/meu-rascunho"),
-        chamarApi("/vendas-app/portfolio"),
+        chamarApi(`/vendas-app/portfolio${qs}`),
       ]);
       rascunho = rascunhoResp.rascunho;
       dadosPortfolio = portfolioResp;
@@ -14758,7 +14861,8 @@
       .join("") || '<p class="texto-suave">Nenhum produto vendável ativo cadastrado ainda.</p>';
 
     renderShell(
-      `<h2>Portfólio</h2>
+      `<h2>${catalogoAtivo ? escapeHtml(catalogoAtivo.nome) : "Portfólio"}</h2>
+       ${catalogoAtivo ? `<a class="link-voltar" href="#/app-vendas/catalogos" data-acao="limpar-catalogo-filtro-portfolio">← Ver todos os catálogos</a>` : ""}
        <div class="cartao portfolio-resumo-pedido">
          <div class="barra-acoes">
            <p style="margin:0;">Rascunho para <strong>${escapeHtml(rascunho.cliente_razao_social)}</strong> —
@@ -18394,6 +18498,26 @@
       case "filtrar-portfolio":
         state.cache.portfolioFiltroCategoria = alvo.dataset.categoria || "";
         return renderPortfolioVendas(true);
+      case "abrir-catalogo-vendas":
+        state.cache.catalogoFiltroPortfolio = { id: Number(alvo.dataset.id), nome: alvo.dataset.nome };
+        state.cache.portfolioVendas = null;
+        state.cache.portfolioFiltroCategoria = "";
+        return navegarPara("#/app-vendas/portfolio");
+      case "limpar-catalogo-filtro-portfolio":
+        state.cache.catalogoFiltroPortfolio = null;
+        state.cache.portfolioVendas = null;
+        return;
+      case "enviar-espelho-pedido-whatsapp": {
+        try {
+          await chamarApi(`/vendas-app/pedidos/${alvo.dataset.id}/enviar-espelho-whatsapp`, { method: "POST" });
+          fecharModais();
+          definirFlash("ok", "Espelho do pedido enviado por WhatsApp.");
+          montarRota();
+        } catch (erro) {
+          alert(erro.message || "Não foi possível enviar o espelho por WhatsApp.");
+        }
+        return;
+      }
       case "selecionar-item-portfolio":
         modalSelecionarItemPortfolio({
           id: alvo.dataset.id, codigo: alvo.dataset.codigo,
@@ -18551,7 +18675,7 @@
         state.usuarioAtual = await chamarApi("/auth/me");
         aplicarLembrarEmail(email, lembrar);
         await ofertarSalvarSenha(email, senha);
-        return navegarPara("#/dashboard");
+        return navegarPara(rotaInicialPosLogin());
       }
       case "login-2fa": {
         const codigo = dados.get("codigo");
@@ -18573,7 +18697,7 @@
         }
         ticket2fa = null;
         credenciaisPendentes2fa = null;
-        return navegarPara("#/dashboard");
+        return navegarPara(rotaInicialPosLogin());
       }
       case "salvar-preferencia-notificacao": {
         const resp = await chamarApi("/notificacoes/minhas-preferencias", {
@@ -20782,25 +20906,21 @@
         return renderAppVendas();
       }
       case "adicionar-item-rascunho-vendas": {
-        await chamarApi(`/vendas-app/rascunhos/${form.dataset.id}/itens`, {
-          method: "POST",
-          body: {
-            item_id: Number(dados.get("item_id")), quantidade: Number(dados.get("quantidade")),
-            unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
-          },
-        });
+        const corpoItemRascunho = {
+          item_id: Number(dados.get("item_id")), quantidade: Number(dados.get("quantidade")),
+          unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
+        };
+        if (!(await confirmarSaldoInsuficienteVendas(form.dataset.id, corpoItemRascunho))) return;
         fecharModais();
         definirFlash("ok", "Item adicionado ao rascunho.");
         return renderAppVendas();
       }
       case "selecionar-item-portfolio": {
-        await chamarApi(`/vendas-app/rascunhos/${state.cache.rascunhoAppVendas.id}/itens`, {
-          method: "POST",
-          body: {
-            item_id: Number(form.dataset.id), quantidade: Number(dados.get("quantidade")),
-            unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
-          },
-        });
+        const corpoItemPortfolio = {
+          item_id: Number(form.dataset.id), quantidade: Number(dados.get("quantidade")),
+          unidade: dados.get("unidade"), preco_unitario: Number(dados.get("preco_unitario")),
+        };
+        if (!(await confirmarSaldoInsuficienteVendas(state.cache.rascunhoAppVendas.id, corpoItemPortfolio))) return;
         fecharModais();
         definirFlash("ok", "Item adicionado ao pedido — continue selecionando no portfólio.");
         // Limpa o cache (saldo disponível e total do pedido mudaram) para a
@@ -20861,7 +20981,13 @@
           } else {
             definirFlash("ok", "Pedido enviado com sucesso.");
           }
-          return renderAppVendas();
+          await renderAppVendas();
+          // Fase 155 — pedido do usuário: depois de fechar o pedido, opção
+          // de mandar o resumo pro WhatsApp do cliente. Modal por cima da
+          // tela já renderizada (não bloqueia o fluxo — "Agora não" só
+          // fecha, o vendedor pode continuar de onde parou).
+          if (resultadoEnvioRascunho.pedido) modalEnviarEspelhoPedidoWhatsapp(resultadoEnvioRascunho.pedido.id);
+          return;
         } catch (erro) {
           if (erro.status === undefined) {
             // Falha de rede (sem internet), não um erro de negócio — o

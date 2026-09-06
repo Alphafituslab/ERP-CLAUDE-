@@ -1357,6 +1357,22 @@ def confirmar_pedido_ou_solicitar_aprovacao(conn, pedido_id, usuario_id):
     # schema_fase102.sql) — só cliente cadastrado a partir de agora nasce
     # 'pendente' de verdade.
     if cliente["aprovacao_financeira_status"] != "aprovado":
+        # Fase 155 — pedido do usuário: avisar automaticamente o Financeiro
+        # quando um vendedor esbarra nesta trava, em vez de depender dele
+        # lembrar de avisar alguém manualmente — vale tanto pro Comercial
+        # desktop quanto pro App de Vendas, já que os dois caem nesta MESMA
+        # função (ver docstring acima). Não bloqueia nem atrasa o erro pro
+        # vendedor por causa disso: a notificação é best-effort, o ApiError
+        # abaixo sempre é levantado do mesmo jeito.
+        notificacoes_service.notificar_usuarios_com_permissao(
+            conn, modulo="comercial", acao="aprovar_pedido_acima_limite_credito",
+            tipo="cliente_pendente_tentou_comprar",
+            mensagem=(
+                f"O cliente {cliente['razao_social']} ainda está com o cadastro financeiro "
+                f"'{cliente['aprovacao_financeira_status']}' e já tentou fazer o pedido {pedido['numero']} "
+                "— avalie e aprove (ou reprove) o cadastro dele."
+            ),
+        )
         raise ApiError(
             f"Este cliente ainda não foi liberado pelo Financeiro para comprar "
             f"(status do cadastro: '{cliente['aprovacao_financeira_status']}'). "

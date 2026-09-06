@@ -717,6 +717,13 @@ tr.linha-alerta td { background: #fdecea; }
 .subcartao { border: 1px solid var(--borda); border-radius: 6px; padding: 14px; margin-top: 12px; }
 
 /* Fase 77 — Portfólio dinâmico do App de Vendas. */
+/* Fase 155 — Catálogos do App de Vendas */
+.catalogo-vendas-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-top: 16px; }
+.catalogo-vendas-card {
+  text-align: left; cursor: pointer; font: inherit; color: inherit;
+  border: 1px solid var(--borda); background: var(--superficie);
+}
+.catalogo-vendas-card:hover { border-color: var(--azul); }
 .portfolio-resumo-pedido { position: sticky; top: 8px; z-index: 5; }
 .portfolio-filtros { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
 .portfolio-titulo-categoria { margin: 20px 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .4px; color: var(--texto-suave); }
