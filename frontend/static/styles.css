@@ -402,6 +402,28 @@ body::before {
    acabamento visual ficam em tema-3d.css, mesmo padrão já usado para
    `.link-nav`/`.barra-lateral-grupo` — a barra continua funcional e
    legível mesmo se tema-3d.css algum dia for removido. */
+/* Fase 159 — botão de backup local fixo no rodapé do menu lateral (pedido
+   do usuário: "não deve ficar ali [numa tela escondida de administração],
+   deve aparecer... na parte de baixo do menu, assim fica fácil
+   identificar"). Mesmo visual translúcido do resto do rodapé do menu. */
+.rodape-lateral-backup {
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 16px 10px;
+}
+.rodape-lateral-backup-botao {
+  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: rgba(255,255,255,0.1); border: none; border-radius: 8px;
+  color: rgba(255,255,255,0.85); cursor: pointer; font-size: 12px; font-weight: 600;
+  padding: 8px 10px; white-space: nowrap;
+}
+.rodape-lateral-backup-botao:hover { background: rgba(255,255,255,0.2); color: #fff; }
+.rodape-lateral-backup-engrenagem {
+  flex-shrink: 0; width: 32px; height: 32px; border-radius: 8px;
+  background: rgba(255,255,255,0.1); border: none; color: rgba(255,255,255,0.75);
+  cursor: pointer; font-size: 13px;
+}
+.rodape-lateral-backup-engrenagem:hover { background: rgba(255,255,255,0.2); color: #fff; }
+
 .rodape-lateral-usuario {
   display: flex;
   align-items: center;

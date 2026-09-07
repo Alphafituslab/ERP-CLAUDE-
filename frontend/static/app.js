@@ -165,6 +165,120 @@
     URL.revokeObjectURL(url);
   }
 
+  // Fase 159 — pedido do usuário: cada Terminal (computador que só acessa
+  // o Servidor, sem banco próprio — ver arquitetura da Fase 111) ter um
+  // backup extra local, "sempre na mesma pasta", mantendo só os 3 mais
+  // recentes. Um Terminal não instala nada além de um atalho — em vez de
+  // criar um agendador/serviço novo em cada máquina, isso usa a File
+  // System Access API do próprio Chrome (o mesmo navegador que já abre o
+  // Terminal): a pasta é escolhida UMA VEZ (o handle fica guardado no
+  // IndexedDB deste navegador, sobrevive a fechar/abrir o app) e todo
+  // clique seguinte em "Salvar backup agora" grava ali direto, sem pedir
+  // a pasta de novo, apagando sozinho o que passar de 3 arquivos. Só
+  // funciona no Chrome/Edge (a API não existe no Firefox/Safari) — a
+  // tela avisa isso quando for o caso, em vez de quebrar silenciosamente.
+  const NOME_BANCO_HANDLES_BACKUP = "alphafitus_handles";
+  const NOME_STORE_HANDLES_BACKUP = "handles";
+  const CHAVE_PASTA_BACKUP_LOCAL = "pasta_backup_local_terminal";
+  const PREFIXO_BACKUP_LOCAL_TERMINAL = "Alphafitus-Backup-Local-";
+  const MAX_BACKUPS_LOCAIS_TERMINAL = 3;
+
+  function abrirBancoHandlesBackup() {
+    return new Promise((resolve, reject) => {
+      const pedido = indexedDB.open(NOME_BANCO_HANDLES_BACKUP, 1);
+      pedido.onupgradeneeded = () => pedido.result.createObjectStore(NOME_STORE_HANDLES_BACKUP);
+      pedido.onsuccess = () => resolve(pedido.result);
+      pedido.onerror = () => reject(pedido.error);
+    });
+  }
+
+  async function salvarHandlePastaBackupLocal(handle) {
+    const banco = await abrirBancoHandlesBackup();
+    return new Promise((resolve, reject) => {
+      const tx = banco.transaction(NOME_STORE_HANDLES_BACKUP, "readwrite");
+      tx.objectStore(NOME_STORE_HANDLES_BACKUP).put(handle, CHAVE_PASTA_BACKUP_LOCAL);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  async function obterHandlePastaBackupLocalSalvo() {
+    const banco = await abrirBancoHandlesBackup();
+    return new Promise((resolve, reject) => {
+      const tx = banco.transaction(NOME_STORE_HANDLES_BACKUP, "readonly");
+      const pedido = tx.objectStore(NOME_STORE_HANDLES_BACKUP).get(CHAVE_PASTA_BACKUP_LOCAL);
+      pedido.onsuccess = () => resolve(pedido.result || null);
+      pedido.onerror = () => reject(pedido.error);
+    });
+  }
+
+  async function garantirPastaBackupLocalTerminal(forcarEscolhaNova) {
+    if (!window.showDirectoryPicker) {
+      throw new Error("Este navegador não suporta salvar backup direto numa pasta — funciona no Chrome ou Edge.");
+    }
+    let handle = forcarEscolhaNova ? null : await obterHandlePastaBackupLocalSalvo();
+    if (handle) {
+      const permissaoAtual = await handle.queryPermission({ mode: "readwrite" });
+      if (permissaoAtual !== "granted") {
+        const permissaoPedida = await handle.requestPermission({ mode: "readwrite" });
+        if (permissaoPedida !== "granted") handle = null;
+      }
+    }
+    if (!handle) {
+      handle = await window.showDirectoryPicker({ mode: "readwrite" });
+      await salvarHandlePastaBackupLocal(handle);
+    }
+    return handle;
+  }
+
+  async function salvarBackupLocalNesteTerminal(forcarEscolhaNova) {
+    const handle = await garantirPastaBackupLocalTerminal(forcarEscolhaNova);
+
+    const headers = {};
+    if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
+    const resp = await fetch(API + "/sistema/backup", { headers });
+    if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o backup.`);
+    const blob = await resp.blob();
+
+    const nomeArquivo = `${PREFIXO_BACKUP_LOCAL_TERMINAL}${new Date().toISOString().replace(/[:.]/g, "-")}.db`;
+    const arquivoHandle = await handle.getFileHandle(nomeArquivo, { create: true });
+    const writable = await arquivoHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+
+    // Nomes são timestamps ISO — ordenar o texto já ordena por data.
+    // Mantém só os MAX_BACKUPS_LOCAIS_TERMINAL mais recentes, apaga o resto.
+    const nomesExistentes = [];
+    for await (const nome of handle.keys()) {
+      if (nome.startsWith(PREFIXO_BACKUP_LOCAL_TERMINAL) && nome.endsWith(".db")) nomesExistentes.push(nome);
+    }
+    nomesExistentes.sort();
+    const excedentes = nomesExistentes.slice(0, Math.max(0, nomesExistentes.length - MAX_BACKUPS_LOCAIS_TERMINAL));
+    for (const nome of excedentes) {
+      try { await handle.removeEntry(nome); } catch (erro) { /* não crítico — próxima rodada tenta de novo */ }
+    }
+
+    return { pasta: handle.name, totalMantido: Math.min(nomesExistentes.length, MAX_BACKUPS_LOCAIS_TERMINAL) };
+  }
+
+  // Fase 159 — pedido do usuário: não escondido dentro de uma tela de
+  // administração — fica FIXO no rodapé do menu lateral, visível em
+  // qualquer tela do sistema, pra ser fácil de achar (mesmo lugar da foto/
+  // nome do usuário e do número da versão). Só aparece pra quem tem
+  // permissão de backup (mesma exigida pelo resto da tela de Backups) e
+  // só no Chrome/Edge (a API não existe no Firefox/Safari).
+  function htmlBotaoBackupLocalRodape() {
+    if (!window.showDirectoryPicker || !temPermissao("sistema", "backup_completo")) return "";
+    return `<div class="rodape-lateral-backup">
+      <button class="rodape-lateral-backup-botao" data-acao="salvar-backup-local-terminal"
+              title="Salva uma cópia do backup numa pasta deste computador (mantém sempre os 3 mais recentes)">
+        💾 Salvar backup
+      </button>
+      <button class="rodape-lateral-backup-engrenagem" data-acao="trocar-pasta-backup-local-terminal"
+              title="Escolher outra pasta pra salvar o backup deste computador" aria-label="Escolher outra pasta">⚙️</button>
+    </div>`;
+  }
+
   async function abrirBinarioEmNovaAba(caminho) {
     // Mesmo raciocínio de `baixarArquivo` (a rota exige Authorization, um
     // <a href> puro não carrega o header) — só que aqui abre pra
@@ -929,6 +1043,7 @@
             <span>ALPHAFITUS<small>Sistema Integrado de Gestão</small></span>
           </div>
           <nav>${linksHtml}</nav>
+          ${htmlBotaoBackupLocalRodape()}
           <div class="rodape-lateral-usuario">
             ${avatarUsuarioHtml(state.usuarioAtual)}
             <span class="rodape-lateral-texto">
@@ -17131,6 +17246,17 @@
         const nomeArquivo = `Alphafitus-Backup-Completo-${agora.getFullYear()}-${dois(agora.getMonth() + 1)}-${dois(agora.getDate())}_${dois(agora.getHours())}h${dois(agora.getMinutes())}min.db`;
         await baixarArquivo("/sistema/backup", nomeArquivo);
         return;
+      }
+      // Fase 159 — backup local por Terminal (pasta fixa, mantém só os 3 mais recentes).
+      case "salvar-backup-local-terminal": {
+        const resultado = await salvarBackupLocalNesteTerminal(false);
+        definirFlash("ok", `Backup salvo em "${resultado.pasta}" — mantendo os ${resultado.totalMantido} mais recentes.`);
+        return montarRota();
+      }
+      case "trocar-pasta-backup-local-terminal": {
+        const resultado = await salvarBackupLocalNesteTerminal(true);
+        definirFlash("ok", `Pasta alterada para "${resultado.pasta}" — backup salvo lá agora, mantendo os ${resultado.totalMantido} mais recentes.`);
+        return montarRota();
       }
       // ---- Fase 67: Backup Automático Agendado, Nuvem/E-mail, Restauração ----
       case "executar-backup-agora": {
