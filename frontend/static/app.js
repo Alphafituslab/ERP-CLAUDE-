@@ -383,6 +383,15 @@
     // montarRota roda de novo antes da mensagem ter sido renderizada uma
     // única vez, e um reset prematuro aqui a descartava silenciosamente.
     const rota = location.hash || "#/login";
+
+    // Fase 158 — link de recuperação de senha: funciona SEMPRE, logado ou
+    // não (a pessoa normalmente está aqui exatamente porque não consegue
+    // entrar) — nunca pode cair na tela de login por engano antes de
+    // conseguir usar o link que recebeu.
+    if (rota.startsWith("#/redefinir-senha/")) {
+      return renderRedefinirSenha(decodeURIComponent(rota.split("/")[2] || ""));
+    }
+
     // Fase 36 — a sincronização automática do App de Vendas só faz sentido
     // enquanto a tela dele estiver aberta; qualquer navegação (inclusive
     // para a própria tela de novo) para o timer anterior antes de decidir
@@ -1312,7 +1321,7 @@
           <img class="logo-marca" src="/static/img/logo_alphafitus.png" alt="Alphafitus">
           ${tituloHtml}
           <p class="subtitulo">Sistema Integrado de Gestão</p>
-          ${state.flash ? `<p class="mensagem-erro">${escapeHtml(state.flash.texto)}</p>` : ""}
+          ${state.flash ? `<p class="${state.flash.tipo === "erro" ? "mensagem-erro" : "mensagem-ok"}">${escapeHtml(state.flash.texto)}</p>` : ""}
           <form data-form="login">
             <div class="campo">
               <label for="login-email">Email</label>
@@ -1334,6 +1343,58 @@
             </label>
             <button class="botao largura-total" type="submit">Entrar</button>
           </form>
+          <p class="link-esqueci-senha">
+            <button type="button" class="botao-link" data-acao="abrir-esqueci-senha">Esqueci minha senha</button>
+          </p>
+        </div>
+      </div>`;
+    state.flash = null;
+  }
+
+  // Fase 158 — pedido do usuário: "caso não lembrar da senha colocar um
+  // recuperar senha enviado ao email... digita o email correto e vai um
+  // link para troca de senha" (depois estendido para também mandar por
+  // WhatsApp quando o usuário tiver celular cadastrado — o backend decide
+  // sozinho por qual(is) canal(is) já está configurado a enviar).
+  function modalEsqueciSenha() {
+    abrirModal(`
+      <h3>Esqueci minha senha</h3>
+      <p class="texto-suave">Digite o e-mail da sua conta — se ele existir no sistema, você recebe um
+      link para escolher uma nova senha (por WhatsApp e/ou e-mail, o que estiver disponível pra você).</p>
+      <form data-form="recuperar-senha">
+        <div class="campo"><label>Email</label><input name="email" type="email" required autofocus></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Enviar link</button>
+        </div>
+      </form>`);
+  }
+
+  // Tela pública (funciona sem estar logado — é justamente pra quem não
+  // consegue entrar) que a pessoa abre a partir do link recebido por
+  // WhatsApp/e-mail. Mesmo visual da tela de login, só que pede a nova
+  // senha em vez de credenciais.
+  function renderRedefinirSenha(token) {
+    app.innerHTML = `
+      <div class="tela-login">
+        <div class="cartao-login">
+          <img class="logo-marca" src="/static/img/logo_alphafitus.png" alt="Alphafitus">
+          <h1>Redefinir senha</h1>
+          <p class="subtitulo">Escolha uma nova senha para a sua conta.</p>
+          ${state.flash ? `<p class="${state.flash.tipo === "erro" ? "mensagem-erro" : "mensagem-ok"}">${escapeHtml(state.flash.texto)}</p>` : ""}
+          <form data-form="redefinir-senha" data-token="${escapeHtml(token)}">
+            <div class="campo">
+              <label for="redefinir-senha-nova">Nova senha</label>
+              <input id="redefinir-senha-nova" name="senha_nova" type="password" autocomplete="new-password" required autofocus>
+            </div>
+            <div class="campo">
+              <label for="redefinir-senha-confirmar">Confirmar nova senha</label>
+              <input id="redefinir-senha-confirmar" name="senha_confirmar" type="password" autocomplete="new-password" required>
+            </div>
+            <div class="dica">Mínimo 12 caracteres, com maiúscula, minúscula, número e caractere especial.</div>
+            <button class="botao largura-total" type="submit">Redefinir senha</button>
+          </form>
+          <p class="link-esqueci-senha"><a href="#/login">Voltar para o login</a></p>
         </div>
       </div>`;
     state.flash = null;
@@ -2034,6 +2095,18 @@
              </div>
            </div>
            <button class="botao" type="submit">Trocar e-mail</button>
+         </form>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Meu celular (WhatsApp)</h3>
+         <p class="texto-suave">Usado só para receber o link de "Esqueci minha senha" por WhatsApp, caso um
+         dia você precise — não é usado pra entrar no sistema.</p>
+         <form data-form="salvar-celular">
+           <div class="campo"><label>Celular (com DDD)</label>
+             <input name="celular" value="${escapeHtml(me.celular || "")}" placeholder="48999998888">
+           </div>
+           <button class="botao secundario" type="submit">Salvar</button>
          </form>
        </div>
 
@@ -17213,6 +17286,9 @@
       case "fechar-modal":
         fecharModais();
         return;
+      case "abrir-esqueci-senha":
+        modalEsqueciSenha();
+        return;
       case "novo-usuario":
         modalNovoUsuario();
         return;
@@ -18742,6 +18818,29 @@
     const dados = new FormData(form);
 
     switch (nomeForm) {
+      case "recuperar-senha": {
+        const email = dados.get("email");
+        const resp = await chamarApi("/auth/recuperar-senha", {
+          method: "POST", semAuth: true, body: { email },
+        });
+        fecharModais();
+        definirFlash("ok", resp.mensagem);
+        return montarRota();
+      }
+      case "redefinir-senha": {
+        const senhaNova = dados.get("senha_nova");
+        const senhaConfirmar = dados.get("senha_confirmar");
+        const token = form.dataset.token;
+        if (senhaNova !== senhaConfirmar) {
+          definirFlash("erro", "As senhas informadas não são iguais.");
+          return renderRedefinirSenha(token);
+        }
+        await chamarApi("/auth/redefinir-senha", {
+          method: "POST", semAuth: true, body: { token, senha_nova: senhaNova },
+        });
+        definirFlash("ok", "Senha redefinida com sucesso! Faça login com a nova senha.");
+        return navegarPara("#/login");
+      }
       case "login": {
         const email = dados.get("email");
         const senha = dados.get("senha");
@@ -19111,6 +19210,11 @@
         } else {
           definirFlash("ok", `E-mail alterado para ${resp.email} — use esse endereço no próximo login.`);
         }
+        return renderMinhaConta();
+      }
+      case "salvar-celular": {
+        await chamarApi("/auth/celular", { method: "POST", body: { celular: dados.get("celular") } });
+        definirFlash("ok", "Celular salvo.");
         return renderMinhaConta();
       }
       case "trocar-senha": {

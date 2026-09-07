@@ -3,7 +3,7 @@ import secrets
 
 from flask import Blueprint, g, jsonify, request
 
-from .. import audit, security, senha_sync_service
+from .. import audit, backup_service, notificacoes_service, security, senha_sync_service
 from ..context import ApiError, AuthError, client_device, client_ip, get_current_user, get_db
 from ..imagens import validar_imagem_base64
 from ..permissions import requires_auth
@@ -13,6 +13,8 @@ bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 MAX_TENTATIVAS_LOGIN = 10
 BLOQUEIO_MINUTOS = 3
 REFRESH_TOKEN_TTL_DIAS = 7
+RECUPERACAO_SENHA_TTL_MINUTOS = 30
+RECUPERACAO_SENHA_INTERVALO_MINIMO_MINUTOS = 2
 
 
 def _now():
@@ -365,6 +367,145 @@ def logout():
     return jsonify({"ok": True})
 
 
+# Fase 158 — pedido do usuário: "caso não lembrar da senha colocar um
+# recuperar senha... digita o email correto e vai um link para troca de
+# senha" + "pode ser no whatts, e em email também, ter as duas
+# possibilidades, podendo ser configurado depois". Manda o link por
+# QUALQUER canal já disponível pro usuário (celular cadastrado + Evolution
+# API configurada, e/ou SMTP configurado) — sem exigir escolher um só.
+@bp.post("/recuperar-senha")
+def solicitar_recuperacao_senha():
+    dados = request.get_json(silent=True) or {}
+    email = (dados.get("email") or "").strip().lower()
+    ip = client_ip()
+    dispositivo = client_device()
+    conn = get_db()
+    resposta_publica = jsonify({
+        "mensagem": "Se esse e-mail existir no sistema, você vai receber um link para redefinir a senha."
+    })
+
+    if not email:
+        raise ApiError("Informe o e-mail.", status=400)
+
+    usuario = conn.execute("SELECT * FROM usuarios WHERE email = ?", (email,)).fetchone()
+    # Mesmo padrão do /login: nunca revela se o e-mail existe ou não, nem
+    # se o usuário está inativo/bloqueado — a resposta é sempre a mesma.
+    if usuario is None or usuario["status"] != "ativo":
+        return resposta_publica
+    usuario = dict(usuario)
+
+    # Não gera um link novo a cada clique repetido dentro da mesma janela
+    # — evita que alguém spamme o WhatsApp/e-mail da própria pessoa (ou de
+    # terceiros, digitando o e-mail deles) só apertando "enviar" várias vezes.
+    agora = _now()
+    ja_tem_pendente = conn.execute(
+        """
+        SELECT 1 FROM usuarios_recuperacao_senha
+        WHERE usuario_id = ? AND usado_em IS NULL AND expira_em > ? AND criado_em > ?
+        """,
+        (usuario["id"], _iso(agora), _iso(agora - datetime.timedelta(minutes=RECUPERACAO_SENHA_INTERVALO_MINIMO_MINUTOS))),
+    ).fetchone()
+    if ja_tem_pendente:
+        return resposta_publica
+
+    token = secrets.token_urlsafe(32)
+    conn.execute(
+        "INSERT INTO usuarios_recuperacao_senha (usuario_id, token, criado_em, expira_em) VALUES (?, ?, ?, ?)",
+        (usuario["id"], token, _iso(agora), _iso(agora + datetime.timedelta(minutes=RECUPERACAO_SENHA_TTL_MINUTOS))),
+    )
+
+    link = f"{request.host_url.rstrip('/')}/#/redefinir-senha/{token}"
+    texto = (
+        "Alphafitus OS — recuperação de senha\n\n"
+        f"Foi solicitada a redefinição da senha da conta {usuario['email']}.\n"
+        f"Clique no link abaixo para escolher uma nova senha (válido por "
+        f"{RECUPERACAO_SENHA_TTL_MINUTOS} minutos):\n{link}\n\n"
+        "Se você não pediu isso, pode ignorar esta mensagem — sua senha atual continua a mesma."
+    )
+
+    canais_ok = []
+    if usuario.get("celular"):
+        try:
+            config_whats = backup_service.obter_configuracao(conn)
+            backup_service.enviar_texto_whatsapp(config_whats, usuario["celular"], texto)
+            canais_ok.append("whatsapp")
+        except Exception as erro:
+            audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=None,
+                             acao="recuperacao_senha_whatsapp_falhou", motivo=str(erro)[:300],
+                             ip=ip, dispositivo=dispositivo)
+
+    try:
+        config_email = notificacoes_service.obter_configuracao_email(conn)
+        if config_email.get("smtp_host"):
+            notificacoes_service._enviar_email_smtp(
+                config_email, usuario["email"], "Redefinir senha — Alphafitus OS", texto,
+            )
+            canais_ok.append("email")
+    except Exception as erro:
+        audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=None,
+                         acao="recuperacao_senha_email_falhou", motivo=str(erro)[:300],
+                         ip=ip, dispositivo=dispositivo)
+
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=None,
+                     acao="recuperacao_senha_solicitada", motivo=f"canais enviados: {canais_ok or 'nenhum'}",
+                     ip=ip, dispositivo=dispositivo)
+    return resposta_publica
+
+
+@bp.post("/redefinir-senha")
+def redefinir_senha():
+    dados = request.get_json(silent=True) or {}
+    token = (dados.get("token") or "").strip()
+    senha_nova = dados.get("senha_nova") or ""
+    ip = client_ip()
+    dispositivo = client_device()
+    conn = get_db()
+
+    if not token:
+        raise ApiError("Link inválido ou expirado. Solicite um novo.", status=400, codigo="token_invalido")
+
+    linha = conn.execute(
+        "SELECT * FROM usuarios_recuperacao_senha WHERE token = ? AND usado_em IS NULL AND expira_em > ?",
+        (token, _iso(_now())),
+    ).fetchone()
+    if linha is None:
+        raise ApiError("Link inválido ou expirado. Solicite um novo.", status=400, codigo="token_invalido")
+    linha = dict(linha)
+
+    problemas = security.validar_politica_senha(senha_nova)
+    if problemas:
+        raise ApiError("Senha não atende à política de segurança: " + " ".join(problemas), status=400)
+
+    usuario_id = linha["usuario_id"]
+    agora_iso = _iso(_now())
+    novo_hash = security.hash_password(senha_nova)
+    conn.execute(
+        """
+        UPDATE usuarios SET senha_hash = ?, senha_deve_trocar = 0, senha_trocada_em = ?,
+               tentativas_login_falhas = 0, bloqueado_ate = NULL
+        WHERE id = ?
+        """,
+        (novo_hash, agora_iso, usuario_id),
+    )
+    # Marca este link como usado e invalida qualquer outro link de
+    # recuperação ainda pendente para a mesma conta — só o que acabou de
+    # funcionar deveria ter servido.
+    conn.execute(
+        "UPDATE usuarios_recuperacao_senha SET usado_em = ? WHERE usuario_id = ? AND usado_em IS NULL",
+        (agora_iso, usuario_id),
+    )
+    # Se a senha vazou, redefini-la também precisa derrubar quem quer que
+    # esteja usando a sessão agora — não só trocar a chave da frente.
+    conn.execute(
+        "UPDATE sessoes SET revogado = 1, revogado_em = ? WHERE usuario_id = ? AND revogado = 0",
+        (agora_iso, usuario_id),
+    )
+
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
+                     acao="senha_redefinida_via_recuperacao", ip=ip, dispositivo=dispositivo)
+    return jsonify({"ok": True})
+
+
 @bp.get("/sessoes")
 @requires_auth
 def minhas_sessoes():
@@ -508,6 +649,24 @@ def trocar_email():
     return jsonify({"ok": True, "email": email_novo, "sincronizacao": _sincronizacao_publica(resultado_sincronizacao)})
 
 
+# Fase 158 — celular do próprio usuário (autosserviço, sem exigir senha
+# atual: diferente de e-mail/senha, o celular não é usado pra entrar no
+# sistema, só serve de canal de recuperação de senha por WhatsApp — o
+# mesmo padrão de baixa fricção já usado em "Foto de perfil"/preferência
+# de notificação acima).
+@bp.post("/celular")
+@requires_auth
+def trocar_celular():
+    usuario = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    celular = (dados.get("celular") or "").strip() or None
+    conn = get_db()
+    conn.execute("UPDATE usuarios SET celular = ? WHERE id = ?", (celular, usuario["id"]))
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
+                     acao="celular_alterado", ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True, "celular": celular})
+
+
 @bp.put("/minha-foto")
 @requires_auth
 def minha_foto():
@@ -547,6 +706,7 @@ def me():
         "dois_fatores_ativo": bool(usuario["dois_fatores_ativo"]),
         "notificar_por_email": bool(usuario["notificar_por_email"]),
         "foto_perfil": usuario["foto_perfil"],
+        "celular": usuario["celular"],
         # Fase 94 — "exige_2fa" no perfil virou só uma RECOMENDAÇÃO exibida
         # em Minha Conta (a Fase 92 bloqueava a API inteira até configurar;
         # o usuário pediu para escolher quando e poder desativar depois):
