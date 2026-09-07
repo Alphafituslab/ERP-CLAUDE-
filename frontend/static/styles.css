@@ -728,6 +728,14 @@ tr.linha-alerta td { background: #fdecea; }
 .portfolio-filtros { display: flex; gap: 8px; flex-wrap: wrap; margin: 16px 0; }
 .portfolio-titulo-categoria { margin: 20px 0 10px; font-size: 14px; text-transform: uppercase; letter-spacing: .4px; color: var(--texto-suave); }
 .portfolio-grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px; margin-bottom: 8px; }
+@media (max-width: 640px) {
+  /* Fase 156 — pedido do usuário: grade de 2 colunas no celular (referência:
+     app de força de vendas que ele já usa), em vez de 1 card por linha. */
+  .portfolio-grade { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .portfolio-card-corpo { padding: 10px; }
+  .portfolio-card h4 { font-size: 12.5px; margin: 4px 0 8px; }
+  .portfolio-card .botao.pequeno { font-size: 12px; padding: 8px 6px; }
+}
 .portfolio-card {
   background: var(--superficie); border: 1px solid var(--borda); border-radius: var(--raio);
   box-shadow: var(--sombra); display: flex; flex-direction: column; overflow: hidden; position: relative;
@@ -757,6 +765,21 @@ tr.linha-alerta td { background: #fdecea; }
 .portfolio-card h4 { flex: 1; font-size: 14px; line-height: 1.3; }
 .link-voltar { color: var(--azul); text-decoration: none; font-size: 13px; display: inline-block; margin-bottom: 12px; cursor: pointer; }
 [data-tema="escuro"] .link-voltar { color: var(--azul-claro); }
+
+/* Fase 156 — tela "Sincronizando agora" ao abrir o App de Vendas (ver
+   renderSplashSincronizacaoVendas em app.js). */
+.splash-sincronizacao-vendas { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 60px 20px; gap: 6px; }
+.splash-sincronizacao-logo { width: 96px; height: auto; margin-bottom: 12px; }
+.splash-sincronizacao-vendas h2 { margin: 0 0 20px; }
+.splash-sincronizacao-barra { width: 100%; max-width: 280px; height: 8px; border-radius: 999px; background: var(--borda); overflow: hidden; }
+.splash-sincronizacao-barra-preenchimento { height: 100%; width: 0; background: linear-gradient(90deg, #00A886, #00785F); border-radius: 999px; transition: width .3s ease; }
+
+/* Fase 156 — stepper -/+ de quantidade nos modais de adicionar item do App
+   de Vendas (ver htmlStepperQuantidade/ativarStepperQuantidade em app.js). */
+.stepper-quantidade { display: flex; align-items: stretch; gap: 8px; }
+.stepper-quantidade-botao { flex-shrink: 0; width: 44px; font-size: 20px; font-weight: 700; line-height: 1; padding: 0; }
+.stepper-quantidade-input { flex: 1; text-align: center; font-size: 16px; font-weight: 600; }
+.stepper-valor-total { font-size: 15px; margin: 4px 0 12px; }
 
 .barra-acoes { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; flex-wrap: wrap; }
 

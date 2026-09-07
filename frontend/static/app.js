@@ -363,7 +363,11 @@
   // veio vazio (sem isso, caía direto no Painel do ERP, sem nunca passar
   // pela tela do vendedor).
   function rotaInicialPosLogin() {
-    return window.__ORIGEM_APP__ === "vendas" ? "#/app-vendas" : "#/dashboard";
+    // Fase 156 — pedido do usuário: "tela de início com a logo da Alpha e
+    // escrito sincroniza agora... após ter a opção de todos os catálogos".
+    // A tela de splash (ver renderSplashSincronizacaoVendas) mostra essa
+    // etapa e, ao terminar, navega sozinha pra "#/app-vendas/catalogos".
+    return window.__ORIGEM_APP__ === "vendas" ? "#/app-vendas/splash" : "#/dashboard";
   }
 
   window.addEventListener("hashchange", montarRota);
@@ -465,6 +469,7 @@
           case "tabelas-preco": return param ? renderTabelaPrecoDetalhe(Number(param)) : renderTabelasPreco();
           case "pedido": return param ? renderPedidoDetalhe(Number(param)) : renderComercial();
           case "app-vendas":
+            if (param === "splash") return renderSplashSincronizacaoVendas();
             if (param === "portfolio") return renderPortfolioVendas();
             if (param === "catalogos") return renderCatalogosVendas();
             return renderAppVendas();
@@ -14751,6 +14756,46 @@
       </div>`);
   }
 
+  // Fase 156 — pedido do usuário: "tela de início com a logo da Alpha e
+  // escrito sincroniza agora... após ter a opção de todos os catálogos".
+  // Só aparece uma vez por sessão do app (logo depois do login, ver
+  // rotaInicialPosLogin) — a barra reflete sincronização REAL (as mesmas
+  // chamadas que a tela de Catálogos e o carrinho vão precisar em seguida),
+  // não é uma animação decorativa com número inventado.
+  async function renderSplashSincronizacaoVendas() {
+    renderShell(
+      `<div class="splash-sincronizacao-vendas">
+         <img class="splash-sincronizacao-logo" src="/static/img/logo_alphafitus.png" alt="Alphafitus">
+         <h2>Sincronizando agora…</h2>
+         <div class="splash-sincronizacao-barra">
+           <div class="splash-sincronizacao-barra-preenchimento" id="barra-splash-sincronizacao-vendas" style="width:0%"></div>
+         </div>
+         <p class="texto-suave" id="texto-splash-sincronizacao-vendas">Preparando o app…</p>
+       </div>`,
+      "app-vendas"
+    );
+    const barra = document.getElementById("barra-splash-sincronizacao-vendas");
+    const texto = document.getElementById("texto-splash-sincronizacao-vendas");
+    const etapas = [
+      { rotulo: "Catálogos", chamada: () => chamarApi("/vendas-app/catalogos").then((r) => { state.cache.catalogosVendasPreCarregados = r; }) },
+      { rotulo: "Seu rascunho", chamada: () => chamarApi("/vendas-app/meu-rascunho") },
+      { rotulo: "Clientes", chamada: () => chamarApi("/comercial/clientes").then((r) => { state.cache.clientesAtivosAppVendas = r.filter((c) => c.status === "ativo"); }) },
+      { rotulo: "Visita em aberto", chamada: () => chamarApi("/vendas-app/minha-visita-aberta") },
+    ];
+    for (let i = 0; i < etapas.length; i++) {
+      if (texto) texto.textContent = `Sincronizando: ${etapas[i].rotulo}…`;
+      try {
+        await etapas[i].chamada();
+      } catch (erro) {
+        // Uma etapa de pré-carregamento falhando (rede instável) não pode
+        // travar o vendedor na tela de splash — a tela de destino refaz a
+        // própria chamada que precisar e mostra o erro normalmente lá.
+      }
+      if (barra) barra.style.width = `${Math.round(((i + 1) / etapas.length) * 100)}%`;
+    }
+    navegarPara("#/app-vendas/catalogos");
+  }
+
   // Fase 155 — tela "Catálogos" do App de Vendas: lista só os catálogos
   // que ESTE vendedor pode ver (o backend já filtra por visibilidade, ver
   // GET /vendas-app/catalogos) — clicar num catálogo abre o Portfólio de
@@ -14758,7 +14803,13 @@
   async function renderCatalogosVendas() {
     app.innerHTML = '<div class="carregando">Carregando catálogos…</div>';
     state.cache.catalogoFiltroPortfolio = null;
-    const catalogos = await chamarApi("/vendas-app/catalogos");
+    let catalogos;
+    if (state.cache.catalogosVendasPreCarregados) {
+      catalogos = state.cache.catalogosVendasPreCarregados;
+      state.cache.catalogosVendasPreCarregados = null;
+    } else {
+      catalogos = await chamarApi("/vendas-app/catalogos");
+    }
     const cardsHtml = catalogos.length
       ? catalogos.map((c) => `
           <button type="button" class="cartao catalogo-vendas-card" data-acao="abrir-catalogo-vendas" data-id="${c.id}" data-nome="${escapeHtml(c.nome)}">
@@ -14877,6 +14928,41 @@
     );
   }
 
+  // Fase 156 — stepper -/+ de quantidade nos modais de adicionar item do
+  // App de Vendas (pedido do usuário, inspirado no app de força de vendas
+  // que ele já usa hoje) + "Valor total" calculado ao vivo (quantidade ×
+  // preço já digitados pelo próprio vendedor — não inventa nenhum dado,
+  // só multiplica na hora em vez de só na resposta do servidor).
+  function htmlStepperQuantidade(valorInicial) {
+    return `<div class="stepper-quantidade">
+      <button type="button" class="botao secundario stepper-quantidade-botao" data-passo="-1">−</button>
+      <input name="quantidade" type="number" step="any" min="0" required class="stepper-quantidade-input" value="${valorInicial}">
+      <button type="button" class="botao secundario stepper-quantidade-botao" data-passo="1">+</button>
+    </div>`;
+  }
+
+  function ativarStepperQuantidade(wrap, seletorTotal) {
+    const campoQtd = wrap.querySelector('input[name="quantidade"]');
+    const campoPreco = wrap.querySelector('input[name="preco_unitario"]');
+    const elTotal = seletorTotal ? wrap.querySelector(seletorTotal) : null;
+    const atualizarTotal = () => {
+      if (!elTotal) return;
+      const qtd = Number(campoQtd.value) || 0;
+      const preco = Number(campoPreco ? campoPreco.value : 0) || 0;
+      elTotal.textContent = fmtMoeda(qtd * preco);
+    };
+    wrap.querySelectorAll(".stepper-quantidade-botao").forEach((botao) => {
+      botao.addEventListener("click", () => {
+        const novo = Math.max(0, (Number(campoQtd.value) || 0) + Number(botao.dataset.passo));
+        campoQtd.value = novo;
+        atualizarTotal();
+      });
+    });
+    campoQtd.addEventListener("input", atualizarTotal);
+    if (campoPreco) campoPreco.addEventListener("input", atualizarTotal);
+    atualizarTotal();
+  }
+
   function modalSelecionarItemPortfolio(item) {
     // Fase 149 — pedido do usuário: "já puxar o preço cadastrado no ERP"
     // em vez do vendedor digitar de cabeça — mesma tabela de preço do
@@ -14885,11 +14971,11 @@
     // editável normalmente, nunca trava o vendedor.
     const tabelaPreco = state.cache.tabelaPrecoParaPortfolio;
     const precoSugerido = tabelaPreco && tabelaPreco.itens.find((i) => i.item_id === Number(item.id));
-    abrirModal(`
+    const wrap = abrirModal(`
       <h3>Adicionar ao pedido</h3>
       <p class="texto-suave">${escapeHtml(item.codigo)} — ${escapeHtml(item.descricao)} (disponível: ${item.disponivel})</p>
       <form data-form="selecionar-item-portfolio" data-id="${item.id}">
-        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required autofocus></div>
+        <div class="campo"><label>Quantidade</label>${htmlStepperQuantidade(1)}</div>
         <div class="campo"><label>Unidade</label><input name="unidade" value="un" required></div>
         <div class="campo"><label>Preço unitário (R$)</label>
           <input name="preco_unitario" type="number" step="0.01" min="0.01" required value="${precoSugerido ? precoSugerido.preco : ""}">
@@ -14897,11 +14983,13 @@
             ? `<div class="dica">Preço da tabela "${escapeHtml(tabelaPreco.tabela_preco_nome)}" deste cliente — pode ajustar se precisar.</div>`
             : '<div class="dica">Sem preço cadastrado na tabela deste cliente — informe manualmente.</div>'}
         </div>
+        <p class="stepper-valor-total">Valor total: <strong id="valor-total-selecionar-item-portfolio">R$ 0,00</strong></p>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Adicionar e continuar no portfólio</button>
         </div>
       </form>`);
+    ativarStepperQuantidade(wrap, "#valor-total-selecionar-item-portfolio");
   }
 
   function modalNovoRascunhoVendas() {
@@ -15040,16 +15128,18 @@
       ${catalogo.length === 0 ? '<p class="mensagem-erro">Nenhum produto vendável ativo cadastrado ainda.</p>' : ""}
       <form data-form="adicionar-item-rascunho-vendas" data-id="${rascunhoId}">
         <div class="campo"><label>Item</label><select name="item_id" required>${opcoesItem}</select></div>
-        <div class="campo"><label>Quantidade</label><input name="quantidade" type="number" step="any" required></div>
+        <div class="campo"><label>Quantidade</label>${htmlStepperQuantidade(1)}</div>
         <div class="campo"><label>Unidade</label><input name="unidade" value="un" required></div>
         <div class="campo"><label>Preço unitário (R$)</label><input name="preco_unitario" type="number" step="0.01" min="0.01" required></div>
         <div id="dica-preco-item-rascunho"></div>
+        <p class="stepper-valor-total">Valor total: <strong id="valor-total-adicionar-item-rascunho">R$ 0,00</strong></p>
         <div class="dica">O "disponível" já desconta o que outros vendedores têm reservado em rascunhos abertos agora — sincronize antes de confiar num número que já faz um tempo que você olhou.</div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Adicionar</button>
         </div>
       </form>`);
+    ativarStepperQuantidade(wrap, "#valor-total-adicionar-item-rascunho");
     // Fase 149 — mesmo preço puxado da tabela do cliente que o Portfólio já
     // usa (ver `garantirDadosClienteAppVendas`), agora reagindo à troca do
     // <select> (aqui o item só é escolhido depois do modal já aberto).
@@ -15065,6 +15155,7 @@
       } else {
         dicaPreco.innerHTML = '<div class="dica">Sem preço cadastrado na tabela deste cliente — informe manualmente.</div>';
       }
+      campoPreco.dispatchEvent(new Event("input"));
     };
     if (selectItem) {
       selectItem.addEventListener("change", atualizarPrecoSugerido);
