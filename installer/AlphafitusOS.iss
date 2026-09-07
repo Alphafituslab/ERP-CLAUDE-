@@ -11,7 +11,7 @@
 ; diferenca entre instalacao "de verdade" (Arquivos de Programas, pode
 ; virar Servico do Windows) e a instalacao simples.
 #define MyAppName "Alphafitus OS"
-#define MyAppVersion "156.0"
+#define MyAppVersion "157.0"
 #define MyAppPublisher "Alphafitus"
 #define MyAppExeName "AlphafitusOS.exe"
 
@@ -32,15 +32,20 @@ AppPublisher={#MyAppPublisher}
 ; fechado (AlphafitusOS.exe/_Servico.exe) continua sendo tratado à parte
 ; pelo próprio fluxo de deploy (kill explícito antes de instalar).
 CloseApplications=no
-; Fase 123 — pedido do usuário: pasta padrão sugerida agora é o Desktop
-; (mais fácil de achar do que a pasta escondida de Programas), e a
-; página de "Selecionar Local de Destino" do próprio Inno Setup (que já
-; vem habilitada por padrão — DisableDirPage nunca foi ligado aqui)
-; deixa escolher outro lugar na hora de instalar, sem precisar editar
-; nada. Numa ATUALIZAÇÃO (mesmo AppId já instalado antes), o Inno Setup
-; usa sozinho o caminho já escolhido da vez anterior — mudar o padrão
-; aqui só afeta instalações NOVAS, nunca move uma instalação existente.
-DefaultDirName={userdesktop}\AlphafitusOS
+; Fase 157 — pedido do usuário: o caminho de instalação NUNCA deve mudar
+; sozinho, nem por escolha na hora de instalar — só desinstalando é que
+; se sai dele. Antes (Fase 123) a página "Selecionar Local de Destino" do
+; Inno Setup ficava habilitada (padrão do próprio Inno) e deixava
+; escolher qualquer pasta; DisableDirPage=yes tira essa página do
+; assistente por completo — {app} sempre resolve pro DefaultDirName
+; abaixo, sem exceção, numa instalação nova. {localappdata}\Programs é o
+; mesmo padrão já usado pela instalação real de produção hoje (não exige
+; privilégio de administrador, ao contrário de {pf}). Numa ATUALIZAÇÃO
+; (mesmo AppId já instalado antes) o Inno Setup usa sozinho o caminho já
+; escolhido da vez anterior — mudar o padrão aqui só afeta instalações
+; NOVAS, nunca move uma instalação existente.
+DisableDirPage=yes
+DefaultDirName={localappdata}\Programs\AlphafitusOS
 DefaultGroupName=Alphafitus OS
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
