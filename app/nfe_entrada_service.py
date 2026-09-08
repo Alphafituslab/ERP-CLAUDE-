@@ -343,6 +343,32 @@ def _unidade_ou_none(conn, codigo):
     return dict(row) if row else None
 
 
+def normalizar_codigo_unidade(conn, codigo):
+    """`nfe_recebimento_itens.unidade_interna_selecionada` tem FOREIGN KEY
+    para `unidades_medida(codigo)` (schema_fase123.sql) — e essa comparação
+    de FK do SQLite é sensível a maiúsculas/minúsculas (BINARY), diferente
+    de toda a lógica de conversão acima (`obter_fator_conversao` e afins),
+    que sempre compara via `lower(...)` de propósito. `itens.unidade_medida`
+    é cadastrado em MAIÚSCULAS ('UN', 'CX', ...) na imensa maioria dos itens
+    reais, mas `unidades_medida.codigo` é semeado em minúsculas — sem esta
+    normalização, TODO vínculo de item nesta tela quebra com
+    `IntegrityError: FOREIGN KEY constraint failed` assim que o código cai
+    no INSERT/UPDATE, mesmo a unidade existindo (só que com outra caixa).
+    Resolve para o código EXATO gravado em `unidades_medida` (a fonte da
+    verdade), e nunca inventa um código que não exista lá — se não achar,
+    é falta de cadastro de verdade, não normalização, e deve continuar
+    dando erro claro em vez de quebrar com uma IntegrityError feia."""
+    if not codigo:
+        return None
+    unidade = _unidade_ou_none(conn, codigo)
+    if unidade is None:
+        raise ApiError(
+            f"Unidade '{codigo}' não está cadastrada em Unidades de Medida — cadastre-a antes de vincular este item.",
+            status=400,
+        )
+    return unidade["codigo"]
+
+
 def obter_fator_conversao(conn, item_id, unidade_origem, unidade_destino):
     """Devolve o fator tal que `quantidade_destino = quantidade_origem *
     fator`, ou lança ApiError se não existir conversão conhecida. Ordem de

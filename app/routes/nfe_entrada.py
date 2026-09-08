@@ -296,6 +296,13 @@ def atualizar_item(nota_id, item_id):
                 conn, nota["fornecedor_id"], linha["codigo_produto_fornecedor"], novo_item_id, usuario_atual["id"]
             )
 
+    # `unidade_interna_selecionada` tem FK para `unidades_medida(codigo)` —
+    # normaliza pro código EXATO cadastrado lá antes de gravar (ver docstring
+    # de `normalizar_codigo_unidade`), senão o INSERT quebra com
+    # IntegrityError sempre que `itens.unidade_medida` estiver em caixa
+    # diferente da semeada em `unidades_medida` (o caso comum).
+    nova_unidade = servico.normalizar_codigo_unidade(conn, nova_unidade)
+
     conn.execute(
         "UPDATE nfe_recebimento_itens SET item_id = ?, unidade_interna_selecionada = ? WHERE id = ?",
         (novo_item_id, nova_unidade, item_id),
@@ -483,6 +490,12 @@ def importar(nota_id):
             raise ApiError(f"Informe a validade do lote para o item '{linha['descricao_xml']}' — obrigatório na importação de NF-e.", status=400)
 
         unidade_interna = entrada.get("unidade_interna_selecionada") or linha["unidade_interna_selecionada"] or linha["unidade_xml"]
+        # Mesma normalização de `atualizar_item` (ver docstring de
+        # `normalizar_codigo_unidade`) — aqui o fallback pode vir direto do
+        # `unidade_xml` do XML (ex.: "UN") quando o item foi auto-vinculado
+        # via `fornecedor_produto_vinculo` sem nunca passar por
+        # `atualizar_item`, e o UPDATE abaixo grava na mesma coluna com FK.
+        unidade_interna = servico.normalizar_codigo_unidade(conn, unidade_interna)
         quantidade_convertida, fator = servico.converter_quantidade(
             conn, linha["item_id"], linha["quantidade_xml"], linha["unidade_xml"], unidade_interna
         )
