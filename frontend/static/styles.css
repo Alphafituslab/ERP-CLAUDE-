@@ -186,6 +186,9 @@ body::before {
 [data-tema="escuro"] .link-esqueci-senha a,
 [data-tema="escuro"] .botao-link { color: var(--azul-claro); }
 
+/* Fase 160 — destaca valor negativo em tabela de histórico financeiro. */
+.texto-vermelho { color: var(--vermelho); }
+
 .campo { margin-bottom: 16px; }
 
 /* Fase 74 — "Lembrar meu email" na tela de login: mesmo espírito visual

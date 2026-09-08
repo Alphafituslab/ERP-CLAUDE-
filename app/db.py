@@ -175,6 +175,7 @@ SCHEMA_FILES = [
     "schema_fase153.sql",  # Fase 153 — Galeria de mídia dos itens (múltiplas fotos + vídeo)
     "schema_fase155.sql",  # Fase 155 — Catálogos nomeados do App de Vendas (visibilidade por vendedor)
     "schema_fase158.sql",  # Fase 158 — Recuperação de senha por WhatsApp/e-mail
+    "schema_fase160.sql",  # Fase 160 — Histórico de Comissão e CNAB do Ema
 ]
 
 

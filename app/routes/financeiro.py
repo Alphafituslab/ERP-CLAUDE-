@@ -1937,3 +1937,55 @@ def conciliar_pendentes_em_massa():
         "total_permanecem_pendentes": total_processadas - total_conciliadas,
         "conciliadas": conciliadas,
     })
+
+
+# ============================================================
+# Fase 160 — Histórico de Comissão e CNAB do Ema (arquivo de consulta,
+# só leitura — ver scripts/importar_ema_comissao_cnab.py). Nunca é
+# escrito por aqui, só pela importação; estas rotas só listam o que já
+# foi gravado.
+# ============================================================
+@bp.get("/comissoes-historico-ema")
+@requires_permission("financeiro", "visualizar")
+def listar_comissoes_historico_ema():
+    conn = get_db()
+    usuario_id = request.args.get("usuario_id", type=int)
+    clausulas, params = [], []
+    if usuario_id:
+        clausulas.append("ch.usuario_id = ?")
+        params.append(usuario_id)
+    where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
+    rows = conn.execute(
+        f"""
+        SELECT ch.*, u.nome AS usuario_nome, c.razao_social AS cliente_razao_social
+        FROM comissoes_historico_ema ch
+        LEFT JOIN usuarios u ON u.id = ch.usuario_id
+        LEFT JOIN clientes c ON c.id = ch.cliente_id
+        {where} ORDER BY ch.data DESC, ch.id DESC
+        """,
+        params,
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])
+
+
+@bp.get("/cnab-historico-ema")
+@requires_permission("financeiro", "visualizar")
+def listar_cnab_historico_ema():
+    conn = get_db()
+    cliente_id = request.args.get("cliente_id", type=int)
+    clausulas, params = [], []
+    if cliente_id:
+        clausulas.append("ch.cliente_id = ?")
+        params.append(cliente_id)
+    where = f"WHERE {' AND '.join(clausulas)}" if clausulas else ""
+    rows = conn.execute(
+        f"""
+        SELECT ch.*, c.razao_social AS cliente_razao_social, cr.numero AS contas_receber_numero
+        FROM cnab_historico_ema ch
+        LEFT JOIN clientes c ON c.id = ch.cliente_id
+        LEFT JOIN contas_receber cr ON cr.id = ch.contas_receber_id
+        {where} ORDER BY ch.data_pagamento DESC, ch.id DESC
+        """,
+        params,
+    ).fetchall()
+    return jsonify([dict(r) for r in rows])

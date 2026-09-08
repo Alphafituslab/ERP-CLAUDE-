@@ -621,6 +621,8 @@
           case "painel-gerencial": return renderPainelGerencial();
           case "visitas-vendedores": return renderVisitasVendedores();
           case "creditos-vendedores": return renderCreditosVendedores();
+          case "comissoes-historico-ema": return renderComissoesHistoricoEma();
+          case "cnab-historico-ema": return renderCnabHistoricoEma();
           case "rastreabilidade": return renderRastreabilidade();
           case "custeio": return param ? renderCustoProdutoDetalhe(Number(param)) : renderCustoProdutos();
           case "dre": return renderDre();
@@ -821,6 +823,8 @@
         { rota: "#/painel-gerencial", chave: "painel-gerencial", label: "Painel Gerencial (BI)", permissao: ["relatorios", "visualizar"] },
         { rota: "#/visitas-vendedores", chave: "visitas-vendedores", label: "Visitas dos Vendedores", permissao: ["relatorios", "visualizar"], apelidos: ["geolocalizacao", "check-in", "desempenho vendedor"] },
         { rota: "#/creditos-vendedores", chave: "creditos-vendedores", label: "Crédito dos Vendedores", permissao: ["relatorios", "visualizar"], apelidos: ["gordurinha", "credito pessoal"] },
+        { rota: "#/comissoes-historico-ema", chave: "comissoes-historico-ema", label: "Comissões (Histórico Ema)", permissao: ["financeiro", "visualizar"], apelidos: ["ema", "extrato comissao"] },
+        { rota: "#/cnab-historico-ema", chave: "cnab-historico-ema", label: "CNAB (Histórico Ema)", permissao: ["financeiro", "visualizar"], apelidos: ["ema", "boleto antigo", "retorno bancario"] },
         { rota: "#/rastreabilidade", chave: "rastreabilidade", label: "Rastreabilidade (Recall)", permissao: ["rastreabilidade", "visualizar"] },
         { rota: "#/custeio", chave: "custeio", label: "Custo do Produto", permissao: ["custeio", "visualizar"] },
       ],
@@ -16880,6 +16884,76 @@
           <button type="submit" class="botao">Transferir</button>
         </div>
       </form>`);
+  }
+
+  // Fase 160 — Histórico de Comissão e CNAB do Ema (arquivo de consulta,
+  // só leitura — pedido do usuário: "pode fazer uma migração completa do
+  // banco pra gente testar"). Investigação real no Postgres restaurado do
+  // Ema mostrou que Funil de Vendas não tinha dado aproveitável (fases do
+  // funil sem nome cadastrado) — só Comissão e CNAB entraram.
+  async function renderComissoesHistoricoEma() {
+    app.innerHTML = '<div class="carregando">Carregando histórico de comissão…</div>';
+    const registros = await chamarApi("/financeiro/comissoes-historico-ema");
+    const totalGeral = registros.reduce((soma, r) => soma + r.valor, 0);
+    const linhas = registros.map((r) => `<tr>
+      <td>${fmtData(r.data)}</td>
+      <td>${escapeHtml(r.usuario_nome || r.nome_vendedor_ema)}${!r.usuario_id ? ' <span class="selo inativo" title="Nenhum usuário do Alphafitus corresponde a este nome do Ema">sem usuário</span>' : ""}</td>
+      <td>${escapeHtml(r.cliente_razao_social || "—")}</td>
+      <td>${escapeHtml(r.descricao || "—")}</td>
+      <td>${r.numero_nf ? escapeHtml(r.numero_nf) : "—"}</td>
+      <td class="${r.valor < 0 ? "texto-vermelho" : ""}">${fmtMoeda(r.valor)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Comissões — Histórico do Ema</h2>
+       <p class="texto-suave">Extrato de comissão importado do ERP anterior (Ema) — só consulta, não gera
+       lançamento nenhum no sistema atual. Registros marcados "sem usuário" são de vendedores que não têm
+       (ou ainda não têm) uma conta de usuário correspondente aqui no Alphafitus.</p>
+       <div class="cartao">
+         <p><strong>Total no período listado:</strong> ${fmtMoeda(totalGeral)} — ${registros.length} registros</p>
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Data</th><th>Vendedor</th><th>Cliente</th><th>Descrição</th><th>NF</th><th>Valor</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum registro.</td></tr>'}</tbody>
+         </table>
+         </div>
+       </div>`,
+      "comissoes-historico-ema"
+    );
+  }
+
+  async function renderCnabHistoricoEma() {
+    app.innerHTML = '<div class="carregando">Carregando histórico de CNAB…</div>';
+    const registros = await chamarApi("/financeiro/cnab-historico-ema");
+    const linhas = registros.map((r) => `<tr>
+      <td>${escapeHtml(r.cliente_razao_social || "—")}</td>
+      <td>${escapeHtml(r.documento || "—")}</td>
+      <td>${r.vencimento ? fmtData(r.vencimento) : "—"}</td>
+      <td>${fmtMoeda(r.valor_titulo)}</td>
+      <td>${fmtMoeda(r.valor_recebido)}</td>
+      <td>${r.data_pagamento ? fmtData(r.data_pagamento) : "—"}</td>
+      <td>${r.contas_receber_numero
+        ? `<span class="selo ativo" title="Ainda existe como conta a receber ativa no Alphafitus">${escapeHtml(r.contas_receber_numero)}</span>`
+        : '<span class="texto-suave" title="Título já quitado antes da migração — só histórico de referência">só histórico</span>'}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>CNAB — Histórico do Ema</h2>
+       <p class="texto-suave">Retornos bancários (baixas de boleto) importados do ERP anterior (Ema) — só
+       consulta. A maioria é de títulos já quitados antes da migração de agosto (só saldos em aberto foram
+       trazidos pra Contas a Receber), então não tem vínculo com um boleto ativo hoje — fica só como
+       referência histórica.</p>
+       <div class="cartao">
+         <p><strong>${registros.length} registros</strong></p>
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Cliente</th><th>Documento</th><th>Vencimento</th><th>Valor título</th><th>Valor recebido</th><th>Pago em</th><th>Conta a receber</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum registro.</td></tr>'}</tbody>
+         </table>
+         </div>
+       </div>`,
+      "cnab-historico-ema"
+    );
   }
 
   async function renderRastreabilidade() {
