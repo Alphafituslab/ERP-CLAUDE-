@@ -5580,6 +5580,8 @@
       </tr>`;
     }).join("");
 
+    const itensSemCadastro = nota.itens.filter((it) => !it.item_id).length;
+
     const eventosHtml = nota.eventos.map((e) =>
       `<div class="linha-evento"><span class="texto-suave">${fmtData(e.criado_em)}</span> — ${escapeHtml(e.tipo_evento)}${e.detalhe ? `: ${escapeHtml(e.detalhe)}` : ""}</div>`
     ).join("");
@@ -5587,6 +5589,9 @@
     renderShell(
       `<a class="link-voltar" href="#/nfe-entrada">&larr; Voltar para NF-e Recebidas</a>
        <h2>NF-e ${escapeHtml(nota.numero || "")}${nota.serie ? `/${escapeHtml(nota.serie)}` : ""}</h2>
+       ${itensSemCadastro > 0 && !jaImportada
+         ? `<div class="mensagem-erro">⚠️ ${itensSemCadastro} ${itensSemCadastro === 1 ? "item não tem" : "itens não têm"} cadastro de produto interno ainda — clique em "Vincular produto" na tabela abaixo pra escolher um produto já cadastrado, ou cadastrar um novo sem sair desta tela.</div>`
+         : ""}
        <div class="cartao">
          <div class="linha-detalhe">
            <div><div class="rotulo">Chave de acesso</div><span class="mono" style="font-size:12px;">${escapeHtml(nota.chave_acesso)}</span>
@@ -5637,16 +5642,36 @@
   function modalVincularProdutoNfe(notaId, itemId, descricaoXml) {
     const itens = state.cache.itens || [];
     const opcoes = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
+    const opcoesTipo = TIPOS_ITEM.map((t) => `<option value="${t}">${t}</option>`).join("");
+    const podeCadastrarItem = temPermissao("itens", "cadastrar");
     abrirModal(`
       <h3>Vincular produto interno</h3>
       <p class="texto-suave">Item na NF-e: "${escapeHtml(descricaoXml)}". O vínculo pelo código do fornecedor é salvo e reaproveitado automaticamente nas próximas notas dele.</p>
-      <form data-form="vincular-produto-nfe" data-nota-id="${notaId}" data-item-id="${itemId}">
-        <div class="campo"><label>Produto interno</label><select name="item_id" required><option value="">— selecionar —</option>${opcoes}</select></div>
-        <div class="rodape-modal">
-          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
-          <button type="submit" class="botao">Vincular</button>
-        </div>
-      </form>`);
+      <div id="nfe-vincular-existente">
+        <form data-form="vincular-produto-nfe" data-nota-id="${notaId}" data-item-id="${itemId}">
+          <div class="campo"><label>Produto interno</label><select name="item_id" required><option value="">— selecionar —</option>${opcoes}</select></div>
+          <div class="rodape-modal">
+            <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+            ${podeCadastrarItem ? `<button type="button" class="botao secundario" data-acao="mostrar-cadastro-item-nfe">Não encontrei — cadastrar novo</button>` : ""}
+            <button type="submit" class="botao">Vincular</button>
+          </div>
+        </form>
+      </div>
+      ${podeCadastrarItem ? `
+      <div id="nfe-vincular-novo" hidden>
+        <form data-form="cadastrar-e-vincular-produto-nfe" data-nota-id="${notaId}" data-item-id="${itemId}">
+          <p class="dica">Cadastrando um produto novo (pote, tampa, cápsula, matéria-prima etc.) — se este item já
+          existia no sistema antigo (Ema), use o MESMO nome/código de lá, para ficar fácil de identificar depois.</p>
+          <div class="campo"><label>Código (opcional — gera automático se deixar em branco)</label><input name="codigo"></div>
+          <div class="campo"><label>Descrição</label><input name="descricao" required></div>
+          <div class="campo"><label>Tipo</label><select name="tipo">${opcoesTipo}</select></div>
+          <div class="campo"><label>Unidade de medida</label><input name="unidade_medida" value="un" required></div>
+          <div class="rodape-modal">
+            <button type="button" class="botao secundario" data-acao="voltar-vincular-existente-nfe">&larr; Voltar</button>
+            <button type="submit" class="botao">Cadastrar e vincular</button>
+          </div>
+        </form>
+      </div>` : ""}`);
   }
 
   function modalVincularFornecedorNfe(notaId, cnpj, razaoSocial) {
@@ -18108,6 +18133,14 @@
       case "abrir-vincular-produto-nfe":
         modalVincularProdutoNfe(Number(alvo.dataset.notaId), Number(alvo.dataset.itemId), alvo.dataset.descricao);
         return;
+      case "mostrar-cadastro-item-nfe":
+        document.getElementById("nfe-vincular-existente").hidden = true;
+        document.getElementById("nfe-vincular-novo").hidden = false;
+        return;
+      case "voltar-vincular-existente-nfe":
+        document.getElementById("nfe-vincular-novo").hidden = true;
+        document.getElementById("nfe-vincular-existente").hidden = false;
+        return;
       case "abrir-vincular-fornecedor-nfe":
         modalVincularFornecedorNfe(Number(alvo.dataset.notaId), alvo.dataset.cnpj, alvo.dataset.razao);
         return;
@@ -19477,7 +19510,7 @@
         // só a conta administrativa vinculada recebe `sincronizacao`.
         const sincEmail = resp && resp.sincronizacao;
         if (sincEmail) {
-          const ROTULO_DESTINO_EMAIL = { whatts: "WhatsApp", protocolo: "Protocolo de Estabilidade", memorial: "Memorial Técnico" };
+          const ROTULO_DESTINO_EMAIL = { whatts: "WhatsApp", protocolo: "Protocolo de Estabilidade", memorial: "Memorial Técnico", hplc: "Treinador de HPLC" };
           const partesEmail = Object.entries(sincEmail).map(([destino, r]) => `${ROTULO_DESTINO_EMAIL[destino] || destino}: ${r.ok ? "✓" : "✗ " + escapeHtml(r.mensagem || "falhou")}`);
           const todasOkEmail = Object.values(sincEmail).every((r) => r.ok);
           definirFlash(
@@ -19506,7 +19539,7 @@
         // ausente/null, e a mensagem fica exatamente como sempre foi.
         const sinc = respostaTrocaSenha && respostaTrocaSenha.sincronizacao;
         if (sinc) {
-          const ROTULO_DESTINO = { whatts: "WhatsApp", protocolo: "Protocolo de Estabilidade", memorial: "Memorial Técnico" };
+          const ROTULO_DESTINO = { whatts: "WhatsApp", protocolo: "Protocolo de Estabilidade", memorial: "Memorial Técnico", hplc: "Treinador de HPLC" };
           const partes = Object.entries(sinc).map(([destino, r]) => `${ROTULO_DESTINO[destino] || destino}: ${r.ok ? "✓" : "✗ " + escapeHtml(r.mensagem || "falhou")}`);
           const todasOk = Object.values(sinc).every((r) => r.ok);
           definirFlash(
@@ -20287,6 +20320,29 @@
         fecharModais();
         definirFlash("ok", "Produto vinculado — vínculo salvo para as próximas notas deste fornecedor.");
         return renderNfeEntradaDetalhe(notaIdProduto);
+      }
+      // Pedido do usuário (2026-09-08): quando o item da NF-e não bate com
+      // NENHUM produto já cadastrado, cadastrar direto aqui — sem sair da
+      // tela de conferência nem cancelar a importação da nota — e já
+      // vincular o item recém-criado, num único passo.
+      case "cadastrar-e-vincular-produto-nfe": {
+        const notaIdNovoProduto = Number(form.dataset.notaId);
+        const novoItem = await chamarApi("/itens", {
+          method: "POST",
+          body: {
+            codigo: dados.get("codigo") || null,
+            descricao: dados.get("descricao"),
+            tipo: dados.get("tipo"),
+            unidade_medida: dados.get("unidade_medida"),
+          },
+        });
+        state.cache.itens = null; // força recarregar na próxima tela que precisar (Itens, outro vínculo de NF-e)
+        await chamarApi(`/nfe-entrada/${notaIdNovoProduto}/itens/${form.dataset.itemId}`, {
+          method: "PATCH", body: { item_id: novoItem.id },
+        });
+        fecharModais();
+        definirFlash("ok", `Produto ${novoItem.codigo} cadastrado e vinculado.`);
+        return renderNfeEntradaDetalhe(notaIdNovoProduto);
       }
       case "vincular-fornecedor-nfe": {
         const notaIdFornecedor = Number(form.dataset.notaId);

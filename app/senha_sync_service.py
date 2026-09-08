@@ -118,6 +118,27 @@ def _sincronizar_protocolo(nova_senha):
         return False, str(erro)
 
 
+def _sincronizar_hplc(nova_senha):
+    # Fase 164 (pedido do usuário 2026-09-08) — Treinador de HPLC roda a
+    # MESMA imagem de backend do Protocolo de Estabilidade (só banco de
+    # dados diferente), então tem o MESMO endpoint `POST
+    # /api/auth/reset-password` protegido pela senha mestra — reaproveita
+    # tal e qual, exatamente como `_sincronizar_protocolo` acima.
+    url = os.environ.get("ALPHAFITUS_SYNC_HPLC_URL")
+    senha_mestra = os.environ.get("ALPHAFITUS_SYNC_HPLC_MASTER")
+    usuario = os.environ.get("ALPHAFITUS_SYNC_HPLC_USUARIO", "admin")
+    if not url or not senha_mestra:
+        return None, "Sincronização com o Treinador de HPLC não configurada nesta instalação."
+    try:
+        return _chamar_endpoint_sincronizacao(
+            url, "/api/auth/reset-password",
+            {"masterPassword": senha_mestra, "username": usuario, "newPassword": nova_senha},
+        )
+    except Exception as erro:
+        logger.exception("Falha ao sincronizar senha no Treinador de HPLC")
+        return False, str(erro)
+
+
 def _sincronizar_memorial(nova_senha):
     url = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_URL")
     segredo = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_SECRET")
@@ -219,6 +240,26 @@ def _sincronizar_protocolo_username(email_novo):
         return False, str(erro)
 
 
+def _sincronizar_hplc_username(email_novo):
+    url = os.environ.get("ALPHAFITUS_SYNC_HPLC_URL")
+    senha_mestra = os.environ.get("ALPHAFITUS_SYNC_HPLC_MASTER")
+    usuario_atual = os.environ.get("ALPHAFITUS_SYNC_HPLC_USUARIO", "admin")
+    if not url or not senha_mestra:
+        return None, "Sincronização com o Treinador de HPLC não configurada nesta instalação."
+    try:
+        ok, msg = _chamar_endpoint_sincronizacao(
+            url, "/api/auth/sync-username",
+            {"masterPassword": senha_mestra, "currentUsername": usuario_atual, "newUsername": email_novo},
+        )
+        if ok:
+            os.environ["ALPHAFITUS_SYNC_HPLC_USUARIO"] = email_novo
+            _persistir_variavel_config_ambiente("ALPHAFITUS_SYNC_HPLC_USUARIO", email_novo)
+        return ok, msg
+    except Exception as erro:
+        logger.exception("Falha ao sincronizar login no Treinador de HPLC")
+        return False, str(erro)
+
+
 def _sincronizar_memorial_username(email_novo):
     url = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_URL")
     segredo = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_SECRET")
@@ -266,6 +307,7 @@ def sincronizar_email_em_todos_sistemas(usuario_id, email_atual, email_novo):
         "whatts": _sincronizar_whatts_email_local(email_atual, email_novo),
         "protocolo": _sincronizar_protocolo_username(email_novo),
         "memorial": _sincronizar_memorial_username(email_novo),
+        "hplc": _sincronizar_hplc_username(email_novo),
     }
     if usuario_id == ID_USUARIO_ADMIN_SINCRONIZADO:
         EMAIL_ADMIN_SINCRONIZADO = email_novo
@@ -294,4 +336,5 @@ def sincronizar_senha_em_todos_sistemas(usuario_id, email_usuario, nova_senha):
         "whatts": _sincronizar_whatts_local(nova_senha),
         "protocolo": _sincronizar_protocolo(nova_senha),
         "memorial": _sincronizar_memorial(nova_senha),
+        "hplc": _sincronizar_hplc(nova_senha),
     }
