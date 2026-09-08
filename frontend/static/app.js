@@ -12469,6 +12469,32 @@
       </form>`);
   }
 
+  // Fase 161 — pedido do usuário: "preciso ter a opção de fazer um
+  // contrato sem ter que montar a linha, pois o cliente já sabe o que
+  // quer, é só preencher e enviar o contrato para assinatura". Essa
+  // opção já existia dentro da página do cliente ("Nenhum — contrato
+  // avulso" no modal de novo contrato) — isto aqui só encurta o caminho:
+  // escolhe o cliente direto da tela geral de Contratos, sem precisar
+  // abrir a página dele primeiro.
+  async function modalEscolherClienteParaNovoContrato() {
+    const clientes = await chamarApi("/comercial/clientes");
+    const ativos = clientes.filter((c) => c.status === "ativo");
+    const opcoes = ativos.map((c) => `<option value="${c.id}">${escapeHtml(c.razao_social)} — ${escapeHtml(c.cnpj)}</option>`).join("");
+    abrirModal(`
+      <h3>Novo contrato — escolher cliente</h3>
+      <p class="texto-suave">O contrato sai avulso por padrão (sem vínculo com nenhum projeto do Monte sua
+      linha) — dá pra vincular depois, se um dia fizer sentido.</p>
+      <form data-form="escolher-cliente-novo-contrato">
+        <div class="campo"><label>Cliente</label><select name="cliente_id" required autofocus>
+          <option value="">Escolha…</option>${opcoes}
+        </select></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Continuar</button>
+        </div>
+      </form>`);
+  }
+
   function modalCriarContratoCliente(clienteId, projetos) {
     const opcoesProjetos = (projetos || []).map((p) => `<option value="${p.id}">${escapeHtml(p.numero)}</option>`).join("");
     abrirModal(`
@@ -12516,6 +12542,7 @@
   // geral que faltava pra virar uma "pasta" de verdade no menu.
   async function renderContratosLista() {
     app.innerHTML = '<div class="carregando">Carregando contratos…</div>';
+    const podeCriarContrato = temPermissao("terceirizacao", "criar");
     const contratos = await chamarApi("/contratos");
     const linhas = contratos.map((c) => `<tr>
       <td class="mono"><a href="#/contrato/${c.id}">${escapeHtml(c.numero)}</a></td>
@@ -12527,9 +12554,13 @@
     </tr>`).join("");
 
     renderShell(
-      `<h2>Contratos</h2>
-       <p class="texto-suave">Todos os contratos cadastrados, de todos os clientes. Um contrato pertence ao
-       cadastro do cliente (pode ter mais de um) — pra criar um novo, abra o cliente desejado.</p>
+      `<div class="barra-acoes">
+         <h2 style="margin:0;">Contratos</h2>
+         ${podeCriarContrato ? `<button type="button" class="botao" data-acao="abrir-novo-contrato-escolher-cliente">+ Novo contrato</button>` : ""}
+       </div>
+       <p class="texto-suave" style="margin-top:-6px;">Todos os contratos cadastrados, de todos os clientes. Um
+       contrato pertence ao cadastro do cliente (pode ter mais de um) — não precisa ter um projeto do "Monte sua
+       linha" pra existir: escolha o cliente e o contrato já sai pronto pra preencher e mandar assinar.</p>
        <div class="cartao">
          <div class="tabela-scroll">
          <table>
@@ -18482,6 +18513,10 @@
         modalCriarContratoCliente(Number(alvo.dataset.id), state.cache.projetosParaContratoCliente || []);
         return;
       }
+      case "abrir-novo-contrato-escolher-cliente": {
+        modalEscolherClienteParaNovoContrato();
+        return;
+      }
       case "abrir-enviar-documento-cliente": {
         modalEnviarDocumentoCliente(Number(alvo.dataset.id));
         return;
@@ -20622,6 +20657,13 @@
         });
         definirFlash("ok", "Contrato atualizado.");
         return renderContratoDetalhe(Number(form.dataset.id));
+      }
+      case "escolher-cliente-novo-contrato": {
+        const clienteId = Number(dados.get("cliente_id"));
+        const projetos = await chamarApi(`/terceirizacao/projetos?cliente_id=${clienteId}`).catch(() => []);
+        fecharModais();
+        modalCriarContratoCliente(clienteId, projetos);
+        return;
       }
       case "criar-contrato-cliente": {
         const projetoId = dados.get("projeto_id");
