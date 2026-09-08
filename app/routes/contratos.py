@@ -125,13 +125,20 @@ def listar_contratos():
     conn = get_db()
     filtros, params = [], []
     if request.args.get("cliente_id"):
-        filtros.append("cliente_id = ?")
+        filtros.append("ct.cliente_id = ?")
         params.append(request.args["cliente_id"])
     if request.args.get("projeto_id"):
-        filtros.append("projeto_id = ?")
+        filtros.append("ct.projeto_id = ?")
         params.append(request.args["projeto_id"])
     where = f"WHERE {' AND '.join(filtros)}" if filtros else ""
-    rows = conn.execute(f"SELECT * FROM contratos {where} ORDER BY criado_em DESC", params).fetchall()
+    rows = conn.execute(
+        f"""
+        SELECT ct.*, cl.razao_social AS cliente_razao_social
+        FROM contratos ct JOIN clientes cl ON cl.id = ct.cliente_id
+        {where} ORDER BY ct.criado_em DESC
+        """,
+        params,
+    ).fetchall()
     return jsonify([_contrato_para_json(conn, dict(r)) for r in rows])
 
 

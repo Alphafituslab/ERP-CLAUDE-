@@ -613,6 +613,7 @@
           // dentro de um modal — texto de contrato inteiro, checklist de
           // itens, tabela de versões).
           case "cliente": return renderClienteDetalhe(Number(param));
+          case "contratos": return renderContratosLista();
           case "contrato": return renderContratoDetalhe(Number(param));
           case "financeiro-configuracao-boleto": return renderConfiguracaoBoleto();
           case "financeiro-remessa-cnab": return renderRemessaCnab();
@@ -803,6 +804,7 @@
       itens: [
         { rota: "#/terceirizacao", chave: "terceirizacao", label: "Monte sua linha", permissao: ["terceirizacao", "visualizar"], apelidos: ["terceirização", "terceirizacoes", "white label", "projetos"] },
         { rota: "#/terceirizacao-embalagens", chave: "terceirizacao-embalagens", label: "Catálogo de Embalagem", permissao: ["terceirizacao", "configurar_embalagem"], apelidos: ["pote", "tampa", "capsula", "cápsula"] },
+        { rota: "#/contratos", chave: "contratos-lista", label: "Contratos", permissao: ["terceirizacao", "visualizar"], apelidos: ["contrato", "assinatura", "dossiê", "dossie"] },
       ],
     },
     {
@@ -12503,6 +12505,41 @@
           <button type="submit" class="botao">Vincular</button>
         </div>
       </form>`);
+  }
+
+  // Fase 161 — pedido do usuário: "tudo que você criar eu devo encontrar
+  // no buscar na lupa" — Contratos (Fase 147) só existia dentro da
+  // página de cada cliente, sem nenhuma entrada no menu, então a busca
+  // global (que só indexa ITENS_MENU) nunca achava "contrato". Esta tela
+  // lista TODOS os contratos de todos os clientes — abrir um cliente
+  // específico continua funcionando como sempre, isto aqui é só a visão
+  // geral que faltava pra virar uma "pasta" de verdade no menu.
+  async function renderContratosLista() {
+    app.innerHTML = '<div class="carregando">Carregando contratos…</div>';
+    const contratos = await chamarApi("/contratos");
+    const linhas = contratos.map((c) => `<tr>
+      <td class="mono"><a href="#/contrato/${c.id}">${escapeHtml(c.numero)}</a></td>
+      <td><a href="#/cliente/${c.cliente_id}">${escapeHtml(c.cliente_razao_social)}</a></td>
+      <td>${seloStatusContrato(c.status)}</td>
+      <td>${c.projeto ? escapeHtml(c.projeto.numero) : "—"}</td>
+      <td>${fmtData(c.criado_em)}</td>
+      <td><a class="botao secundario pequeno" href="#/contrato/${c.id}">Abrir</a></td>
+    </tr>`).join("");
+
+    renderShell(
+      `<h2>Contratos</h2>
+       <p class="texto-suave">Todos os contratos cadastrados, de todos os clientes. Um contrato pertence ao
+       cadastro do cliente (pode ter mais de um) — pra criar um novo, abra o cliente desejado.</p>
+       <div class="cartao">
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Status</th><th>Projeto vinculado</th><th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="6" class="texto-suave">Nenhum contrato cadastrado ainda.</td></tr>'}</tbody>
+         </table>
+         </div>
+       </div>`,
+      "contratos-lista"
+    );
   }
 
   async function renderContratoDetalhe(contratoId) {
