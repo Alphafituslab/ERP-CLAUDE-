@@ -723,6 +723,11 @@
           itens: [
             { rota: "https://whatts.alphafitus.com.br:8444", chave: "memorial", label: "Memorial Técnico", abrirNovaAba: true, permissao: ["memoriais", "visualizar"] },
             { rota: "https://whatts.alphafitus.com.br:8443", chave: "protocolo-estabilidade", label: "Protocolo de Estabilidade", abrirNovaAba: true },
+            // Fase HPLC (pedido do usuário 2026-09-08) — separado do
+            // Protocolo de Estabilidade: banco de dados e login PRÓPRIOS
+            // (mesmo backend de código, mesmo padrão de implantação de
+            // Memorial/Protocolo acima), container próprio no VPS.
+            { rota: "https://whatts.alphafitus.com.br:8445", chave: "hplc-treinador", label: "Treinador de HPLC", abrirNovaAba: true, apelidos: ["hplc", "cromatografia", "chemstation"] },
           ],
         },
       ],
