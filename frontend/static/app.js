@@ -5549,10 +5549,22 @@
 
     const linhasItens = nota.itens.map((it) => {
       const conf = it.conferencia;
+      // Fase 166 (pedido do usuário) — "a partir da segunda NF-e, avisar se
+      // o item está mais caro ou mais barato que a última vez comprado".
+      // Só aparece quando já existe uma compra anterior deste item (de
+      // qualquer fornecedor) — na primeira vez não tem com o que comparar.
+      const linhaUltimaCompra = conf && conf.preco_ultima_compra != null && conf.diferenca_ultima_compra_absoluta != null
+        ? (Math.abs(conf.diferenca_ultima_compra_absoluta) < 0.005
+            ? `<div class="texto-suave" style="font-size:11px;">= igual à última compra (${fmtMoeda(conf.preco_ultima_compra)} em ${fmtData(conf.data_ultima_compra)})</div>`
+            : `<div style="font-size:11px;" class="${conf.diferenca_ultima_compra_absoluta > 0 ? "texto-vermelho" : "texto-verde"}">${conf.diferenca_ultima_compra_absoluta > 0 ? "🔺 subiu" : "🔻 caiu"}
+               ${fmtMoeda(Math.abs(conf.diferenca_ultima_compra_absoluta))} (${conf.diferenca_ultima_compra_percentual > 0 ? "+" : ""}${conf.diferenca_ultima_compra_percentual.toFixed(1)}%)
+               vs última compra: ${fmtMoeda(conf.preco_ultima_compra)} em ${fmtData(conf.data_ultima_compra)}</div>`)
+        : "";
       const linhaPreco = conf
         ? `${conf.preco_cotado != null ? `<div>Cotado: ${fmtMoeda(conf.preco_cotado)}</div>` : ""}
            ${conf.preco_pedido != null ? `<div>Pedido: ${fmtMoeda(conf.preco_pedido)}</div>` : ""}
-           <div>NF-e: ${fmtMoeda(conf.preco_nfe_convertido)}${conf.diferenca_preco_percentual != null ? ` <span class="texto-suave">(${conf.diferenca_preco_percentual > 0 ? "+" : ""}${conf.diferenca_preco_percentual.toFixed(1)}%)</span>` : ""}</div>`
+           <div>NF-e: ${fmtMoeda(conf.preco_nfe_convertido)}${conf.diferenca_preco_percentual != null ? ` <span class="texto-suave">(${conf.diferenca_preco_percentual > 0 ? "+" : ""}${conf.diferenca_preco_percentual.toFixed(1)}%)</span>` : ""}</div>
+           ${linhaUltimaCompra}`
         : `<div class="texto-suave">Vincule o produto para conferir.</div>`;
       const linhaQtd = conf && conf.quantidade_pedida != null
         ? `<div>Pedido: ${_fmtQtdNfe(conf.quantidade_pedida)} ${escapeHtml(it.unidade_interna_selecionada)}</div>
@@ -5564,7 +5576,7 @@
         <td>${it.item_id
           ? `${escapeHtml(it.item_descricao)}`
           : (podeConferir && !jaImportada
-              ? `<button class="botao secundario pequeno" data-acao="abrir-vincular-produto-nfe" data-nota-id="${nota.id}" data-item-id="${it.id}" data-descricao="${escapeHtml(it.descricao_xml)}">Vincular produto</button>`
+              ? `<button class="botao secundario pequeno" data-acao="abrir-vincular-produto-nfe" data-nota-id="${nota.id}" data-item-id="${it.id}" data-descricao="${escapeHtml(it.descricao_xml)}" data-unidade-xml="${escapeHtml(it.unidade_xml)}" data-tipo-sugerido="${escapeHtml(it.tipo_sugerido || "")}">Vincular produto</button>`
               : '<span class="selo amarelo">não identificado</span>')}</td>
         <td>${!jaImportada && podeConferir && it.item_id
           ? `<select data-acao-select="alterar-unidade-interna-nfe" data-nota-id="${nota.id}" data-item-id="${it.id}">${opcoesUnidade.replace(`value="${it.unidade_interna_selecionada}"`, `value="${it.unidade_interna_selecionada}" selected`)}</select>`
@@ -5575,8 +5587,9 @@
           ? `<span class="selo bloqueado" title="${escapeHtml(it.erro_conferencia)}">sem conversão</span>`
           : (conf ? `${ICONE_STATUS_CONFERENCIA[conf.status_preco] || ""} preço <span class="selo ${SELO_STATUS_CONFERENCIA[conf.status_preco]}">${conf.status_preco || "—"}</span><br>${conf.status_quantidade ? `${ICONE_STATUS_CONFERENCIA[conf.status_quantidade]} qtd. <span class="selo ${SELO_STATUS_CONFERENCIA[conf.status_quantidade]}">${conf.status_quantidade}</span>` : ""}` : "—")}
         </td>
-        ${!jaImportada ? `<td>${it.item_id ? `<input type="date" data-validade-item="${it.id}" title="Validade do lote (obrigatório)">
-             <input type="text" data-lote-fornecedor-item="${it.id}" placeholder="Lote do fornecedor" style="margin-top:4px;width:100%;">` : ""}</td>` : `<td>${it.lote_gerado_id ? `<a href="#/lotes/${it.lote_gerado_id}">ver lote</a>` : ""}</td>`}
+        ${!jaImportada ? `<td>${it.item_id ? `<input type="date" data-validade-item="${it.id}" title="Validade do lote (obrigatório)" value="${escapeHtml(it.validade_sugerida || "")}">
+             <input type="text" data-lote-fornecedor-item="${it.id}" placeholder="Lote do fornecedor" style="margin-top:4px;width:100%;" value="${escapeHtml(it.lote_sugerido || "")}">
+             ${it.lote_sugerido || it.validade_sugerida ? '<div class="texto-suave" style="font-size:10px;">sugerido pelo XML — confira antes de importar</div>' : ""}` : ""}</td>` : `<td>${it.lote_gerado_id ? `<a href="#/lotes/${it.lote_gerado_id}">ver lote</a>` : ""}</td>`}
       </tr>`;
     }).join("");
 
@@ -5590,7 +5603,11 @@
       `<a class="link-voltar" href="#/nfe-entrada">&larr; Voltar para NF-e Recebidas</a>
        <h2>NF-e ${escapeHtml(nota.numero || "")}${nota.serie ? `/${escapeHtml(nota.serie)}` : ""}</h2>
        ${itensSemCadastro > 0 && !jaImportada
-         ? `<div class="mensagem-erro">⚠️ ${itensSemCadastro} ${itensSemCadastro === 1 ? "item não tem" : "itens não têm"} cadastro de produto interno ainda — clique em "Vincular produto" na tabela abaixo pra escolher um produto já cadastrado, ou cadastrar um novo sem sair desta tela.</div>`
+         ? `<div class="mensagem-erro">⚠️ ${itensSemCadastro} ${itensSemCadastro === 1 ? "item não tem" : "itens não têm"} cadastro de produto interno ainda.
+            ${podeConferir && temPermissao("itens", "cadastrar")
+              ? `<button class="botao perigo pequeno" style="margin-left:8px;" data-acao="abrir-vincular-produto-nfe" data-nota-id="${nota.id}" data-item-id="${nota.itens.find((it) => !it.item_id).id}" data-descricao="${escapeHtml(nota.itens.find((it) => !it.item_id).descricao_xml)}" data-unidade-xml="${escapeHtml(nota.itens.find((it) => !it.item_id).unidade_xml)}" data-tipo-sugerido="${escapeHtml(nota.itens.find((it) => !it.item_id).tipo_sugerido || "")}" data-abrir-cadastro="1">Cadastrar automaticamente</button>`
+              : ` Clique em "Vincular produto" na tabela abaixo pra escolher um produto já cadastrado, ou cadastrar um novo sem sair desta tela.`}
+            </div>`
          : ""}
        <div class="cartao">
          <div class="linha-detalhe">
@@ -5639,15 +5656,16 @@
     );
   }
 
-  function modalVincularProdutoNfe(notaId, itemId, descricaoXml) {
+  function modalVincularProdutoNfe(notaId, itemId, descricaoXml, unidadeXml, tipoSugerido, abrirCadastroDireto) {
     const itens = state.cache.itens || [];
     const opcoes = itens.map((i) => `<option value="${i.id}">${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`).join("");
-    const opcoesTipo = TIPOS_ITEM.map((t) => `<option value="${t}">${t}</option>`).join("");
+    const opcoesTipo = TIPOS_ITEM.map((t) => `<option value="${t}" ${t === tipoSugerido ? "selected" : ""}>${t}</option>`).join("");
     const podeCadastrarItem = temPermissao("itens", "cadastrar");
+    const unidadeSugerida = (unidadeXml || "un").toLowerCase();
     abrirModal(`
       <h3>Vincular produto interno</h3>
       <p class="texto-suave">Item na NF-e: "${escapeHtml(descricaoXml)}". O vínculo pelo código do fornecedor é salvo e reaproveitado automaticamente nas próximas notas dele.</p>
-      <div id="nfe-vincular-existente">
+      <div id="nfe-vincular-existente" ${abrirCadastroDireto ? "hidden" : ""}>
         <form data-form="vincular-produto-nfe" data-nota-id="${notaId}" data-item-id="${itemId}">
           <div class="campo"><label>Produto interno</label><select name="item_id" required><option value="">— selecionar —</option>${opcoes}</select></div>
           <div class="rodape-modal">
@@ -5658,14 +5676,16 @@
         </form>
       </div>
       ${podeCadastrarItem ? `
-      <div id="nfe-vincular-novo" hidden>
+      <div id="nfe-vincular-novo" ${abrirCadastroDireto ? "" : "hidden"}>
         <form data-form="cadastrar-e-vincular-produto-nfe" data-nota-id="${notaId}" data-item-id="${itemId}">
           <p class="dica">Cadastrando um produto novo (pote, tampa, cápsula, matéria-prima etc.) — se este item já
-          existia no sistema antigo (Ema), use o MESMO nome/código de lá, para ficar fácil de identificar depois.</p>
+          existia no sistema antigo (Ema), use o MESMO nome/código de lá, para ficar fácil de identificar depois.
+          ${tipoSugerido ? ` Tipo pré-selecionado a partir do NCM da nota — confira se está certo.` : ""}</p>
           <div class="campo"><label>Código (opcional — gera automático se deixar em branco)</label><input name="codigo"></div>
-          <div class="campo"><label>Descrição</label><input name="descricao" required></div>
+          <div class="campo"><label>Descrição</label><input name="descricao" value="${escapeHtml(descricaoXml || "")}" required></div>
           <div class="campo"><label>Tipo</label><select name="tipo">${opcoesTipo}</select></div>
-          <div class="campo"><label>Unidade de medida</label><input name="unidade_medida" value="un" required></div>
+          <div class="campo"><label>Unidade de medida</label><input name="unidade_medida" value="${escapeHtml(unidadeSugerida)}" required></div>
+          <div class="campo"><label>Categoria (opcional)</label><input name="categoria" placeholder="ex.: Embalagens, Matérias-primas — só usada para agrupar no Portfólio do App de Vendas"></div>
           <div class="rodape-modal">
             <button type="button" class="botao secundario" data-acao="voltar-vincular-existente-nfe">&larr; Voltar</button>
             <button type="submit" class="botao">Cadastrar e vincular</button>
@@ -18131,7 +18151,10 @@
         modalUploadXmlNfe();
         return;
       case "abrir-vincular-produto-nfe":
-        modalVincularProdutoNfe(Number(alvo.dataset.notaId), Number(alvo.dataset.itemId), alvo.dataset.descricao);
+        modalVincularProdutoNfe(
+          Number(alvo.dataset.notaId), Number(alvo.dataset.itemId), alvo.dataset.descricao,
+          alvo.dataset.unidadeXml, alvo.dataset.tipoSugerido, alvo.dataset.abrirCadastro === "1"
+        );
         return;
       case "mostrar-cadastro-item-nfe":
         document.getElementById("nfe-vincular-existente").hidden = true;
@@ -20334,6 +20357,7 @@
             descricao: dados.get("descricao"),
             tipo: dados.get("tipo"),
             unidade_medida: dados.get("unidade_medida"),
+            categoria: dados.get("categoria") || null,
           },
         });
         state.cache.itens = null; // força recarregar na próxima tela que precisar (Itens, outro vínculo de NF-e)

@@ -148,6 +148,8 @@ def parsear_xml_nfe(xml_texto):
             "valor_total_xml": _numero(prod, "nfe:vProd", padrao=None),
         }
         item.update(_extrair_impostos_item(det.find("nfe:imposto", _NS)))
+        item.update(_extrair_rastro_item(prod))
+        item["tipo_sugerido"] = _sugerir_tipo_por_ncm(item["ncm"])
         itens.append(item)
 
     if not itens:
@@ -167,6 +169,46 @@ def parsear_xml_nfe(xml_texto):
         "valor_outras_despesas": valor_outras_despesas,
         "itens": itens,
     }
+
+
+def _extrair_rastro_item(prod):
+    """Fase 166 (pedido do usuário 2026-09-08) — "lote e validade se não
+    vier automático, mas deixar a opção de alterar manual": a NF-e nacional
+    tem um bloco opcional `<rastro>` (rastreabilidade — lote, quantidade,
+    fabricação, validade) DENTRO de `<prod>`, um por lote quando o
+    fornecedor já separa por lote na própria nota. Só o PRIMEIRO é usado
+    aqui como sugestão (a imensa maioria das notas de matéria-prima/
+    embalagem tem um único lote por item) — quando existir mais de um, o
+    usuário confere/ajusta na tela mesmo, nunca é bloqueado por isso.
+    Muitos emitentes (como vimos numa DANFE real) não usam esta tag e só
+    escrevem lote/validade em texto livre dentro de `<xProd>` — nesse caso
+    não tem como extrair com segurança (formato livre, varia por
+    fornecedor), então simplesmente não sugere nada e o campo fica em
+    branco pro usuário preencher, exatamente como já era antes."""
+    rastro = prod.find("nfe:rastro", _NS)
+    if rastro is None:
+        return {"lote_sugerido": None, "validade_sugerida": None}
+    return {
+        "lote_sugerido": _texto(rastro, "nfe:nLote"),
+        "validade_sugerida": _texto(rastro, "nfe:dVal"),
+    }
+
+
+# Fase 166 — sugestão de tipo de item pro cadastro rápido dentro da tela de
+# NF-e, a partir do NCM do produto. Deliberadamente conservador: só cobre
+# prefixos de NCM inequívocos (nunca chuta entre matéria-prima/produto
+# acabado, que dependem de contexto que o NCM sozinho não garante) — nos
+# demais casos não sugere nada, e o usuário escolhe manualmente (ver
+# feedback_maxima_fidelidade: nunca inventar dado que não dá pra garantir).
+_PREFIXOS_NCM_EMBALAGEM = ("3923", "3924", "4819", "4821")
+
+
+def _sugerir_tipo_por_ncm(ncm):
+    if not ncm:
+        return None
+    if ncm.startswith(_PREFIXOS_NCM_EMBALAGEM):
+        return "embalagem_primaria"
+    return None
 
 
 def _num_opcional(elemento, caminho):
@@ -441,6 +483,23 @@ def _classificar(diferenca_percentual_abs, tolerancia):
     return "divergente"
 
 
+def _preco_ultima_compra(conn, item_id):
+    """Fase 166 (pedido do usuário 2026-09-08) — "a partir da segunda NF-e,
+    informar se o item está mais caro ou mais barato que a última vez
+    comprado". Referência = o lote mais recente já recebido deste item,
+    de QUALQUER fornecedor (o pedido do usuário foi comparar contra "a
+    última vez comprado", não só contra o mesmo fornecedor) — cada lote já
+    guarda `custo_unitario` na unidade interna do item (ver
+    `app/routes/nfe_entrada.py::importar`), então não precisa reprocessar
+    nenhuma nota antiga pra isso."""
+    row = conn.execute(
+        "SELECT custo_unitario, unidade, criado_em FROM lotes WHERE item_id = ? AND custo_unitario IS NOT NULL "
+        "ORDER BY criado_em DESC, id DESC LIMIT 1",
+        (item_id,),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def obter_config(conn):
     row = conn.execute("SELECT * FROM configuracoes_nfe_entrada WHERE id = 1").fetchone()
     if row is None:
@@ -554,6 +613,26 @@ def conferir_item_nota(conn, nfe_item, pedido_compra_id, fornecedor_id, config):
                 ) * 100
                 status_quantidade = _classificar(abs(diferenca_quantidade_percentual), config["tolerancia_quantidade_percentual"])
 
+    # Fase 166 — comparação contra a ÚLTIMA COMPRA (independente de pedido/
+    # cotação existir ou não): "subiu"/"caiu" desde a vez anterior. Só faz
+    # sentido a partir da segunda compra do item — sem lote anterior, fica
+    # None e a tela simplesmente não mostra nada (não é a primeira compra
+    # que "subiu ou desceu", é a primeira, ponto).
+    preco_ultima_compra_convertido = None
+    data_ultima_compra = None
+    diferenca_ultima_compra_absoluta = None
+    diferenca_ultima_compra_percentual = None
+    if item_id:
+        ultima = _preco_ultima_compra(conn, item_id)
+        if ultima:
+            preco_ultima_compra_convertido = converter_preco_unitario(
+                conn, item_id, ultima["custo_unitario"], ultima["unidade"], unidade_interna
+            )
+            data_ultima_compra = ultima["criado_em"]
+            diferenca_ultima_compra_absoluta = preco_nfe_convertido - preco_ultima_compra_convertido
+            if preco_ultima_compra_convertido:
+                diferenca_ultima_compra_percentual = (diferenca_ultima_compra_absoluta / preco_ultima_compra_convertido) * 100
+
     return {
         "item_id": item_id,
         "produto_identificado": item_id is not None,
@@ -569,4 +648,8 @@ def conferir_item_nota(conn, nfe_item, pedido_compra_id, fornecedor_id, config):
         "quantidade_pedida": quantidade_pedida,
         "diferenca_quantidade_percentual": diferenca_quantidade_percentual,
         "status_quantidade": status_quantidade,
+        "preco_ultima_compra": preco_ultima_compra_convertido,
+        "data_ultima_compra": data_ultima_compra,
+        "diferenca_ultima_compra_absoluta": diferenca_ultima_compra_absoluta,
+        "diferenca_ultima_compra_percentual": diferenca_ultima_compra_percentual,
     }

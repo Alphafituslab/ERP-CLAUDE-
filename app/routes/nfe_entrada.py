@@ -77,9 +77,27 @@ def _nota_detalhada(conn, nota_id, incluir_conferencia=True):
         nota["pedido_compra_numero"] = None
 
     itens = _itens_da_nota(conn, nota_id)
+
+    # Fase 166 — sugestão de lote/validade (tag <rastro>, quando o
+    # fornecedor a preenche) e de tipo de item (por NCM) pro cadastro
+    # rápido dentro desta tela. Só antes de importar — depois disso o lote
+    # de verdade já foi gerado, e o XML original nem precisa ser relido de
+    # novo (custo à toa numa nota que não muda mais).
+    dados_xml_por_numero_item = {}
+    if nota["situacao_interna"] != "importada" and nota.get("xml_original"):
+        try:
+            dados_xml = servico.parsear_xml_nfe(servico.decodificar_xml_bytes(nota["xml_original"]))
+            dados_xml_por_numero_item = {i["numero_item"]: i for i in dados_xml["itens"]}
+        except ApiError:
+            pass  # XML nunca deveria estar inválido a esta altura — se estiver, só não sugere nada.
+
     if incluir_conferencia:
         config = servico.obter_config(conn)
         for item in itens:
+            sugestoes_xml = dados_xml_por_numero_item.get(item["numero_item"], {})
+            item["lote_sugerido"] = sugestoes_xml.get("lote_sugerido")
+            item["validade_sugerida"] = sugestoes_xml.get("validade_sugerida")
+            item["tipo_sugerido"] = sugestoes_xml.get("tipo_sugerido")
             if item["item_id"]:
                 item_row = conn.execute("SELECT descricao, unidade_medida FROM itens WHERE id = ?", (item["item_id"],)).fetchone()
                 item["item_descricao"] = item_row["descricao"] if item_row else None

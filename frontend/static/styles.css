@@ -188,6 +188,7 @@ body::before {
 
 /* Fase 160 — destaca valor negativo em tabela de histórico financeiro. */
 .texto-vermelho { color: var(--vermelho); }
+.texto-verde { color: var(--verde); }
 
 .campo { margin-bottom: 16px; }
 
