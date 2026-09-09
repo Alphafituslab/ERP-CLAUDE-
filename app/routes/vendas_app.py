@@ -590,6 +590,21 @@ def duplicar_pedido(pedido_origem_id):
             status=409, codigo="rascunho_ja_aberto",
         )
     origem = _pedido_ou_404(conn, pedido_origem_id)
+    cliente = _cliente_ou_404(conn, origem["cliente_id"])
+
+    # Achado de auditoria de segurança: sem esta checagem, QUALQUER vendedor
+    # (só precisa de vendas_app.usar, a permissão básica de todo mundo que
+    # usa o app) conseguia duplicar o pedido de OUTRO vendedor só sabendo o
+    # id (sequencial) — lia cliente, itens e PREÇO NEGOCIADO de um cliente
+    # que não é dele, e ainda criava um pedido novo em nome próprio contra
+    # esse mesmo cliente. Mesma fronteira "vendedor responsável do cliente"
+    # que o resto deste arquivo já respeita (ver `_saldo_credito_vendedor_
+    # disponivel`/crédito pessoal, e `_sessao_do_pedido_ou_erro` para
+    # rascunhos) — origem_do_pedido isolado não bastava, o que importa é de
+    # quem é o CLIENTE.
+    if cliente["vendedor_responsavel_id"] != usuario_atual["id"]:
+        raise ForbiddenError("Você só pode duplicar pedidos de clientes pelos quais é responsável.")
+
     itens_origem = conn.execute(
         "SELECT item_id, quantidade, unidade, preco_unitario FROM pedido_venda_itens WHERE pedido_id = ? ORDER BY id",
         (pedido_origem_id,),
@@ -597,7 +612,6 @@ def duplicar_pedido(pedido_origem_id):
     if not itens_origem:
         raise ApiError("Este pedido não tem itens para duplicar.", status=400)
 
-    cliente = _cliente_ou_404(conn, origem["cliente_id"])
     if cliente["status"] != "ativo":
         raise ApiError("Não é possível duplicar: o cliente deste pedido está inativo.", status=400)
 

@@ -201,16 +201,45 @@ def verificar_2fa():
         raise AuthError("Usuário não encontrado.")
     usuario = dict(usuario)
 
+    # Achado de auditoria de segurança: esta rota não tinha NENHUM limite de
+    # tentativas — um atacante que já soubesse a senha (vazada em outro
+    # lugar) podia testar os 6 dígitos do TOTP à vontade dentro da janela do
+    # login_ticket (5 min), e simplesmente pedir um ticket novo quando
+    # expirasse (só precisa da senha, que ele já tem). Reaproveita o MESMO
+    # bloqueio por conta já usado em /auth/login (`tentativas_login_falhas`/
+    # `bloqueado_ate`) — como um login bem-sucedido já zera esse contador
+    # antes de emitir o login_ticket, chegar aqui sempre começa do zero; e,
+    # por ser o MESMO campo, um bloqueio por 2FA também impede logar de novo
+    # com a senha enquanto durar (fecha o "só pego outro ticket" acima).
+    if usuario["bloqueado_ate"]:
+        bloqueado_ate = _parse_iso(usuario["bloqueado_ate"])
+        if bloqueado_ate > _now():
+            raise ApiError(
+                f"Conta temporariamente bloqueada por excesso de tentativas. Tente novamente após "
+                f"{usuario['bloqueado_ate']}.",
+                status=423, codigo="conta_bloqueada",
+            )
+
     if not usuario["dois_fatores_ativo"] or not usuario["dois_fatores_secret"]:
         raise ApiError("Este usuário não tem 2FA ativo.", status=400)
 
     if not security.verificar_totp(usuario["dois_fatores_secret"], codigo):
+        tentativas = usuario["tentativas_login_falhas"] + 1
+        bloqueado_ate = None
+        if tentativas >= MAX_TENTATIVAS_LOGIN:
+            bloqueado_ate = _iso(_now() + datetime.timedelta(minutes=BLOQUEIO_MINUTOS))
+        conn.execute(
+            "UPDATE usuarios SET tentativas_login_falhas = ?, bloqueado_ate = ? WHERE id = ?",
+            (tentativas, bloqueado_ate, usuario_id),
+        )
         audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
-                         acao="login_2fa_falhou", ip=ip, dispositivo=dispositivo)
+                         acao="login_2fa_falhou", motivo=f"código incorreto (tentativa {tentativas})",
+                         ip=ip, dispositivo=dispositivo)
         raise AuthError("Código de dois fatores inválido.")
 
     conn.execute(
-        "UPDATE usuarios SET ultimo_login_em = ?, ultimo_login_ip = ? WHERE id = ?",
+        "UPDATE usuarios SET tentativas_login_falhas = 0, bloqueado_ate = NULL, "
+        "ultimo_login_em = ?, ultimo_login_ip = ? WHERE id = ?",
         (_iso(_now()), ip, usuario_id),
     )
     tokens = _emitir_tokens(conn, usuario_id, ip, dispositivo)

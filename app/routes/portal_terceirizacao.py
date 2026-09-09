@@ -470,7 +470,16 @@ def assinar_portal(token):
     navegador = (request.headers.get("User-Agent") or "")[:500]
     versao_atual = projeto["versao"]
 
-    snapshot = {"projeto": projeto_detalhado, "nutricao": nutricao}
+    # Achado de auditoria de segurança: esta rota inteira dava NameError
+    # ("nutricao" não existe) toda vez que era chamada — assinatura
+    # eletrônica 100% quebrada em produção. Resquício de quando o projeto
+    # tinha um item único (`nutricao = tc._nutricao_para_item(conn,
+    # projeto["item_id"])`, ver git log); a Fase 146 (múltiplos itens por
+    # projeto) já embute a nutrição de cada item dentro de
+    # `projeto_detalhado["itens"][*]["nutricao"]` (via
+    # `_item_projeto_hidratado`) — não sobrou nenhum "item único" para
+    # calcular separado, então a chave redundante só é removida.
+    snapshot = {"projeto": projeto_detalhado}
     conn.execute(
         """
         INSERT INTO terceirizacao_versoes
