@@ -38,6 +38,20 @@ from ..pdf_marca import desenhar_cabecalho_logo
 from ..permissions import requires_permission
 from . import memorial_pdf_campos as campos_pdf
 
+# Achado de auditoria de segurança (Fase 168): `enviar_anexo` aceitava
+# QUALQUER `tipo_mime` informado pelo cliente, sem checar contra nada — a
+# própria tela (`modalNovoAnexoMemorial` em app.js) só deixa escolher PDF/
+# Word (`accept=".pdf,.doc,.docx"`), mas isso é só uma dica visual do
+# navegador, nunca impede uma chamada direta à API. Mesmo padrão de
+# allowlist já usado em clientes_documentos.py/portal_terceirizacao.py/
+# terceirizacao.py, restrito aos tipos que a tela deste módulo realmente
+# oferece.
+TIPOS_MIME_PERMITIDOS_MEMORIAL = (
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+)
+
 bp = Blueprint("memorial_anexos", __name__, url_prefix="/api/v1/memorial")
 
 # Mesmo limite do sistema original (documentos como laudos e
@@ -106,6 +120,11 @@ def enviar_anexo(memorial_id):
     if not nome_arquivo:
         raise ApiError("Informe nome_arquivo.", status=400)
     tipo_mime = (dados_entrada.get("tipo_mime") or "application/octet-stream").strip()
+    if tipo_mime not in TIPOS_MIME_PERMITIDOS_MEMORIAL:
+        raise ApiError(
+            f"Tipo de arquivo não permitido: {tipo_mime}. Envie PDF ou Word (.doc/.docx).",
+            status=400,
+        )
     conteudo_base64 = dados_entrada.get("dados") or ""
     if not conteudo_base64:
         raise ApiError("Informe o conteúdo do arquivo em base64 (campo 'dados').", status=400)

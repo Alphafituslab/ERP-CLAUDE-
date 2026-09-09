@@ -16,6 +16,17 @@ REFRESH_TOKEN_TTL_DIAS = 7
 RECUPERACAO_SENHA_TTL_MINUTOS = 30
 RECUPERACAO_SENHA_INTERVALO_MINIMO_MINUTOS = 2
 
+# Fase 168 (achado de auditoria de segurança) — o bloqueio acima
+# (MAX_TENTATIVAS_LOGIN/BLOQUEIO_MINUTOS) é só POR CONTA: testar 1 senha
+# comum contra muitos e-mails diferentes (password spraying) nunca aciona
+# nada, porque cada conta só vê 1 tentativa falha. Limiar bem mais folgado
+# que o de conta — não é pra incomodar o uso normal (vários funcionários no
+# mesmo IP de escritório errando a própria senha de vez em quando), só
+# travar quem está testando muitas contas em sequência automatizada.
+MAX_TENTATIVAS_LOGIN_POR_IP = 30
+JANELA_TENTATIVAS_IP_MINUTOS = 15
+BLOQUEIO_IP_MINUTOS = 15
+
 
 def _now():
     return datetime.datetime.utcnow()
@@ -41,6 +52,57 @@ def _criar_sessao(conn, usuario_id, ip, dispositivo):
         (usuario_id, token_hash, ip, dispositivo, expira_em),
     )
     return refresh_token, cur.lastrowid
+
+
+def _checar_bloqueio_ip(conn, ip):
+    """Fase 168 — chamado ANTES de qualquer outra checagem em /auth/login,
+    pra barrar password spraying (ver constantes acima). `ip` pode vir
+    vazio/None em ambiente de teste sem proxy — nesse caso não há o que
+    rastrear, então não bloqueia (mesma postura de client_ip() em
+    app/context.py, que já devolve None quando não dá pra identificar)."""
+    if not ip:
+        return
+    linha = conn.execute("SELECT * FROM tentativas_login_ip WHERE ip = ?", (ip,)).fetchone()
+    if linha is None:
+        return
+    if linha["bloqueado_ate"] and _parse_iso(linha["bloqueado_ate"]) > _now():
+        raise ApiError(
+            f"Muitas tentativas de login vindas deste endereço. Tente novamente após {linha['bloqueado_ate']}.",
+            status=429, codigo="ip_bloqueado",
+        )
+
+
+def _registrar_tentativa_ip(conn, ip, sucesso):
+    """Incrementa (ou reseta, numa janela deslizante) o contador de
+    tentativas falhas deste IP — chamado em TODO desfecho de /auth/login
+    (email não encontrado, status inválido, senha errada, ou sucesso),
+    nunca só nos casos "óbvios" de senha incorreta, senão um atacante
+    descobriria que só um dos vários erros conta e ajustaria o ataque."""
+    if not ip:
+        return
+    agora = _now()
+    linha = conn.execute("SELECT * FROM tentativas_login_ip WHERE ip = ?", (ip,)).fetchone()
+
+    if sucesso:
+        if linha is not None:
+            conn.execute("UPDATE tentativas_login_ip SET tentativas = 0, bloqueado_ate = NULL WHERE ip = ?", (ip,))
+        return
+
+    if linha is None or _parse_iso(linha["janela_inicio"]) < agora - datetime.timedelta(minutes=JANELA_TENTATIVAS_IP_MINUTOS):
+        # Sem registro ainda, ou a janela anterior já expirou — começa do zero.
+        conn.execute(
+            "INSERT INTO tentativas_login_ip (ip, tentativas, janela_inicio, bloqueado_ate) VALUES (?, 1, ?, NULL) "
+            "ON CONFLICT(ip) DO UPDATE SET tentativas = 1, janela_inicio = excluded.janela_inicio, bloqueado_ate = NULL",
+            (ip, _iso(agora)),
+        )
+        return
+
+    tentativas = linha["tentativas"] + 1
+    bloqueado_ate = _iso(agora + datetime.timedelta(minutes=BLOQUEIO_IP_MINUTOS)) if tentativas >= MAX_TENTATIVAS_LOGIN_POR_IP else None
+    conn.execute(
+        "UPDATE tentativas_login_ip SET tentativas = ?, bloqueado_ate = ? WHERE ip = ?",
+        (tentativas, bloqueado_ate, ip),
+    )
 
 
 DISPOSITIVO_CONFIAVEL_2FA_TTL_HORAS = 24
@@ -103,10 +165,17 @@ def login():
     if not email or not senha:
         raise ApiError("Informe email e senha.", status=400)
 
+    # Achado de auditoria de segurança (Fase 168): checado ANTES de tocar
+    # em qualquer conta específica — o bloqueio por conta logo abaixo não
+    # pega password spraying (1 senha comum testada contra muitos e-mails
+    # diferentes), já que cada conta só veria 1 tentativa falha.
+    _checar_bloqueio_ip(conn, ip)
+
     usuario = conn.execute("SELECT * FROM usuarios WHERE email = ?", (email,)).fetchone()
 
     if usuario is None:
         # Não revela se o e-mail existe ou não.
+        _registrar_tentativa_ip(conn, ip, sucesso=False)
         audit.registrar(conn, tabela="usuarios", registro_id=None, usuario_id=None,
                          acao="login_falhou", motivo=f"email não encontrado: {email}", ip=ip, dispositivo=dispositivo)
         raise AuthError("Email ou senha inválidos.")
@@ -114,6 +183,7 @@ def login():
     usuario = dict(usuario)
 
     if usuario["status"] != "ativo":
+        _registrar_tentativa_ip(conn, ip, sucesso=False)
         audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                          acao="login_negado_status", motivo=f"status={usuario['status']}", ip=ip, dispositivo=dispositivo)
         raise AuthError("Usuário inativo ou bloqueado. Fale com um administrador.")
@@ -128,6 +198,7 @@ def login():
             )
 
     if not security.verify_password(senha, usuario["senha_hash"]):
+        _registrar_tentativa_ip(conn, ip, sucesso=False)
         tentativas = usuario["tentativas_login_falhas"] + 1
         bloqueado_ate = None
         if tentativas >= MAX_TENTATIVAS_LOGIN:
@@ -141,7 +212,8 @@ def login():
                          ip=ip, dispositivo=dispositivo)
         raise AuthError("Email ou senha inválidos.")
 
-    # Senha correta: zera contador de tentativas.
+    # Senha correta: zera contador de tentativas (da conta E deste IP).
+    _registrar_tentativa_ip(conn, ip, sucesso=True)
     conn.execute(
         "UPDATE usuarios SET tentativas_login_falhas = 0, bloqueado_ate = NULL WHERE id = ?",
         (usuario["id"],),
