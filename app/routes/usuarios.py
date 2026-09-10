@@ -74,6 +74,8 @@ def criar():
 
     if not nome or not email or not senha:
         raise ApiError("Informe nome, email e senha.", status=400)
+    if not security.email_valido(email):
+        raise ApiError("Informe um e-mail válido.", status=400)
 
     problemas = security.validar_politica_senha(senha)
     if problemas:
@@ -132,6 +134,8 @@ def editar(usuario_id):
 
     nome = dados.get("nome", row["nome"])
     email = (dados.get("email", row["email"]) or "").strip().lower()
+    if not security.email_valido(email):
+        raise ApiError("Informe um e-mail válido.", status=400)
 
     conn.execute(
         "UPDATE usuarios SET nome = ?, email = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",

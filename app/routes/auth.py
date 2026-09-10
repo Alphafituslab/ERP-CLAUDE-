@@ -741,7 +741,7 @@ def trocar_email():
 
     if not security.verify_password(senha_atual, usuario["senha_hash"]):
         raise ApiError("Senha atual incorreta.", status=400)
-    if not email_novo or "@" not in email_novo:
+    if not security.email_valido(email_novo):
         raise ApiError("Informe um e-mail válido.", status=400)
 
     existente = conn.execute(

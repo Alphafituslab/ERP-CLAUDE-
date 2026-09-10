@@ -195,6 +195,15 @@ def _persistir_variavel_config_ambiente(chave, valor):
     (arquivo ausente/sem permissão) não derruba a sincronização em si —
     só fica registrado no log; o valor em memória já está certo até o
     próximo reinício."""
+    # Fase 170 (endurecimento) — defesa em profundidade: `valor` vira uma
+    # linha `set "CHAVE=<valor>"` neste .bat, que roda no próximo boot.
+    # A rota `/auth/trocar-email` já valida o formato do e-mail antes de
+    # chegar aqui, mas rejeitar aspas/quebra de linha AQUI também garante
+    # que nenhum caminho futuro consiga injetar uma linha `set` extra
+    # (ex.: sobrescrever ALPHAFITUS_JWT_SECRET no próximo início).
+    if valor is None or any(c in str(valor) for c in ('"', "\n", "\r", "\0")):
+        logger.warning("Recusado persistir %s com valor contendo caractere perigoso", chave)
+        return
     caminho = os.path.join(_pasta_instalacao(), "config_ambiente.bat")
     try:
         if not os.path.isfile(caminho):

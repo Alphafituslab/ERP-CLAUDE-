@@ -11,6 +11,7 @@ import base64
 import hashlib
 import hmac
 import os
+import re
 import secrets
 import struct
 import time
@@ -41,6 +42,27 @@ def verify_password(senha: str, senha_hash: str) -> bool:
         return False
     derived = hashlib.pbkdf2_hmac("sha256", senha.encode("utf-8"), salt, iterations)
     return hmac.compare_digest(derived, expected)
+
+
+# Fase 170 (achado de auditoria de segurança) — validação de e-mail de
+# verdade, não só "tem um @". O e-mail do admin (id=1) é sincronizado pros
+# outros sistemas e, quando isso acontece, gravado como `set "VAR=<email>"`
+# dentro de `config_ambiente.bat` (ver senha_sync_service._persistir_
+# variavel_config_ambiente) — um e-mail com `"` + quebra de linha
+# conseguia injetar uma linha `set "ALPHAFITUS_JWT_SECRET=..."` extra
+# nesse arquivo, que roda no próximo boot. Regex deliberadamente
+# conservador (sem espaço, sem aspas, sem caractere de controle) — cobre
+# e-mail real e barra o que interessa.
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$")
+EMAIL_TAMANHO_MAXIMO = 254
+
+
+def email_valido(email: str) -> bool:
+    if not email or len(email) > EMAIL_TAMANHO_MAXIMO:
+        return False
+    if any(c in email for c in ('"', "'", "\n", "\r", "\t", " ", "\\", ";", "\0")):
+        return False
+    return bool(_EMAIL_RE.match(email))
 
 
 def validar_politica_senha(senha: str):

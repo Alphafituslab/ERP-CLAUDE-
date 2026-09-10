@@ -49,6 +49,12 @@ def heartbeat():
     terminal_uid = (dados.get("terminal_uid") or "").strip()
     if not terminal_uid:
         raise ApiError("Informe terminal_uid.", status=400)
+    # Fase 170 (endurecimento) — o front gera este uid como um UUID
+    # (~36 chars, ver alphafitus_terminal_uid em app.js); limitar o tamanho
+    # evita que uma sessão autenticada encha a tabela `terminais`/trilha de
+    # auditoria com uids gigantes/arbitrários.
+    if len(terminal_uid) > 100:
+        raise ApiError("terminal_uid inválido.", status=400)
     versao_app = (dados.get("versao_app") or "").strip() or None
     nome_sugerido = (dados.get("nome") or "").strip() or None
 
