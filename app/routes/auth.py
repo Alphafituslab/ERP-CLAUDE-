@@ -419,6 +419,16 @@ def refresh():
     if _parse_iso(sessao["expira_em"]) <= _now():
         raise AuthError("Refresh token expirado. Faça login novamente.")
 
+    # Fase 169 (endurecimento) — defesa em profundidade: se a conta foi
+    # inativada/bloqueada, o refresh falha na hora em vez de ficar
+    # rotacionando tokens (que o `get_current_user` já rejeitaria a cada
+    # request de qualquer jeito, mas sem isto o `sessoes`/trilha de
+    # auditoria enchia de ruído e a sessão nunca "morria" sozinha).
+    usuario_sessao = conn.execute("SELECT status FROM usuarios WHERE id = ?", (sessao["usuario_id"],)).fetchone()
+    if usuario_sessao is None or usuario_sessao["status"] != "ativo":
+        conn.execute("UPDATE sessoes SET revogado = 1, revogado_em = ? WHERE id = ?", (_iso(_now()), sessao["id"]))
+        raise AuthError("Conta inativa ou bloqueada. Faça login novamente.")
+
     # Rotação: revoga o token usado e emite um novo par.
     conn.execute(
         "UPDATE sessoes SET revogado = 1, revogado_em = ?, revogado_por = ? WHERE id = ?",
@@ -667,6 +677,17 @@ def trocar_senha():
     conn.execute(
         "UPDATE usuarios SET senha_hash = ?, senha_deve_trocar = 0, senha_trocada_em = ? WHERE id = ?",
         (novo_hash, _iso(_now()), usuario["id"]),
+    )
+    # Fase 169 (endurecimento) — trocar a senha logado agora derruba TODAS
+    # as sessões (a atual inclusive — o front cai na tela de login e a
+    # pessoa entra com a senha nova). O `/auth/redefinir-senha` (esqueci a
+    # senha) já fazia isso desde a Fase 158; este fluxo não fazia, então
+    # uma sessão de um atacante que tinha a senha antiga continuava viva por
+    # até 7 dias mesmo depois da vítima trocar a senha — que é justamente o
+    # que se faz ao desconfiar de invasão.
+    conn.execute(
+        "UPDATE sessoes SET revogado = 1, revogado_em = ? WHERE usuario_id = ? AND revogado = 0",
+        (_iso(_now()), usuario["id"]),
     )
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                      acao="senha_alterada", ip=client_ip(), dispositivo=client_device())

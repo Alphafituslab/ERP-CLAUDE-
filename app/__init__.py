@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "168.0"
+VERSAO_SISTEMA = "169.0"
 
 
 def create_app(test_config: dict = None) -> Flask:
@@ -28,6 +28,45 @@ def create_app(test_config: dict = None) -> Flask:
     @app.teardown_appcontext
     def _teardown(exception=None):
         close_db(exception)
+
+    # Fase 169 (endurecimento de segurança) — cabeçalhos de segurança em
+    # TODA resposta. Antes só existiam no Caddy do erp.alphafitus.com.br
+    # (VPS) — uma instalação "Servidor" local no Windows (Waitress, sem
+    # Caddy na frente) não recebia nenhum. E CSP não existia em lugar
+    # nenhum: como o token de login vive no localStorage (modelo Bearer),
+    # um único XSS hoje = conta roubada; a CSP abaixo corta o canal de
+    # exfiltração (`connect-src 'self'` impede o JS injetado de mandar o
+    # token pra fora). O frontend é 100% self-contained (nenhum script/
+    # fonte/CDN externo — conferido), então `default-src 'self'` não quebra
+    # nada; `style-src` mantém 'unsafe-inline' só porque o app usa
+    # `style="..."` inline em centenas de lugares (injeção de estilo é
+    # baixo risco, não roda código). HSTS fica só no proxy HTTPS (mandar
+    # HSTS de uma instalação local em HTTP puro seria errado).
+    _CSP = (
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data: blob:; "
+        "font-src 'self'; "
+        "connect-src 'self'; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'self'; "
+        "form-action 'self'"
+    )
+
+    @app.after_request
+    def _cabecalhos_seguranca(resposta):
+        resposta.headers.setdefault("Content-Security-Policy", _CSP)
+        resposta.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resposta.headers.setdefault("X-Frame-Options", "SAMEORIGIN")
+        resposta.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+        # geolocation liberada só pra própria origem (check-in de visita do
+        # App de Vendas, Fase 150); câmera/microfone/pagamento bloqueados.
+        resposta.headers.setdefault(
+            "Permissions-Policy", "geolocation=(self), camera=(), microphone=(), payment=()"
+        )
+        return resposta
 
     @app.errorhandler(ApiError)
     def _handle_api_error(err: ApiError):

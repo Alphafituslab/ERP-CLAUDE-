@@ -14,7 +14,6 @@
      ícone/manifest próprios. window.__ORIGEM_APP__ abaixo é lido pela
      tela de login (app.js) pra decidir qual marca mostrar — sem esse
      marcador (quem acessa por "/" normalmente), continua "Alphafitus OS". -->
-<script>window.__ORIGEM_APP__ = "vendas";</script>
 <link rel="manifest" href="/manifest_vendas.json">
 <meta name="theme-color" content="#00875f">
 <link rel="icon" href="/static/icons/icon-192.png">
@@ -24,7 +23,7 @@
 <meta name="apple-mobile-web-app-title" content="Alpha Connect">
 <meta name="mobile-web-app-capable" content="yes">
 </head>
-<body>
+<body data-origem-app="vendas">
 <div id="app">
   <div class="carregando">Carregando…</div>
 </div>

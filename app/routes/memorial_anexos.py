@@ -19,6 +19,7 @@ import binascii
 import datetime
 import functools
 import io
+import re
 
 import img2pdf
 from flask import Blueprint, Response, g, jsonify, request
@@ -51,6 +52,15 @@ TIPOS_MIME_PERMITIDOS_MEMORIAL = (
     "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
 )
+
+
+def _nome_arquivo_seguro(nome_arquivo):
+    """Fase 169 (endurecimento) — mesmo cuidado que `clientes_documentos.py`
+    já tinha e este módulo (Fase 27) nunca teve: sem sanitizar, um nome de
+    arquivo com aspas podia quebrar o atributo `filename` do cabeçalho
+    Content-Disposition da resposta de download."""
+    nome = re.sub(r"[^A-Za-z0-9._-]+", "_", nome_arquivo or "documento").strip("_") or "documento"
+    return nome[:200]
 
 bp = Blueprint("memorial_anexos", __name__, url_prefix="/api/v1/memorial")
 
@@ -180,7 +190,7 @@ def baixar_anexo(memorial_id, anexo_id):
     return Response(
         bruto,
         mimetype=anexo["tipo_mime"] or "application/octet-stream",
-        headers={"Content-Disposition": f'attachment; filename="{anexo["nome_arquivo"]}"'},
+        headers={"Content-Disposition": f'attachment; filename="{_nome_arquivo_seguro(anexo["nome_arquivo"])}"'},
     )
 
 

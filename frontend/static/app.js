@@ -13,6 +13,13 @@
 (function () {
   "use strict";
 
+  // Fase 169 (endurecimento de segurança) — a CSP nova (`script-src 'self'`,
+  // ver app/__init__.py) bloqueia qualquer <script> inline. `vendas.html`
+  // marcava a origem com um `<script>window.__ORIGEM_APP__="vendas"</script>`
+  // no <head>; agora esse marcador vem de `<body data-origem-app="vendas">`
+  // e é lido aqui (script `defer`, então document.body já existe).
+  window.__ORIGEM_APP__ = (document.body && document.body.dataset.origemApp) || window.__ORIGEM_APP__;
+
   const API = "/api/v1";
   const app = document.getElementById("app");
 
@@ -1236,6 +1243,13 @@
     if (e.target.closest(".busca-global")) return;
     const resultados = document.getElementById("busca-global-resultados");
     if (resultados) resultados.hidden = true;
+  });
+
+  // Fase 169 — "clicar seleciona tudo" nos campos de link somente-leitura
+  // (era `data-selecionar-ao-clicar` inline, bloqueado pela CSP nova).
+  document.addEventListener("click", (e) => {
+    const campo = e.target.closest("input[data-selecionar-ao-clicar]");
+    if (campo) campo.select();
   });
 
   document.addEventListener("submit", async (e) => {
@@ -11642,7 +11656,7 @@
              ${linkCliente.ultimo_acesso_em ? ` — último acesso ${fmtData(linkCliente.ultimo_acesso_em)}` : " — cliente ainda não abriu"}
              ${!linkCliente.expirado ? ` — expira em ${fmtData(linkCliente.expira_em)}` : ""}</p>
           <div class="campo" style="display:flex;gap:8px;align-items:center;">
-            <input type="text" readonly value="${escapeHtml(linkCliente.url)}" style="flex:1;font-size:12px;" onclick="this.select()">
+            <input type="text" readonly value="${escapeHtml(linkCliente.url)}" style="flex:1;font-size:12px;" data-selecionar-ao-clicar>
           </div>
           ${temPermissao("terceirizacao", "criar") ? `
             <div style="display:flex;gap:8px;">
@@ -12709,7 +12723,7 @@
               ${link.ultimo_acesso_em ? ` — último acesso ${fmtData(link.ultimo_acesso_em)}` : " — cliente ainda não abriu"}
               ${!link.expirado ? ` — expira em ${fmtData(link.expira_em)}` : ""}</p>
            <div class="campo" style="display:flex;gap:8px;align-items:center;">
-             <input type="text" readonly value="${escapeHtml(link.url)}" style="flex:1;font-size:12px;" onclick="this.select()">
+             <input type="text" readonly value="${escapeHtml(link.url)}" style="flex:1;font-size:12px;" data-selecionar-ao-clicar>
            </div>
            ${podeGerenciar ? `
              <div style="display:flex;gap:8px;">

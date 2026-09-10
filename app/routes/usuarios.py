@@ -193,6 +193,21 @@ def inativar(usuario_id):
         "UPDATE usuarios SET status = 'inativo', atualizado_em = ?, atualizado_por = ? WHERE id = ?",
         (_now_iso(), usuario_atual["id"], usuario_id),
     )
+    # Fase 169 (endurecimento) — inativar agora derruba na hora tudo que
+    # aquele usuário tinha ativo: sessões (refresh tokens) e dispositivos
+    # confiáveis de 2FA. Antes, o único freio era o `get_current_user`
+    # rejeitar cada request pelo `status` — mas o refresh continuava
+    # rotacionando token, o dispositivo confiável seguia válido por 24h, e
+    # se a conta fosse REATIVADA tudo isso ressuscitava. Mesma coisa que já
+    # é feita ao trocar/redefinir senha.
+    conn.execute(
+        "UPDATE sessoes SET revogado = 1, revogado_em = ?, revogado_por = ? WHERE usuario_id = ? AND revogado = 0",
+        (_now_iso(), usuario_atual["id"], usuario_id),
+    )
+    conn.execute(
+        "UPDATE dispositivos_confiaveis_2fa SET revogado = 1 WHERE usuario_id = ? AND revogado = 0",
+        (usuario_id,),
+    )
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_atual["id"],
                      acao="usuario_inativado", valor_anterior={"status": row["status"]}, valor_novo={"status": "inativo"},
                      ip=client_ip(), dispositivo=client_device())

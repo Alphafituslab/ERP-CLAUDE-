@@ -541,7 +541,7 @@ def baixar_arte_portal(token, versao):
     except (binascii.Error, ValueError):
         raise ApiError("Arquivo corrompido.", status=500)
     return Response(bruto, mimetype=arte["tipo_mime"],
-                     headers={"Content-Disposition": f"inline; filename=\"{arte['nome_arquivo']}\""})
+                     headers={"Content-Disposition": f"inline; filename=\"{tc._nome_arquivo_seguro(arte['nome_arquivo'])}\""})
 
 
 @bp.post("/<token>/artes/<int:versao>/decidir")
