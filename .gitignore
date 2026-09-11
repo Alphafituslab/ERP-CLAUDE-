@@ -18,6 +18,8 @@ demo_log*.txt
 # código-fonte, nunca precisa ir pro controle de versão.
 installer/dist/
 installer/build/
+/build/
+/dist/
 installer/saida/
 backups_manuais/
 # Fase 138 — chave PRIVADA do túnel SSH reverso do Portal do Cliente

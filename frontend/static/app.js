@@ -728,13 +728,19 @@
         {
           tipo: "subgrupo", chave: "subgrupo-shelf-life", nome: "Shelf Life",
           itens: [
-            { rota: "https://whatts.alphafitus.com.br:8444", chave: "memorial", label: "Memorial Técnico", abrirNovaAba: true, permissao: ["memoriais", "visualizar"] },
-            { rota: "https://whatts.alphafitus.com.br:8443", chave: "protocolo-estabilidade", label: "Protocolo de Estabilidade", abrirNovaAba: true },
+            // SSO (pedido do usuário): clicar aqui não abre mais a URL direto
+            // — `ssoNovaAba`/`ssoSistema` fazem o clique passar primeiro por
+            // `/api/v1/sso/<sistema>` (App.js:case "abrir-sso"), que devolve
+            // uma URL de uso único já autenticada pro sistema externo. Cada
+            // um só aparece pra quem tiver a permissão — antes Protocolo e
+            // HPLC ficavam visíveis pra QUALQUER usuário logado.
+            { rota: "https://whatts.alphafitus.com.br:8444", chave: "memorial", label: "Memorial Técnico", ssoNovaAba: true, ssoSistema: "memorial", permissao: ["memoriais", "visualizar"] },
+            { rota: "https://whatts.alphafitus.com.br:8443", chave: "protocolo-estabilidade", label: "Protocolo de Estabilidade", ssoNovaAba: true, ssoSistema: "protocolo", permissao: ["protocolo_estabilidade", "visualizar"] },
             // Fase HPLC (pedido do usuário 2026-09-08) — separado do
             // Protocolo de Estabilidade: banco de dados e login PRÓPRIOS
             // (mesmo backend de código, mesmo padrão de implantação de
             // Memorial/Protocolo acima), container próprio no VPS.
-            { rota: "https://whatts.alphafitus.com.br:8445", chave: "hplc-treinador", label: "Treinador de HPLC", abrirNovaAba: true, apelidos: ["hplc", "cromatografia", "chemstation"] },
+            { rota: "https://whatts.alphafitus.com.br:8445", chave: "hplc-treinador", label: "Treinador de HPLC", ssoNovaAba: true, ssoSistema: "hplc", permissao: ["hplc_treinador", "visualizar"], apelidos: ["hplc", "cromatografia", "chemstation"] },
           ],
         },
       ],
@@ -910,7 +916,7 @@
           return;
         }
         if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return;
-        indice.push({ caminho, label: it.label, rota: it.rota, chave: it.chave, abrirNovaAba: it.abrirNovaAba, apelidos: it.apelidos || [] });
+        indice.push({ caminho, label: it.label, rota: it.rota, chave: it.chave, abrirNovaAba: it.abrirNovaAba, ssoNovaAba: it.ssoNovaAba, ssoSistema: it.ssoSistema, apelidos: it.apelidos || [] });
       });
     }
     visitar(ITENS_MENU, []);
@@ -1024,7 +1030,9 @@
               const netosVisiveis = sub.itens.filter((neto) => !neto.permissao || temPermissao(neto.permissao[0], neto.permissao[1]));
               const subAberto = state.gruposMenuAbertos[sub.chave] === true;
               const netosHtml = netosVisiveis
-                .map((neto) => `<a class="link-nav barra-lateral-subitem barra-lateral-subitem-nivel2 ${neto.chave === paginaAtiva ? "ativo" : ""}" href="${neto.rota}"${neto.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>${neto.label}</a>`)
+                .map((neto) => neto.ssoNovaAba
+                  ? `<a class="link-nav barra-lateral-subitem barra-lateral-subitem-nivel2 ${neto.chave === paginaAtiva ? "ativo" : ""}" href="#" data-acao="abrir-sso" data-sistema="${neto.ssoSistema}">${neto.label}</a>`
+                  : `<a class="link-nav barra-lateral-subitem barra-lateral-subitem-nivel2 ${neto.chave === paginaAtiva ? "ativo" : ""}" href="${neto.rota}"${neto.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>${neto.label}</a>`)
                 .join("");
               return `<details class="barra-lateral-subgrupo" data-subgrupo="${sub.chave}" ${subAberto ? "open" : ""}>
                 <summary>${escapeHtml(sub.nome)}</summary>
@@ -1042,7 +1050,12 @@
       if (it.permissao && !temPermissao(it.permissao[0], it.permissao[1])) return "";
       // Fase 123 (Parte 2) — "abrirNovaAba" é opt-in (só o item do
       // WhatsApp usa até agora): os demais itens continuam navegando
-      // dentro da própria SPA por hash, sem abrir aba nova.
+      // dentro da própria SPA por hash, sem abrir aba nova. "ssoNovaAba"
+      // é parecido, mas passa primeiro por /api/v1/sso (ver "abrir-sso"
+      // em tratarAcao) antes de abrir a aba nova já autenticada.
+      if (it.ssoNovaAba) {
+        return `<a class="link-nav ${it.chave === paginaAtiva ? "ativo" : ""}" href="#" data-acao="abrir-sso" data-sistema="${it.ssoSistema}">${it.label}</a>`;
+      }
       return `<a class="link-nav ${it.chave === paginaAtiva ? "ativo" : ""}" href="${it.rota}"${it.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>${it.label}</a>`;
     }).join("");
 
@@ -1165,7 +1178,7 @@
           .join("");
         const htmlMenu = encontradosMenu
           .map(
-            (r) => `<a class="busca-global-item" href="${r.rota}"${r.abrirNovaAba ? ' target="_blank" rel="noopener"' : ""}>
+            (r) => `<a class="busca-global-item" href="${r.ssoNovaAba ? "#" : r.rota}"${r.ssoNovaAba ? ` data-acao="abrir-sso" data-sistema="${r.ssoSistema}"` : (r.abrirNovaAba ? ' target="_blank" rel="noopener"' : "")}>
               ${r.caminho.length ? `<span class="busca-global-item-grupo">${escapeHtml(r.caminho.join(" › "))}</span>` : ""}
               <span class="busca-global-item-label">${escapeHtml(r.label)}</span>
             </a>`
@@ -17362,7 +17375,7 @@
     }
   }
 
-  async function tratarAcao(acao, alvo) {
+  async function tratarAcao(acao, alvo, e) {
     switch (acao) {
       case "alternar-visibilidade-senha": {
         // Botão "olho" nos campos de senha — não depende de nenhum dado
@@ -18472,6 +18485,22 @@
           definirFlash("erro", erro.message || "Não foi possível registrar a decisão.");
         }
         return renderTerceirizacaoDetalhe(Number(id));
+      }
+      // SSO (pedido do usuário): Memorial Técnico/Protocolo de
+      // Estabilidade/Treinador de HPLC — busca uma URL de uso único já
+      // autenticada (ver app/routes/sso.py) e abre numa aba nova, sem
+      // nunca navegar a aba atual pra lá primeiro (por isso o
+      // e.preventDefault(): o <a> tem href="#" só por acessibilidade/
+      // estilo, não é pra navegar).
+      case "abrir-sso": {
+        if (e && e.preventDefault) e.preventDefault();
+        try {
+          const resp = await chamarApi("/sso/" + alvo.dataset.sistema);
+          window.open(resp.url, "_blank");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir esse sistema.");
+        }
+        return;
       }
       case "abrir-dossie-terceirizacao": {
         try {

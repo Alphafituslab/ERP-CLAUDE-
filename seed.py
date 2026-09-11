@@ -562,6 +562,26 @@ PERMISSOES_PADRAO = [
     ("catalogos_vendas", "visualizar", "Ver os catálogos do App de Vendas e sua composição", 0),
     ("catalogos_vendas", "cadastrar", "Criar novos catálogos do App de Vendas", 0),
     ("catalogos_vendas", "editar", "Editar catálogo, seus itens e vendedores permitidos", 0),
+
+    # ---- Fase 171 (CRM: Funil de Vendas / Oportunidades) ----
+    # Módulo próprio, não reaproveita "comercial" — a tela "Comercial
+    # (CRM)" já existente é cadastro de cliente/pedido; isto aqui rastreia
+    # o que acontece ANTES da venda virar pedido (prospecção, contato,
+    # proposta, negociação). "visualizar" sozinho só mostra as PRÓPRIAS
+    # oportunidades do vendedor (mesma régua de "vendedor_responsavel_id"
+    # já usada em clientes/App de Vendas) — "visualizar_todas" é quem
+    # gerencia a equipe (gestor comercial/admin).
+    ("oportunidades", "visualizar", "Ver o funil de vendas — só as próprias oportunidades", 0),
+    ("oportunidades", "visualizar_todas", "Ver o funil de vendas de TODOS os vendedores (gestor comercial)", 0),
+    ("oportunidades", "gerenciar", "Criar, editar, mudar de etapa e registrar atividades em oportunidades", 0),
+    # Pedido do usuário: acesso direto (SSO) ao Protocolo de Estabilidade e ao
+    # Treinador de HPLC pelo menu do ERP, sem tela de login — mesmo mecanismo
+    # de link seguro que já existe pra outras coisas, só que autentica de
+    # verdade no sistema externo (ver app/routes/sso.py). O Memorial Técnico
+    # reaproveita a permissão "memoriais.visualizar" que já existe e já gate
+    # a esse mesmo item de menu — não precisa de uma nova.
+    ("protocolo_estabilidade", "visualizar", "Acessar o Protocolo de Estabilidade (sistema externo) via SSO a partir do ERP", 0),
+    ("hplc_treinador", "visualizar", "Acessar o Treinador de HPLC (sistema externo) via SSO a partir do ERP", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
@@ -659,6 +679,9 @@ PERFIS_PADRAO = [
         "rastreabilidade.visualizar", "rastreabilidade.simular_recall", "rastreabilidade.bloquear_em_massa",
         "rastreabilidade.decidir_pedido_recall",
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
+        # SSO Protocolo/HPLC — os dois vivem no menu dentro de Qualidade >
+        # Shelf Life, ao lado do Memorial Técnico.
+        "protocolo_estabilidade.visualizar", "hplc_treinador.visualizar",
     ]),
     ("Estoque", "Gestão de armazém (WMS)", 1, [
         "itens.visualizar", "itens.cadastrar", "itens.editar", "lotes.visualizar", "lotes.receber", "lotes.bloquear",
@@ -761,6 +784,8 @@ PERFIS_PADRAO = [
         # Fase 135 — mesmo perfil dá o aceite comercial do projeto (ex.:
         # confirma que o cliente já concordou com o que foi combinado).
         "terceirizacao.aprovar_comercial",
+        # Fase 171 — gestor comercial acompanha o funil da equipe inteira.
+        "oportunidades.visualizar_todas", "oportunidades.gerenciar",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",
@@ -781,6 +806,9 @@ PERFIS_PADRAO = [
         # do vendedor que usa o app no dia a dia.
         "vendas_app.usar", "vendas_app.enviar_pedido",
         "solicitacoes_material.visualizar", "solicitacoes_material.solicitar",
+        # Fase 171 — o vendedor de campo trabalha o próprio funil de
+        # prospecção (só o dele — sem "visualizar_todas").
+        "oportunidades.visualizar", "oportunidades.gerenciar",
     ]),
     # Deliberadamente SEM financeiro.criar_conta_pagar: quem lança a conta
     # (Compras, ao receber a NF) e quem autoriza o pagamento dela
@@ -873,6 +901,9 @@ PERFIS_PADRAO = [
         # Fase 135 — mesmo perfil que já cuida da documentação ANVISA dá o
         # aceite regulatório nos projetos de Terceirização Premium.
         "terceirizacao.visualizar", "terceirizacao.aprovar_regulatorio",
+        # SSO Protocolo/HPLC — mesmo raciocínio de "quem já lida com Shelf
+        # Life ANVISA" do Memorial Técnico acima.
+        "protocolo_estabilidade.visualizar", "hplc_treinador.visualizar",
     ]),
 ]
 

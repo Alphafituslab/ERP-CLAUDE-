@@ -177,6 +177,7 @@ SCHEMA_FILES = [
     "schema_fase158.sql",  # Fase 158 — Recuperação de senha por WhatsApp/e-mail
     "schema_fase160.sql",  # Fase 160 — Histórico de Comissão e CNAB do Ema
     "schema_fase168.sql",  # Fase 168 — rate limit por IP em /auth/login (achado de auditoria de segurança)
+    "schema_fase171.sql",  # Fase 171 — CRM: Funil de Vendas (Oportunidades)
 ]
 
 
