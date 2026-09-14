@@ -101,12 +101,44 @@ $atalho.Description = "Alphafitus OS (terminal) - $Servidor"
 $atalho.Save()
 
 Escrever '  [3/3] Atalho criado na area de trabalho' Green
+
+# --- 4. Pasta fixa de backup + atalho pra ela -----------------
+# Fase 180 - pedido do usuario: todo backup baixado deste Terminal (botao
+# "Salvar backup" ou "Baixar Backup Completo") deve cair sempre no MESMO
+# lugar. O navegador (API File System Access) exige que a pessoa escolha
+# essa pasta manualmente na primeira vez - nao tem como um script pre-
+# autorizar isso -, entao aqui so preparamos o terreno: cria a pasta
+# (se ainda nao existir) e um atalho na Area de Trabalho pra abri-la
+# facil, ja que uma pagina web tambem nao pode mandar o Windows abrir o
+# Explorer sozinha.
+$PASTA_BACKUP_FIXA = 'C:\Alphafitus\Backups'
+try {
+    if (-not (Test-Path $PASTA_BACKUP_FIXA)) {
+        New-Item -ItemType Directory -Path $PASTA_BACKUP_FIXA -Force | Out-Null
+    }
+    $caminhoAtalhoPasta = Join-Path $areaTrabalho 'Backups do Alphafitus.lnk'
+    $atalhoPasta = $shell.CreateShortcut($caminhoAtalhoPasta)
+    $atalhoPasta.TargetPath = $PASTA_BACKUP_FIXA
+    $atalhoPasta.Save()
+    Escrever "  [4/4] Pasta de backup pronta: $PASTA_BACKUP_FIXA" Green
+} catch {
+    # Nao critico - o Terminal funciona normalmente sem isso, so nao tera
+    # a pasta pre-criada; a pessoa ainda pode escolher/criar uma na hora
+    # de usar "Salvar backup".
+    Escrever "  [!] Nao consegui preparar a pasta de backup automaticamente." Yellow
+}
+
 Escrever ''
 Escrever '  ============================================' Cyan
 Escrever '   Pronto!' Green
 Escrever ''
 Escrever "   Procure o atalho '$NOME_ATALHO' na sua area de" White
 Escrever '   trabalho e clique duas vezes.' White
+Escrever ''
+Escrever '   Ao usar "Salvar backup" dentro do sistema pela primeira vez,' White
+Escrever "   escolha a pasta $PASTA_BACKUP_FIXA (ja criada, com atalho" White
+Escrever '   "Backups do Alphafitus" na Area de Trabalho) - so precisa' White
+Escrever '   escolher uma vez, o sistema lembra depois disso.' White
 Escrever ''
 Escrever '   Se o endereco do servidor mudar no futuro, rode este' DarkGray
 Escrever '   instalador de novo com o endereco novo.' DarkGray

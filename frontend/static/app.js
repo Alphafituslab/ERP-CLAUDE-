@@ -262,15 +262,11 @@
     return new Blob(pedacos);
   }
 
-  async function salvarBackupLocalNesteTerminal(forcarEscolhaNova, aoProgredir) {
-    const handle = await garantirPastaBackupLocalTerminal(forcarEscolhaNova);
-
-    const headers = {};
-    if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
-    const resp = await fetch(API + "/sistema/backup", { headers });
-    if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o backup.`);
-    const blob = await lerRespostaComProgresso(resp, aoProgredir);
-
+  // Fase 180 — extraído de `salvarBackupLocalNesteTerminal` pra ser
+  // reaproveitado também pelo "Baixar Backup Completo" (Administração):
+  // pedido do usuário — qualquer backup baixado neste Terminal, por
+  // qualquer botão, cai na mesma pasta fixa, com a mesma retenção de 3.
+  async function gravarBlobNaPastaComRetencao(handle, blob) {
     const nomeArquivo = `${PREFIXO_BACKUP_LOCAL_TERMINAL}${new Date().toISOString().replace(/[:.]/g, "-")}.db`;
     const arquivoHandle = await handle.getFileHandle(nomeArquivo, { create: true });
     const writable = await arquivoHandle.createWritable();
@@ -297,6 +293,37 @@
     };
   }
 
+  // Fase 180 — usado por botões que baixam um backup por outro motivo (ex.:
+  // "Baixar Backup Completo" em Administração) e que também devem cair na
+  // pasta fixa SE este Terminal já tiver uma configurada. Nunca força
+  // escolher pasta aqui (essa é a função de "Salvar backup"/"Escolher
+  // outra pasta") — se não há pasta configurada ainda, ou a permissão
+  // expirou, simplesmente não faz nada (melhor esforço, nunca quebra o
+  // download normal por causa disso).
+  async function salvarComoCopiaNaPastaFixaSeConfigurada(blob) {
+    if (!window.showDirectoryPicker) return null;
+    try {
+      const handle = await obterHandlePastaBackupLocalSalvo();
+      if (!handle) return null;
+      const permissaoAtual = await handle.queryPermission({ mode: "readwrite" });
+      if (permissaoAtual !== "granted") return null;
+      return await gravarBlobNaPastaComRetencao(handle, blob);
+    } catch (erro) {
+      return null;
+    }
+  }
+
+  async function salvarBackupLocalNesteTerminal(forcarEscolhaNova, aoProgredir) {
+    const handle = await garantirPastaBackupLocalTerminal(forcarEscolhaNova);
+
+    const headers = {};
+    if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
+    const resp = await fetch(API + "/sistema/backup", { headers });
+    if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o backup.`);
+    const blob = await lerRespostaComProgresso(resp, aoProgredir);
+    return gravarBlobNaPastaComRetencao(handle, blob);
+  }
+
   // Fase 159 — pedido do usuário: não escondido dentro de uma tela de
   // administração — fica FIXO no rodapé do menu lateral, visível em
   // qualquer tela do sistema, pra ser fácil de achar (mesmo lugar da foto/
@@ -307,11 +334,11 @@
     if (!window.showDirectoryPicker || !temPermissao("sistema", "backup_completo")) return "";
     return `<div class="rodape-lateral-backup">
       <button class="rodape-lateral-backup-botao" data-acao="salvar-backup-local-terminal"
-              title="Salva uma cópia do backup numa pasta deste computador (mantém sempre os 3 mais recentes)">
+              title="Salva uma cópia do backup numa pasta deste computador (mantém sempre os 3 mais recentes). Na primeira vez, escolha a pasta C:\Alphafitus\Backups — já foi criada na instalação do Terminal, com um atalho na Área de Trabalho.">
         💾 Salvar backup
       </button>
       <button class="rodape-lateral-backup-engrenagem" data-acao="trocar-pasta-backup-local-terminal"
-              title="Escolher outra pasta pra salvar o backup deste computador" aria-label="Escolher outra pasta">⚙️</button>
+              title="Escolher outra pasta pra salvar o backup deste computador (o padrão é C:\Alphafitus\Backups)" aria-label="Escolher outra pasta">⚙️</button>
     </div>
     <div class="rodape-lateral-backup-progresso" data-progresso-backup-local hidden>
       <div class="barra-progresso"><div style="width:0%"></div></div>
@@ -17720,7 +17747,30 @@
         const agora = new Date();
         const dois = (n) => String(n).padStart(2, "0");
         const nomeArquivo = `Alphafitus-Backup-Completo-${agora.getFullYear()}-${dois(agora.getMonth() + 1)}-${dois(agora.getDate())}_${dois(agora.getHours())}h${dois(agora.getMinutes())}min.db`;
-        await baixarArquivo("/sistema/backup", nomeArquivo);
+        // Fase 180 — busca uma vez só (gerar o backup é uma operação real
+        // no banco, não vale duplicar) e usa o MESMO blob tanto pro
+        // download normal quanto pra também salvar na pasta fixa deste
+        // Terminal, se uma já estiver configurada (pedido do usuário:
+        // "tudo no mesmo lugar", igual ao botão "Salvar backup").
+        const headers = {};
+        if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
+        const resp = await fetch(API + "/sistema/backup", { headers });
+        if (!resp.ok) throw new Error(`Erro ${resp.status} ao baixar o arquivo.`);
+        const blob = await resp.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = nomeArquivo;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+
+        const copiaFixa = await salvarComoCopiaNaPastaFixaSeConfigurada(blob);
+        if (copiaFixa) {
+          definirFlash("ok", `Baixado — e também salvo em "${copiaFixa.pasta}" (mantendo os ${copiaFixa.totalMantido} mais recentes).`);
+          return montarRota();
+        }
         return;
       }
       // Fase 159 — backup local por Terminal (pasta fixa, mantém só os 3 mais recentes).
