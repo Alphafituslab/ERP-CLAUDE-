@@ -96,7 +96,12 @@ def heartbeat():
             ip=client_ip(), dispositivo=client_device(),
         )
 
-    return jsonify({"ok": True})
+    # Pedido do usuário (2026-09-14): a pílula de status no topo confundia
+    # "servidor conectado" com "este computador é o servidor" — devolvemos o
+    # número/nome do PRÓPRIO terminal aqui pra o front mostrar "Terminal Nº
+    # XXX" (pra quem pode administrar terminais) em vez do texto genérico.
+    nome_atual = existente["nome"] if existente else nome_sugerido
+    return jsonify({"ok": True, "terminal_id": terminal_id, "nome": nome_atual})
 
 
 @bp.get("")

@@ -65,7 +65,7 @@
     // Fase 111 — status da pulsação com o servidor (ver iniciarHeartbeatTerminal),
     // usado pela pílula "Servidor conectado/desconectado" na barra superior e pelo
     // popover de detalhes (endereço, latência, última sincronização).
-    statusServidor: { conectado: null, bloqueado: false, latenciaMs: null, ultimaSincronizacaoEm: null },
+    statusServidor: { conectado: null, bloqueado: false, latenciaMs: null, ultimaSincronizacaoEm: null, terminalId: null, terminalNome: null },
   };
 
   document.documentElement.setAttribute("data-tema", state.tema);
@@ -465,26 +465,42 @@
     }
   }
 
+  // Pedido do usuário (2026-09-14): "Servidor conectado" confundia com
+  // "este computador É o servidor" — quem pode administrar terminais
+  // (ver renderTerminais/temPermissao) passa a ver o número/nome do
+  // PRÓPRIO terminal e quem está logado nele; quem não tem essa
+  // permissão continua vendo só o texto genérico de sempre.
+  function rotuloTerminalProprio() {
+    if (!temPermissao("terminais", "bloquear")) return null;
+    const s = state.statusServidor;
+    if (s.terminalId == null) return null;
+    const numero = `Terminal Nº ${String(s.terminalId).padStart(3, "0")}`;
+    const nome = s.terminalNome ? ` (${s.terminalNome})` : "";
+    const operador = state.usuarioAtual ? ` · ${state.usuarioAtual.nome}` : "";
+    return `${numero}${nome}${operador}`;
+  }
+
   function atualizarPilulaStatusServidorNoDom() {
     const pilula = document.querySelector("[data-pilula-status-servidor]");
     if (!pilula) return;
     const s = state.statusServidor;
+    const rotulo = rotuloTerminalProprio();
     if (s.bloqueado) {
       pilula.className = "pilula-status-servidor bloqueado";
-      pilula.textContent = "🔴 Terminal bloqueado";
+      pilula.textContent = rotulo ? `🔴 ${rotulo} — bloqueado` : "🔴 Terminal bloqueado";
     } else if (s.conectado) {
       pilula.className = "pilula-status-servidor conectado";
-      pilula.textContent = "🟢 Servidor conectado";
+      pilula.textContent = rotulo ? `🟢 ${rotulo}` : "🟢 Servidor conectado";
     } else {
       pilula.className = "pilula-status-servidor desconectado";
-      pilula.textContent = "🔴 Servidor desconectado";
+      pilula.textContent = rotulo ? `🔴 ${rotulo} — desconectado` : "🔴 Servidor desconectado";
     }
   }
 
   async function enviarHeartbeatTerminal() {
     const inicio = performance.now();
     try {
-      await chamarApi("/terminais/heartbeat", {
+      const resp = await chamarApi("/terminais/heartbeat", {
         method: "POST",
         body: { terminal_uid: obterTerminalUid(), versao_app: state.versaoSistema || null },
       });
@@ -492,6 +508,8 @@
         conectado: true, bloqueado: false,
         latenciaMs: Math.round(performance.now() - inicio),
         ultimaSincronizacaoEm: new Date().toISOString(),
+        terminalId: resp.terminal_id ?? null,
+        terminalNome: resp.nome ?? null,
       };
     } catch (erro) {
       state.statusServidor = {
@@ -17672,10 +17690,13 @@
           : s.conectado
             ? '<span class="mensagem-ok">Conectado normalmente.</span>'
             : '<span class="mensagem-erro">Sem conexão com o servidor no momento — tentando de novo automaticamente.</span>';
+        const podeVerTerminal = temPermissao("terminais", "bloquear");
         abrirModal(`
           <h3>Status da conexão</h3>
           <p>${situacao}</p>
           <table>
+            ${podeVerTerminal ? `<tr><td class="texto-suave">Este terminal</td><td>${s.terminalId != null ? `Nº ${String(s.terminalId).padStart(3, "0")}${s.terminalNome ? " (" + escapeHtml(s.terminalNome) + ")" : ""}` : "—"}</td></tr>
+            <tr><td class="texto-suave">Operador logado</td><td>${state.usuarioAtual ? escapeHtml(state.usuarioAtual.nome) : "—"}</td></tr>` : ""}
             <tr><td class="texto-suave">Endereço</td><td>${escapeHtml(location.origin)}</td></tr>
             <tr><td class="texto-suave">Versão do sistema</td><td>${escapeHtml(state.versaoSistema || "—")}</td></tr>
             <tr><td class="texto-suave">Latência</td><td>${s.latenciaMs != null ? s.latenciaMs + " ms" : "—"}</td></tr>
