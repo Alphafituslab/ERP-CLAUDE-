@@ -1099,7 +1099,7 @@
             </div>
             <span class="espacador-barra-superior"></span>
             <button class="botao-icone botao-icone-com-badge" data-acao="ir-notificacoes" title="Notificações">🔔<span class="badge-notificacoes" data-badge-notificacoes ${state.notificacoesNaoLidas > 0 ? "" : "hidden"}>${state.notificacoesNaoLidas > 99 ? "99+" : state.notificacoesNaoLidas}</span></button>
-            <button class="botao-icone" data-acao="alternar-tema" title="Alternar tema claro/escuro">🌓</button>
+            <button class="botao-icone" data-acao="alternar-tema" title="Alternar fundo (claro → escuro → verde)">🌓</button>
           </div>
           <div class="pagina">${flashHtml}${conteudoHtml}</div>
         </div>
@@ -17592,7 +17592,12 @@
         );
         return;
       case "alternar-tema": {
-        state.tema = state.tema === "claro" ? "escuro" : "claro";
+        // Pedido do usuário (2026-09-14): terceira opção de fundo (verde),
+        // além de claro/escuro — cicla entre as três a cada clique, mesmo
+        // padrão de sempre (um botão só, sem menu novo pra 3 opções).
+        const ORDEM_TEMAS = ["claro", "escuro", "verde"];
+        const indiceAtual = ORDEM_TEMAS.indexOf(state.tema);
+        state.tema = ORDEM_TEMAS[(indiceAtual + 1) % ORDEM_TEMAS.length];
         localStorage.setItem("alphafitus_tema", state.tema);
         document.documentElement.setAttribute("data-tema", state.tema);
         return;

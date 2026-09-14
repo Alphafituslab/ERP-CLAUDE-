@@ -40,6 +40,17 @@
   --azul-claro: #4ee2ab;
 }
 
+/* Pedido do usuário (2026-09-14): terceira opção de fundo, além de
+   claro/escuro — verde da marca, mais saturado que o "fundo padrão" claro
+   (que já tinha só uma marca d'água sutil, Fase 104). Só troca `--fundo`
+   (e um pouco a borda, pra continuar visível sobre o verde) — cartões
+   continuam brancos (`--superficie` intocado), então nada de contraste de
+   texto muda; é literalmente só a cor por trás dos cartões. */
+[data-tema="verde"] {
+  --fundo: #cdeee0;
+  --borda: #a9dcc7;
+}
+
 * { box-sizing: border-box; }
 
 /* Fase 106 — pedido do usuário: "não quero que nem uma tela, ao entrar,
