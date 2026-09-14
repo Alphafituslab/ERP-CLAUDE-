@@ -306,22 +306,64 @@
     // deixa o navegador liberar sozinho quando a aba fechar.
   }
 
+  // Achado 2026-09-14 (usuário relatou "continua deslogando", só pede
+  // senha de novo, sem 2FA): condição de corrida no refresh_token. O
+  // backend faz ROTAÇÃO a cada /auth/refresh (Fase 112 — revoga o token
+  // usado, emite um par novo). Quando uma tela dispara várias chamadas de
+  // API ao mesmo tempo (Promise.all de painel, por exemplo) e o access
+  // token expira nesse meio-tempo, CADA requisição que cai em 401 chamava
+  // sua PRÓPRIA `tentarRenovarToken()` — a primeira renovava com sucesso e
+  // revogava o refresh_token antigo; a segunda, que já tinha lido o MESMO
+  // refresh_token antigo pra memória antes da primeira terminar, batia num
+  // token já revogado, recebia 401, e a sessão inteira era derrubada
+  // (`limparSessao()`) mesmo a renovação tendo funcionado segundos antes.
+  // Corrigido com o padrão de sempre pra isso: só a PRIMEIRA chamada
+  // concorrente de fato dispara o /auth/refresh; as outras esperam essa
+  // MESMA promessa em vez de cada uma tentar renovar por conta própria.
+  let promessaRenovacaoEmAndamento = null;
+
   async function tentarRenovarToken() {
-    try {
-      const resp = await fetch(API + "/auth/refresh", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ refresh_token: state.refreshToken }),
-      });
-      if (!resp.ok) return false;
-      const dados = await resp.json();
-      state.accessToken = dados.access_token;
-      state.refreshToken = dados.refresh_token;
-      localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
-      return true;
-    } catch (e) {
-      return false;
-    }
+    if (promessaRenovacaoEmAndamento) return promessaRenovacaoEmAndamento;
+
+    promessaRenovacaoEmAndamento = (async () => {
+      try {
+        const tentativa = async (token) => {
+          const resp = await fetch(API + "/auth/refresh", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: token }),
+          });
+          if (!resp.ok) return false;
+          const dados = await resp.json();
+          state.accessToken = dados.access_token;
+          state.refreshToken = dados.refresh_token;
+          localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
+          return true;
+        };
+
+        if (await tentativa(state.refreshToken)) return true;
+
+        // Segundo cenário do mesmo bug: ABAS diferentes do sistema aberto
+        // ao mesmo tempo. Cada aba guarda seu próprio `state.refreshToken`
+        // em memória, só sincronizado com o localStorage NA HORA em que
+        // aquela aba renova — se a ABA B tentar renovar com um token que a
+        // ABA A já rotacionou minutos atrás, falha, mesmo a sessão sendo
+        // válida. Antes de desistir, tenta de novo com o valor mais
+        // recente do localStorage (pode ter sido atualizado por outra
+        // aba nesse meio-tempo).
+        const tokenMaisRecente = localStorage.getItem("alphafitus_refresh_token");
+        if (tokenMaisRecente && tokenMaisRecente !== state.refreshToken) {
+          return await tentativa(tokenMaisRecente);
+        }
+        return false;
+      } catch (e) {
+        return false;
+      } finally {
+        promessaRenovacaoEmAndamento = null;
+      }
+    })();
+
+    return promessaRenovacaoEmAndamento;
   }
 
   function limparSessao() {
