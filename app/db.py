@@ -180,6 +180,7 @@ SCHEMA_FILES = [
     "schema_fase171.sql",  # Fase 171 — CRM: Funil de Vendas (Oportunidades)
     "schema_fase172.sql",  # Fase 172 — 2FA configurável (Administração > Segurança)
     "schema_fase176.sql",  # Fase 176 — painel ao vivo: tela atual de cada terminal
+    "schema_fase177.sql",  # Fase 177 — confirmação por e-mail antes de instalar em modo SERVIDOR
 ]
 
 

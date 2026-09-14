@@ -432,12 +432,26 @@ body::before {
   padding: 8px 10px; white-space: nowrap;
 }
 .rodape-lateral-backup-botao:hover { background: rgba(255,255,255,0.2); color: #fff; }
+.rodape-lateral-backup-botao:disabled { opacity: 0.6; cursor: default; }
 .rodape-lateral-backup-engrenagem {
   flex-shrink: 0; width: 32px; height: 32px; border-radius: 8px;
   background: rgba(255,255,255,0.1); border: none; color: rgba(255,255,255,0.75);
   cursor: pointer; font-size: 13px;
 }
 .rodape-lateral-backup-engrenagem:hover { background: rgba(255,255,255,0.2); color: #fff; }
+
+/* Fase 177 — pedido do usuário: mostrar % enquanto o backup local salva
+   (em vez de travar sem feedback). Reaproveita `.barra-progresso`/
+   `.progresso-pct` (Fase 46, usadas no progresso de preenchimento do
+   Memorial) só que com cores próprias aqui — aquelas foram pensadas pra
+   cima de fundo claro, o rodapé do menu é escuro. */
+.rodape-lateral-backup-progresso {
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 16px 10px;
+}
+.rodape-lateral-backup-progresso .barra-progresso { flex: 1; background: rgba(255,255,255,0.15); }
+.rodape-lateral-backup-progresso .barra-progresso > div { width: 0%; background: var(--verde); transition: width 0.2s ease; }
+.rodape-lateral-backup-progresso .progresso-pct { color: rgba(255,255,255,0.75); width: 32px; }
 
 .rodape-lateral-usuario {
   display: flex;
@@ -496,6 +510,17 @@ body::before {
   line-height: 1;
 }
 .rodape-lateral-sair:hover { background: rgba(255,255,255,0.2); color: #fff; }
+
+/* Fase 177 — pedido do usuário: a pílula de status morava na barra
+   superior; ele pediu pra ficar embaixo do nome do usuário no rodapé do
+   menu lateral. `.pilula-status-servidor` já é auto-dimensionada (largura
+   do próprio texto), então só precisa de um invólucro centralizado com o
+   mesmo respiro horizontal das outras linhas do rodapé. */
+.rodape-lateral-status-servidor {
+  display: flex;
+  justify-content: center;
+  padding: 0 16px 10px;
+}
 
 .versao-sistema-rodape {
   padding: 8px 20px 12px;

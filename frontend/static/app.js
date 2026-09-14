@@ -238,14 +238,38 @@
     return handle;
   }
 
-  async function salvarBackupLocalNesteTerminal(forcarEscolhaNova) {
+  // Fase 177 — pedido do usuário: mostrar o % enquanto salva, em vez de
+  // travar sem feedback até terminar. `getReader()` lê a resposta em
+  // pedaços conforme chegam da rede — `resp.blob()` sozinho só devolve
+  // tudo de uma vez no final, sem chance de reportar nada no meio do
+  // caminho. Sem Content-Length (não deveria faltar aqui, a rota manda um
+  // corpo de bytes fixo) ou sem callback, cai pro caminho simples de
+  // sempre — nunca quebra por causa disso, só perde o progresso intermediário.
+  async function lerRespostaComProgresso(resp, aoProgredir) {
+    const tamanhoTotal = Number(resp.headers.get("Content-Length")) || 0;
+    if (!resp.body || !tamanhoTotal || !aoProgredir) return resp.blob();
+
+    const leitor = resp.body.getReader();
+    const pedacos = [];
+    let recebido = 0;
+    for (;;) {
+      const { done, value } = await leitor.read();
+      if (done) break;
+      pedacos.push(value);
+      recebido += value.length;
+      aoProgredir(Math.min(100, Math.round((recebido / tamanhoTotal) * 100)));
+    }
+    return new Blob(pedacos);
+  }
+
+  async function salvarBackupLocalNesteTerminal(forcarEscolhaNova, aoProgredir) {
     const handle = await garantirPastaBackupLocalTerminal(forcarEscolhaNova);
 
     const headers = {};
     if (state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
     const resp = await fetch(API + "/sistema/backup", { headers });
     if (!resp.ok) throw new Error(`Erro ${resp.status} ao gerar o backup.`);
-    const blob = await resp.blob();
+    const blob = await lerRespostaComProgresso(resp, aoProgredir);
 
     const nomeArquivo = `${PREFIXO_BACKUP_LOCAL_TERMINAL}${new Date().toISOString().replace(/[:.]/g, "-")}.db`;
     const arquivoHandle = await handle.getFileHandle(nomeArquivo, { create: true });
@@ -265,7 +289,12 @@
       try { await handle.removeEntry(nome); } catch (erro) { /* não crítico — próxima rodada tenta de novo */ }
     }
 
-    return { pasta: handle.name, totalMantido: Math.min(nomesExistentes.length, MAX_BACKUPS_LOCAIS_TERMINAL) };
+    return {
+      pasta: handle.name,
+      arquivo: nomeArquivo,
+      tamanhoBytes: blob.size,
+      totalMantido: Math.min(nomesExistentes.length, MAX_BACKUPS_LOCAIS_TERMINAL),
+    };
   }
 
   // Fase 159 — pedido do usuário: não escondido dentro de uma tela de
@@ -283,7 +312,64 @@
       </button>
       <button class="rodape-lateral-backup-engrenagem" data-acao="trocar-pasta-backup-local-terminal"
               title="Escolher outra pasta pra salvar o backup deste computador" aria-label="Escolher outra pasta">⚙️</button>
+    </div>
+    <div class="rodape-lateral-backup-progresso" data-progresso-backup-local hidden>
+      <div class="barra-progresso"><div style="width:0%"></div></div>
+      <span class="progresso-pct">0%</span>
     </div>`;
+  }
+
+  // Fase 177 — orquestra a barra de progresso do "Salvar backup" do rodapé:
+  // mutação direta no DOM já existente (mesmo raciocínio de
+  // atualizarPilulaStatusServidorNoDom) em vez de um re-render via
+  // montarRota() no meio do caminho, que apagaria a barra a cada tick.
+  async function executarBackupLocalComProgresso(forcarEscolhaNova) {
+    const area = document.querySelector("[data-progresso-backup-local]");
+    const preenchimento = area ? area.querySelector(".barra-progresso > div") : null;
+    const texto = area ? area.querySelector(".progresso-pct") : null;
+    const botao = document.querySelector('[data-acao="salvar-backup-local-terminal"]');
+    const atualizar = (pct) => {
+      if (!area) return;
+      area.hidden = false;
+      if (preenchimento) preenchimento.style.width = pct + "%";
+      if (texto) texto.textContent = pct + "%";
+    };
+    if (botao) botao.disabled = true;
+    try {
+      atualizar(0);
+      const resultado = await salvarBackupLocalNesteTerminal(forcarEscolhaNova, atualizar);
+      atualizar(100);
+      // Pedido do usuário: uma garantia visível de que salvou de verdade,
+      // não só um aviso que passa rápido. Não dá pra abrir o Explorer do
+      // Windows a partir de uma página web (nenhum navegador permite,
+      // por segurança) — o mais próximo e confiável é mostrar bem claro
+      // ONDE foi salvo, com nome do arquivo e tamanho, num modal que fica
+      // até a pessoa fechar (em vez de um aviso que desaparece sozinho).
+      const tamanhoLegivel = resultado.tamanhoBytes >= 1024 * 1024
+        ? `${(resultado.tamanhoBytes / (1024 * 1024)).toFixed(1)} MB`
+        : `${Math.max(1, Math.round(resultado.tamanhoBytes / 1024))} KB`;
+      abrirModal(`
+        <h3>✅ Backup salvo com sucesso</h3>
+        <table>
+          <tr><td class="texto-suave">Pasta</td><td>${escapeHtml(resultado.pasta)}</td></tr>
+          <tr><td class="texto-suave">Arquivo</td><td>${escapeHtml(resultado.arquivo)}</td></tr>
+          <tr><td class="texto-suave">Tamanho</td><td>${tamanhoLegivel}</td></tr>
+          <tr><td class="texto-suave">Backups mantidos</td><td>${resultado.totalMantido} mais recentes</td></tr>
+        </table>
+        <p class="texto-suave">Abra essa pasta no Explorer do Windows pra conferir o arquivo, se quiser ter certeza.</p>
+        <div class="rodape-modal">
+          <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
+        </div>`);
+    } catch (erro) {
+      // Cancelar a escolha da pasta (botão "Cancelar" do próprio Windows)
+      // não é um erro de verdade — não faz sentido assustar com uma
+      // mensagem vermelha só porque a pessoa desistiu no meio do caminho.
+      if (erro && erro.name === "AbortError") return;
+      throw erro;
+    } finally {
+      if (botao) botao.disabled = false;
+      montarRota();
+    }
   }
 
   async function abrirBinarioEmNovaAba(caminho) {
@@ -1154,13 +1240,15 @@
             </span>
             <button class="rodape-lateral-sair" data-acao="logout" title="Sair" aria-label="Sair">⏻</button>
           </div>
+          <div class="rodape-lateral-status-servidor">
+            <button class="pilula-status-servidor" data-pilula-status-servidor data-acao="mostrar-status-servidor" title="Detalhes da conexão">🟢 Servidor conectado</button>
+          </div>
           <div class="versao-sistema-rodape">${state.versaoSistema ? `v${escapeHtml(state.versaoSistema)}` : ""}</div>
         </aside>
         <div class="conteudo-principal">
           <div class="barra-superior">
             <button class="botao-icone botao-menu-mobile" data-acao="alternar-menu-mobile" title="Abrir menu">☰</button>
             <button class="botao-icone botao-menu-desktop" data-acao="alternar-menu-desktop" title="Mostrar/ocultar menu lateral">${state.menuLateralOculto ? "▶" : "◀"}</button>
-            <button class="pilula-status-servidor" data-pilula-status-servidor data-acao="mostrar-status-servidor" title="Detalhes da conexão">🟢 Servidor conectado</button>
             <div class="busca-global">
               <span class="busca-global-icone" aria-hidden="true">🔎</span>
               <input type="text" id="busca-global-input" class="busca-global-input" placeholder="Pesquisar módulo, tela ou cliente… (ex.: financeiro, alphanutrition)" autocomplete="off">
@@ -17636,14 +17724,12 @@
       }
       // Fase 159 — backup local por Terminal (pasta fixa, mantém só os 3 mais recentes).
       case "salvar-backup-local-terminal": {
-        const resultado = await salvarBackupLocalNesteTerminal(false);
-        definirFlash("ok", `Backup salvo em "${resultado.pasta}" — mantendo os ${resultado.totalMantido} mais recentes.`);
-        return montarRota();
+        await executarBackupLocalComProgresso(false);
+        return;
       }
       case "trocar-pasta-backup-local-terminal": {
-        const resultado = await salvarBackupLocalNesteTerminal(true);
-        definirFlash("ok", `Pasta alterada para "${resultado.pasta}" — backup salvo lá agora, mantendo os ${resultado.totalMantido} mais recentes.`);
-        return montarRota();
+        await executarBackupLocalComProgresso(true);
+        return;
       }
       // ---- Fase 67: Backup Automático Agendado, Nuvem/E-mail, Restauração ----
       case "executar-backup-agora": {
