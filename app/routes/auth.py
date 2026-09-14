@@ -133,6 +133,16 @@ def _dispositivo_confiavel_2fa_valido(conn, usuario_id, token):
     return row is not None
 
 
+def _2fa_exigido_globalmente(conn) -> bool:
+    """Fase 172 — pedido do usuário: um administrador pode desligar a
+    exigência de 2FA no login pra todo mundo, pela tela Administração >
+    Segurança (`app/routes/seguranca.py`), em vez de ser uma regra fixa no
+    código. Ligado por padrão (a linha sempre existe via migration; o
+    `if row else True` aqui é só defensivo)."""
+    row = conn.execute("SELECT exigir_2fa FROM configuracoes_seguranca WHERE id = 1").fetchone()
+    return bool(row["exigir_2fa"]) if row else True
+
+
 def _emitir_tokens(conn, usuario_id, ip, dispositivo):
     refresh_token, sessao_id = _criar_sessao(conn, usuario_id, ip, dispositivo)
     jti = secrets.token_hex(16)
@@ -225,10 +235,15 @@ def login():
     # sucesso, ver `verificar_2fa` abaixo), pula a etapa de 2FA — a SENHA
     # continua sendo exigida sempre, só o código do app autenticador não
     # se repete dentro da mesma janela de 24h.
+    #
+    # Fase 172 — pedido do usuário: além do dispositivo confiável, um
+    # administrador pode desligar a exigência de 2FA pra TODO MUNDO
+    # (Administração > Segurança, `configuracoes_seguranca.exigir_2fa`) —
+    # nesse caso pula a etapa mesmo sem token de dispositivo confiável.
     dispositivo_confiavel_token = dados.get("dispositivo_confiavel_token")
-    pula_2fa = usuario["dois_fatores_ativo"] and _dispositivo_confiavel_2fa_valido(
-        conn, usuario["id"], dispositivo_confiavel_token
-    )
+    exigir_2fa_global = _2fa_exigido_globalmente(conn)
+    dispositivo_confiavel = _dispositivo_confiavel_2fa_valido(conn, usuario["id"], dispositivo_confiavel_token)
+    pula_2fa = usuario["dois_fatores_ativo"] and (not exigir_2fa_global or dispositivo_confiavel)
 
     if usuario["dois_fatores_ativo"] and not pula_2fa:
         login_ticket = security.emitir_login_ticket(usuario["id"])
@@ -241,9 +256,14 @@ def login():
         (_iso(_now()), ip, usuario["id"]),
     )
     tokens = _emitir_tokens(conn, usuario["id"], ip, dispositivo)
+    if pula_2fa and dispositivo_confiavel:
+        acao_login = "login_sucesso_2fa_dispositivo_confiavel"
+    elif pula_2fa and not exigir_2fa_global:
+        acao_login = "login_sucesso_2fa_desligado_globalmente"
+    else:
+        acao_login = "login_sucesso"
     audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
-                     acao="login_sucesso_2fa_dispositivo_confiavel" if pula_2fa else "login_sucesso",
-                     ip=ip, dispositivo=dispositivo)
+                     acao=acao_login, ip=ip, dispositivo=dispositivo)
     return jsonify(tokens)
 
 

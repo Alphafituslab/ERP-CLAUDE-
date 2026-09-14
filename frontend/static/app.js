@@ -571,6 +571,7 @@
           case "empresas": return renderEmpresas();
           case "auditoria": return renderAuditoria();
           case "terminais": return renderTerminais();
+          case "seguranca": return renderSeguranca();
           case "notificacoes": return renderNotificacoes();
           case "conta": return renderMinhaConta();
           case "itens": return renderItens();
@@ -864,6 +865,7 @@
         { rota: "#/empresas", chave: "empresas", label: "Empresas", permissao: ["empresas", "visualizar"] },
         { rota: "#/auditoria", chave: "auditoria", label: "Auditoria", permissao: ["auditoria", "visualizar"] },
         { rota: "#/terminais", chave: "terminais", label: "Terminais", permissao: ["terminais", "visualizar"] },
+        { rota: "#/seguranca", chave: "seguranca", label: "Segurança", permissao: ["seguranca", "visualizar"], apelidos: ["2fa", "autenticador", "totp", "dois fatores"] },
         // Pedido do usuário (2026-09-01): essas 3 telas viviam dentro de
         // "Comercial & Vendas" mas são configuração/cadastro de apoio, não
         // rotina comercial do dia a dia — movidas pra Administração.
@@ -2095,6 +2097,43 @@
           <button type="submit" class="botao">Salvar</button>
         </div>
       </form>`);
+  }
+
+  // =======================================================================
+  // SEGURANÇA (Fase 172) — exigência de 2FA configurável
+  // =======================================================================
+  // Pedido do usuário: em vez de o 2FA ser regra fixa no código, um
+  // administrador pode ligar/desligar a exigência do código do
+  // autenticador no login pra todo mundo, aqui. Continua ligado por
+  // padrão — a tela só existe pra quem tem `seguranca.visualizar`, e só
+  // quem tem `seguranca.configurar` vê o botão de salvar habilitado.
+  async function renderSeguranca() {
+    app.innerHTML = '<div class="carregando">Carregando…</div>';
+    const config = await chamarApi("/seguranca/configuracao");
+    const podeConfigurar = temPermissao("seguranca", "configurar");
+
+    renderShell(
+      `<h2>Segurança</h2>
+       <div class="cartao">
+         <h3 style="margin-top:0;">Exigência de código do autenticador (2FA)</h3>
+         <p class="texto-suave">
+           Quando ligado (padrão), quem tiver o 2FA ativado na própria conta continua precisando
+           digitar o código do aplicativo autenticador no login — sujeito à janela de 24h de
+           "dispositivo confiável" de sempre. Quando desligado, o login pula essa etapa pra todo
+           mundo, mesmo quem já tem 2FA configurado na conta.
+         </p>
+         <form data-form="salvar-configuracao-seguranca">
+           <div class="campo campo-checkbox">
+             <label>
+               <input type="checkbox" name="exigir_2fa" ${config.exigir_2fa ? "checked" : ""} ${podeConfigurar ? "" : "disabled"}>
+               Exigir código do autenticador (2FA) no login
+             </label>
+           </div>
+           ${podeConfigurar ? '<button type="submit" class="botao">Salvar</button>' : '<p class="texto-suave">Você não tem permissão para alterar esta configuração.</p>'}
+         </form>
+       </div>`,
+      "seguranca"
+    );
   }
 
   // =======================================================================
@@ -19273,6 +19312,14 @@
         state.usuarioAtual.notificar_por_email = resp.notificar_por_email;
         definirFlash("ok", "Preferência salva.");
         return renderNotificacoes();
+      }
+      case "salvar-configuracao-seguranca": {
+        await chamarApi("/seguranca/configuracao", {
+          method: "PUT",
+          body: { exigir_2fa: !!dados.get("exigir_2fa") },
+        });
+        definirFlash("ok", "Configuração de segurança salva.");
+        return renderSeguranca();
       }
       case "salvar-configuracao-email": {
         await chamarApi("/notificacoes/configuracao-email", {

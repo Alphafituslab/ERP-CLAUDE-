@@ -582,6 +582,10 @@ PERMISSOES_PADRAO = [
     # a esse mesmo item de menu — não precisa de uma nova.
     ("protocolo_estabilidade", "visualizar", "Acessar o Protocolo de Estabilidade (sistema externo) via SSO a partir do ERP", 0),
     ("hplc_treinador", "visualizar", "Acessar o Treinador de HPLC (sistema externo) via SSO a partir do ERP", 0),
+    # Fase 172 — pedido do usuário: exigência de 2FA no login virou
+    # configurável (Administração > Segurança) em vez de regra fixa.
+    ("seguranca", "visualizar", "Ver a configuração de segurança do login (exigência de 2FA)", 0),
+    ("seguranca", "configurar", "Ligar ou desligar a exigência de código do autenticador (2FA) no login", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
