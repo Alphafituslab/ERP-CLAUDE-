@@ -7003,7 +7003,7 @@
              </table>
            </div>
 
-           ${podeRestaurar ? cartaoRestauracaoBackup(restauracaoPendente.restauracao_pendente) : ""}
+           ${podeRestaurar ? cartaoRestauracaoBackup(restauracaoPendente.restauracao_pendente, restauracaoPendente.reinicio_automatico_disponivel) : ""}
          </div>
        </div>`,
       "memorial"
@@ -7090,15 +7090,21 @@
     </div>`;
   }
 
-  function cartaoRestauracaoBackup(restauracaoPendente) {
+  function cartaoRestauracaoBackup(restauracaoPendente, reinicioAutomaticoDisponivel) {
     return `<div class="cartao">
       <h3 style="margin-top:0;">Restaurar backup</h3>
       ${restauracaoPendente ? `
         <p class="mensagem-erro">
           Um backup já foi enviado e está PENDENTE de restauração — a troca só acontece na PRÓXIMA VEZ que o
-          Alphafitus OS for iniciado (feche e abra o sistema de novo para concluir). Se enviou por engano, cancele abaixo.
+          Alphafitus OS for iniciado${reinicioAutomaticoDisponivel ? "" : " (feche e abra o sistema de novo para concluir)"}.
+          Se enviou por engano, cancele abaixo.
         </p>
-        <button class="botao perigo" data-acao="cancelar-restauracao-pendente">Cancelar restauração pendente</button>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${reinicioAutomaticoDisponivel ? `
+            <button class="botao perigo" data-acao="aplicar-restauracao-agora">Aplicar restauração agora (reinicia o servidor)</button>
+          ` : ""}
+          <button class="botao secundario" data-acao="cancelar-restauracao-pendente">Cancelar restauração pendente</button>
+        </div>
       ` : `
         <p class="texto-suave">
           Envie um arquivo de backup (baixado anteriormente, pelo e-mail ou pela nuvem) para restaurar TODO o
@@ -17594,6 +17600,19 @@
         await chamarApi("/sistema/backup/restauracao-pendente", { method: "DELETE" });
         definirFlash("ok", "Restauração pendente cancelada.");
         return renderMemorialBackups();
+      }
+      case "aplicar-restauracao-agora": {
+        if (!confirm(
+          "Isso vai REINICIAR o servidor agora para aplicar a restauração pendente. " +
+          "Todo mundo conectado (você incluído) vai cair por alguns segundos. Continuar?"
+        )) return;
+        const resp = await chamarApi("/sistema/backup/reiniciar-para-aplicar", { method: "POST", body: {} });
+        definirFlash("ok", resp.mensagem || "Reiniciando o servidor…");
+        // O processo atual está prestes a morrer (systemd sobe um novo em
+        // poucos segundos) — recarrega a própria página depois de um tempo
+        // em vez de tentar re-renderizar com uma API que não vai responder.
+        setTimeout(() => location.reload(), 6000);
+        return;
       }
       case "puxar-backup-mais-recente-nuvem": {
         if (!confirm("Puxar e agendar a restauração da cópia MAIS RECENTE já enviada pra nuvem? A troca só acontece no próximo reinício do sistema.")) return;

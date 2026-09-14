@@ -38,6 +38,8 @@ import datetime
 import io
 import os
 import tempfile
+import threading
+import time
 
 # Fase 123 — mesmo motivo/mesma técnica do alias em app/db.py: o banco
 # agora é SQLCipher, então toda conexão sqlite3 aberta por fora de
@@ -549,7 +551,12 @@ def restaurar_backup():
 @requires_permission("sistema", "restaurar_backup")
 def obter_restauracao_pendente():
     existe = os.path.exists(db_module.caminho_restauracao_pendente())
-    return jsonify({"restauracao_pendente": existe})
+    # Fase 175 — a tela só oferece o botão "Aplicar agora" (reiniciar
+    # sozinho) quando o processo roda sob um supervisor que garante a
+    # volta (ver reiniciar_para_aplicar_restauracao abaixo); caso
+    # contrário, mostra só a orientação de sempre (fechar/abrir manual).
+    supervisionado = os.environ.get("ALPHAFITUS_SERVICO_SUPERVISIONADO") == "1"
+    return jsonify({"restauracao_pendente": existe, "reinicio_automatico_disponivel": supervisionado})
 
 
 @bp.delete("/backup/restauracao-pendente")
@@ -568,6 +575,52 @@ def cancelar_restauracao_pendente():
         acao="restauracao_de_backup_cancelada", ip=client_ip(), dispositivo=client_device(),
     )
     return jsonify({"restauracao_pendente": False})
+
+
+@bp.post("/backup/reiniciar-para-aplicar")
+@requires_permission("sistema", "restaurar_backup")
+def reiniciar_para_aplicar_restauracao():
+    """Fase 175 — pedido do usuário: depois que o Servidor foi pra nuvem
+    (Fase 157b), aplicar uma restauração pendente passou a exigir alguém
+    com acesso à VPS pra reiniciar o serviço — antes disso, era só fechar
+    e abrir o programa na própria máquina. Esta rota fecha essa lacuna
+    SEM precisar de SSH: encerra o próprio processo, e o systemd
+    (`Restart=always`, ver alphafitus-erp.service) sobe ele de novo
+    sozinho em poucos segundos — `run_producao.py` já aplica a
+    restauração pendente ANTES de abrir o banco de verdade, então o
+    reinício sozinho já basta.
+
+    Só funciona sob um supervisor que garante o processo voltar (sinalizado
+    por ALPHAFITUS_SERVICO_SUPERVISIONADO=1 no ambiente, configurado hoje só
+    na VPS) — numa instalação local sem isso configurado, matar o processo
+    o deixaria parado até alguém abrir manualmente, então a rota recusa e
+    pede o caminho manual de sempre em vez de arriscar.
+    """
+    usuario_atual = g.usuario_atual
+    if not os.path.exists(db_module.caminho_restauracao_pendente()):
+        raise ApiError("Não há nenhuma restauração pendente para aplicar.", status=400)
+    if os.environ.get("ALPHAFITUS_SERVICO_SUPERVISIONADO") != "1":
+        raise ApiError(
+            "Este Alphafitus OS não está configurado para reiniciar sozinho. Feche e abra o "
+            "programa de novo (ou reinicie o Serviço do Windows, se instalado como serviço) "
+            "para concluir a restauração.",
+            status=400,
+        )
+    conn = get_db()
+    audit.registrar(
+        conn, tabela="sistema_backup", registro_id=None, usuario_id=usuario_atual["id"],
+        acao="servidor_reiniciado_para_aplicar_restauracao", ip=client_ip(), dispositivo=client_device(),
+    )
+
+    def _reiniciar_em_breve():
+        time.sleep(1.5)
+        os._exit(0)
+
+    threading.Thread(target=_reiniciar_em_breve, daemon=True).start()
+    return jsonify({
+        "ok": True,
+        "mensagem": "Reiniciando o servidor para aplicar a restauração… isso leva alguns segundos.",
+    })
 
 
 # ---- "Puxar da nuvem" (pedido do usuário, 2026-09-01) ----

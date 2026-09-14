@@ -150,11 +150,14 @@ var
   // Fase 111 — Arquitetura Servidor + Terminais. ModoPage é a escolha
   // explícita pedida pelo usuário ("essa escolha precisa ficar muito
   // clara para quem estiver instalando") — a PRIMEIRA página do
-  // instalador, antes de qualquer outra coisa. ServidorPage só existe
-  // quando "Terminal" é escolhido: pede o endereço do Servidor já
-  // instalado em outra máquina.
+  // instalador, antes de qualquer outra coisa.
+  // Fase 175 — desde a Fase 157b o Servidor oficial é sempre o mesmo,
+  // fixo na nuvem (erp.alphafitus.com.br) — não existe mais cenário de
+  // "Servidor na rede local com IP variável". Pedido do usuário: Terminal
+  // não pode pedir nada pra instalar, só detectar o servidor sozinho — a
+  // antiga ServidorPage (pedia IP/porta) foi removida; o endereço é
+  // hardcoded abaixo, em CurStepChanged.
   ModoPage: TInputOptionWizardPage;
-  ServidorPage: TInputQueryWizardPage;
 
 function EhServidor(): Boolean;
 begin
@@ -172,21 +175,12 @@ begin
     'Tipo desta instalação', 'Como esta máquina vai usar o Alphafitus OS?',
     'Escolha SERVIDOR só na máquina principal, que vai guardar o banco de dados ' +
     'oficial da empresa. Escolha TERMINAL nas demais máquinas — elas não têm banco ' +
-    'próprio, só acessam o sistema que roda no Servidor. Nunca instale mais de um ' +
-    'Servidor: todo o resto da empresa deve apontar para o mesmo.',
+    'próprio, só acessam o Alphafitus OS oficial na nuvem automaticamente, sem ' +
+    'precisar de nenhum endereço ou configuração extra.',
     False, False);
   ModoPage.Add('Instalar como SERVIDOR (esta máquina terá o banco de dados oficial)');
-  ModoPage.Add('Instalar como TERMINAL (esta máquina só acessa um Servidor já existente)');
+  ModoPage.Add('Instalar como TERMINAL (conecta sozinho ao Alphafitus OS oficial na nuvem)');
   ModoPage.SelectedValueIndex := 0;
-
-  ServidorPage := CreateInputQueryPage(ModoPage.ID,
-    'Endereço do Servidor', 'Onde está o Alphafitus OS que já roda como Servidor?',
-    'Peça esse endereço para quem instalou o Servidor — normalmente o IP da máquina ' +
-    'principal na rede local (ex.: 192.168.1.10). A conexão é testada de verdade ' +
-    'antes de criar o atalho; se o endereço estiver errado, nada é instalado.');
-  ServidorPage.Add('Endereço/IP do servidor:', False);
-  ServidorPage.Add('Porta:', False);
-  ServidorPage.Values[1] := '5000';
 
   AdminPage := CreateInputQueryPage(wpSelectDir,
     'Conta do Administrador', 'Defina o login inicial do Alphafitus OS',
@@ -202,12 +196,10 @@ end;
 
 // Terminal não usa a conta de administrador (não tem banco próprio) nem a
 // página de pasta de instalação de verdade (usa a mesma {autopf}\AlphafitusOS
-// de sempre, só que quase vazia) — e Servidor não usa a página de endereço do
-// Servidor (é ELE o servidor). Cada modo pula a página que não é dele.
+// de sempre, só que quase vazia).
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
-  if (PageID = ServidorPage.ID) and EhServidor() then Result := True;
   if (PageID = AdminPage.ID) and EhTerminal() then Result := True;
 end;
 
@@ -287,25 +279,6 @@ begin
       Exit;
     end;
   end;
-  // Fase 111 — validação da página de endereço do Servidor (só aparece
-  // no modo Terminal). A conexão em si só é testada de verdade depois,
-  // pelo instalar_terminal.ps1 (ver CurStepChanged) — aqui só garante
-  // que os campos não ficaram vazios/com lixo antes de prosseguir.
-  if CurPageID = ServidorPage.ID then
-  begin
-    if Trim(ServidorPage.Values[0]) = '' then
-    begin
-      MsgBox('Informe o endereço/IP do servidor.', mbError, MB_OK);
-      Result := False;
-      Exit;
-    end;
-    if Trim(ServidorPage.Values[1]) = '' then
-    begin
-      MsgBox('Informe a porta do servidor (normalmente 5000).', mbError, MB_OK);
-      Result := False;
-      Exit;
-    end;
-  end;
 end;
 
 function GerarChaveAleatoria(Tamanho: Integer): String;
@@ -340,20 +313,23 @@ begin
   begin
     // Fase 111 — modo TERMINAL não tem config_ambiente.bat nem banco
     // próprio nenhum: em vez disso, roda o instalar_terminal.ps1 (já
-    // copiado para {app} pelo [Files] acima) com o endereço que a
-    // pessoa informou na página ServidorPage, testando a conexão de
-    // verdade e criando o atalho — mesma lógica de sempre, só que
-    // automática em vez de precisar rodar o .bat manualmente depois.
+    // copiado para {app} pelo [Files] acima), testando a conexão de
+    // verdade e criando o atalho — tudo automático, sem precisar rodar
+    // nada manualmente depois.
+    // Fase 175 — pedido do usuário: Terminal não pode pedir nada pra
+    // instalar, só detectar o servidor sozinho. Desde a Fase 157b existe
+    // um único Servidor oficial, fixo na nuvem — não faz mais sentido
+    // perguntar IP/porta numa rede local. Endereço hardcoded aqui; quem
+    // realmente precisar apontar pra outro servidor (ex.: ambiente de
+    // teste) ainda pode rodar Terminal_Instalar.bat manualmente depois,
+    // que aceita um endereço customizado via instalar_terminal.ps1.
     if EhTerminal() then
     begin
-      EnderecoServidor := Trim(ServidorPage.Values[0]) + ':' + Trim(ServidorPage.Values[1]);
-      if Trim(ServidorPage.Values[0]) <> '' then
-      begin
-        ComandoPs1 := ExpandConstant('{app}\instalar_terminal.ps1');
-        Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ComandoPs1 +
-          '" -Servidor "' + EnderecoServidor + '"';
-        Exec('powershell.exe', Parametros, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
-      end;
+      EnderecoServidor := 'https://erp.alphafitus.com.br';
+      ComandoPs1 := ExpandConstant('{app}\instalar_terminal.ps1');
+      Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ComandoPs1 +
+        '" -Servidor "' + EnderecoServidor + '"';
+      Exec('powershell.exe', Parametros, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
       Exit;
     end;
 
