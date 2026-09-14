@@ -158,6 +158,14 @@ var
   // antiga ServidorPage (pedia IP/porta) foi removida; o endereço é
   // hardcoded abaixo, em CurStepChanged.
   ModoPage: TInputOptionWizardPage;
+  // Fase 177 — pedido do usuário: nunca instalar um segundo Servidor sem
+  // confirmação por e-mail. CodigoServidorConfirmado só vira True depois
+  // de uma verificação HTTP de verdade contra o Servidor oficial (ver
+  // NextButtonClick) — o gate de segurança de fato mora em CurStepChanged
+  // (ssInstall), que roda em QUALQUER modo (inclusive /VERYSILENT), então
+  // não existe caminho pra instalar Servidor sem passar por essa tela.
+  CodigoServidorPage: TInputQueryWizardPage;
+  CodigoServidorConfirmado: Boolean;
 
 function EhServidor(): Boolean;
 begin
@@ -182,6 +190,18 @@ begin
   ModoPage.Add('Instalar como TERMINAL (conecta sozinho ao Alphafitus OS oficial na nuvem)');
   ModoPage.SelectedValueIndex := 0;
 
+  // Fase 177 — pedido do usuário: nunca instalar um segundo Servidor sem
+  // confirmação por e-mail. Só aparece no modo SERVIDOR (ver
+  // ShouldSkipPage) — o código em si é pedido/enviado ao SAIR da
+  // ModoPage (ver NextButtonClick), antes desta tela ser mostrada.
+  CodigoServidorPage := CreateInputQueryPage(ModoPage.ID,
+    'Confirmação por e-mail', 'Instalar um Servidor precisa de confirmação',
+    'Só pode existir UM Servidor oficial — o que já roda na nuvem (erp.alphafitus.com.br). ' +
+    'Instalar outro por engano criaria um banco de dados paralelo, sem nenhuma sincronia com o ' +
+    'real. Um código de 6 dígitos foi enviado por e-mail para quem administra o sistema — confira ' +
+    'a caixa de entrada e digite o código abaixo para continuar.');
+  CodigoServidorPage.Add('Código recebido por e-mail:', False);
+
   AdminPage := CreateInputQueryPage(wpSelectDir,
     'Conta do Administrador', 'Defina o login inicial do Alphafitus OS',
     'Este será o primeiro usuário do sistema, com acesso total a tudo. ' +
@@ -201,6 +221,79 @@ function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
   if (PageID = AdminPage.ID) and EhTerminal() then Result := True;
+  if (PageID = CodigoServidorPage.ID) and EhTerminal() then Result := True;
+end;
+
+// Fase 177 — confirmação por e-mail antes de instalar em modo SERVIDOR,
+// via WinHTTP (COM embutido no Windows, nada extra pra instalar — mesmo
+// objeto usado há anos em scripts de instalação pra chamadas HTTP
+// simples). O JSON das duas rotas (app/routes/instalador.py) é sempre
+// plano, sem aninhamento — um parser de verdade seria over-engineering
+// aqui; extração por substring resolve e é fácil de auditar.
+function ExtrairCampoJson(const Json, Campo: String): String;
+var
+  Marcador: String;
+  PosInicio, PosFim: Integer;
+begin
+  Result := '';
+  Marcador := '"' + Campo + '":"';
+  PosInicio := Pos(Marcador, Json);
+  if PosInicio = 0 then Exit;
+  PosInicio := PosInicio + Length(Marcador);
+  PosFim := PosInicio;
+  while (PosFim <= Length(Json)) and (Json[PosFim] <> '"') do
+    PosFim := PosFim + 1;
+  Result := Copy(Json, PosInicio, PosFim - PosInicio);
+end;
+
+function ChamarApiInstalador(const Caminho, CorpoJson: String; var CodigoHttp: Integer; var RespostaTexto: String): Boolean;
+var
+  Http: Variant;
+begin
+  Result := False;
+  RespostaTexto := '';
+  CodigoHttp := 0;
+  try
+    Http := CreateOleObject('WinHttp.WinHttpRequest.5.1');
+    Http.Open('POST', 'https://erp.alphafitus.com.br/api/v1/instalador/' + Caminho, False);
+    Http.SetRequestHeader('Content-Type', 'application/json');
+    Http.SetTimeouts(5000, 5000, 10000, 10000);
+    Http.Send(CorpoJson);
+    CodigoHttp := Http.Status;
+    RespostaTexto := Http.ResponseText;
+    Result := True;
+  except
+    Result := False;
+  end;
+end;
+
+function SolicitarCodigoInstalacaoServidor(var MensagemErro: String): Boolean;
+var
+  CodigoHttp: Integer;
+  Resposta: String;
+begin
+  Result := ChamarApiInstalador('solicitar-codigo-servidor', '{}', CodigoHttp, Resposta);
+  if Result and (CodigoHttp = 200) then Exit;
+  Result := False;
+  MensagemErro := '';
+  if Resposta <> '' then MensagemErro := ExtrairCampoJson(Resposta, 'mensagem');
+  if MensagemErro = '' then
+    MensagemErro := 'Não consegui contatar o Servidor oficial pra pedir o código — verifique sua ' +
+      'internet e tente de novo (Voltar e Avançar de novo nesta tela).';
+end;
+
+function VerificarCodigoInstalacaoServidor(const Codigo: String; var MensagemErro: String): Boolean;
+var
+  CodigoHttp: Integer;
+  Resposta: String;
+begin
+  Result := ChamarApiInstalador('verificar-codigo-servidor', '{"codigo":"' + Codigo + '"}', CodigoHttp, Resposta);
+  if Result and (CodigoHttp = 200) then Exit;
+  Result := False;
+  MensagemErro := '';
+  if Resposta <> '' then MensagemErro := ExtrairCampoJson(Resposta, 'mensagem');
+  if MensagemErro = '' then
+    MensagemErro := 'Não consegui confirmar o código — verifique sua internet e tente de novo.';
 end;
 
 // Política de senha PRÓPRIA desta tela do instalador — de propósito mais
@@ -246,7 +339,7 @@ end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
 var
-  Motivo: String;
+  Motivo, MensagemErro: String;
 begin
   Result := True;
   // Instalação silenciosa (/VERYSILENT etc.) nunca mostra esta tela, mas
@@ -256,8 +349,45 @@ begin
   // silencioso é o comportamento certo mesmo pular a validação: o
   // CurStepChanged mais abaixo já sabe cair para trás com segurança
   // (senha aleatória, troca obrigatória no primeiro login) quando nenhuma
-  // senha foi informada.
+  // senha foi informada. IMPORTANTE: isso NÃO abre uma brecha pro modo
+  // Servidor sem confirmação por e-mail — esse gate específico mora em
+  // CurStepChanged (ssInstall), que roda em QUALQUER modo, silencioso
+  // incluído, e não depende de nada que aconteça aqui.
   if WizardSilent() then Exit;
+
+  // Fase 177 — ao SAIR da ModoPage com Servidor escolhido, pede o código
+  // por e-mail antes de deixar prosseguir pra tela de digitar o código.
+  if (CurPageID = ModoPage.ID) and EhServidor() then
+  begin
+    Result := SolicitarCodigoInstalacaoServidor(MensagemErro);
+    if not Result then
+    begin
+      MsgBox(MensagemErro, mbError, MB_OK);
+      Exit;
+    end;
+    MsgBox(
+      'Código enviado! Confira o e-mail de quem administra o sistema (chega em poucos ' +
+      'segundos) e digite o código na próxima tela.',
+      mbInformation, MB_OK);
+  end;
+
+  if CurPageID = CodigoServidorPage.ID then
+  begin
+    if Trim(CodigoServidorPage.Values[0]) = '' then
+    begin
+      MsgBox('Informe o código recebido por e-mail.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
+    Result := VerificarCodigoInstalacaoServidor(Trim(CodigoServidorPage.Values[0]), MensagemErro);
+    if not Result then
+    begin
+      MsgBox(MensagemErro, mbError, MB_OK);
+      Exit;
+    end;
+    CodigoServidorConfirmado := True;
+  end;
+
   if CurPageID = AdminPage.ID then
   begin
     if Trim(AdminPage.Values[0]) = '' then
@@ -309,6 +439,25 @@ var
   EnderecoServidor, ComandoPs1, Parametros: String;
   ResultCode: Integer;
 begin
+  // Fase 177 — o GATE de segurança de verdade (pedido do usuário: nunca
+  // instalar Servidor sem confirmação por e-mail) mora aqui, não em
+  // NextButtonClick — ssInstall roda em QUALQUER modo, inclusive
+  // /VERYSILENT (que pula todas as telas, inclusive a de confirmação).
+  // CodigoServidorConfirmado só vira True depois de uma verificação HTTP
+  // de verdade contra o Servidor oficial — sem isso, não existe caminho
+  // (interativo ou silencioso) que instale um Servidor sem confirmar.
+  if CurStep = ssInstall then
+  begin
+    if EhServidor() and not CodigoServidorConfirmado then
+    begin
+      MsgBox(
+        'Instalação cancelada: a confirmação por e-mail não foi concluída. ' +
+        'Um Servidor só pode ser instalado depois de confirmar o código enviado por e-mail.',
+        mbCriticalError, MB_OK);
+      Abort;
+    end;
+  end;
+
   if CurStep = ssPostInstall then
   begin
     // Fase 111 — modo TERMINAL não tem config_ambiente.bat nem banco
