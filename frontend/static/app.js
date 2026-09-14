@@ -502,7 +502,11 @@
     try {
       const resp = await chamarApi("/terminais/heartbeat", {
         method: "POST",
-        body: { terminal_uid: obterTerminalUid(), versao_app: state.versaoSistema || null },
+        body: {
+          terminal_uid: obterTerminalUid(),
+          versao_app: state.versaoSistema || null,
+          tela_atual: location.hash || null,
+        },
       });
       state.statusServidor = {
         conectado: true, bloqueado: false,
@@ -612,6 +616,11 @@
     // iniciarHeartbeatTerminal): também se protege sozinha contra criar
     // dois timers numa mesma sessão.
     iniciarHeartbeatTerminal();
+    // Fase 176 — pedido do usuário: saber em tempo real o que cada terminal
+    // está fazendo, não só a cada 60s. Manda a tela atual a cada navegação,
+    // além do heartbeat periódico de sempre — chamada "fire and forget",
+    // não atrasa a renderização da tela em nada.
+    enviarHeartbeatTerminal().catch(() => { /* o timer de 60s tenta de novo */ });
 
     const [, pagina, param] = rota.split("/");
     try {
@@ -2105,22 +2114,73 @@
   // Lista as máquinas que já se conectaram ao servidor pela rede (cada uma
   // se registra sozinha via heartbeat, ver iniciarHeartbeatTerminal acima)
   // — nunca precisa ser cadastrada manualmente aqui.
-  async function renderTerminais() {
-    app.innerHTML = '<div class="carregando">Carregando…</div>';
+
+  // Fase 176 — pedido do usuário: "sempre saber o que cada terminal está
+  // fazendo". Reaproveita `montarIndiceBuscaGlobal()` (Fase 123, já usado
+  // pela busca global) em vez de percorrer ITENS_MENU na mão — ITENS_MENU
+  // mistura entradas soltas com grupos/subgrupos aninhados
+  // (`{tipo:"grupo", itens:[...]}`), então só essa função já sabe
+  // achatar tudo de verdade (inclusive múltiplos níveis, ex.: "Shelf
+  // Life" dentro de "Qualidade"). O `caminho` de cada item vira o prefixo
+  // legível ("Administração › Usuários"), então nem precisa completar
+  // sub-rota manualmente como uma busca por prefixo faria.
+  function rotuloDaTela(hash) {
+    if (!hash) return null;
+    const item = montarIndiceBuscaGlobal().find((i) => i.rota === hash);
+    if (item) return [...item.caminho, item.label].join(" › ");
+    const paraLegivel = (segmento) => segmento.replace(/[-_]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+    const partes = hash.replace(/^#\//, "").split("/").filter(Boolean).map(paraLegivel);
+    return partes.join(" › ") || null;
+  }
+
+  // Terminal "vivo" = mandou notícia (heartbeat ou navegação) nos últimos
+  // 90s — folga de 30s sobre o intervalo de 60s do heartbeat periódico
+  // para não piscar "offline" à toa entre um ciclo e outro.
+  const JANELA_TERMINAL_VIVO_MS = 90000;
+
+  let timerTerminais = null;
+  function pararPollingTerminais() {
+    if (timerTerminais) {
+      clearInterval(timerTerminais);
+      timerTerminais = null;
+    }
+  }
+  function iniciarPollingTerminais() {
+    pararPollingTerminais();
+    timerTerminais = setInterval(() => {
+      if (location.hash !== "#/terminais") {
+        pararPollingTerminais();
+        return;
+      }
+      renderTerminais(true).catch(() => { /* próximo ciclo tenta de novo */ });
+    }, 10000);
+  }
+
+  async function renderTerminais(silencioso = false) {
+    if (!silencioso) app.innerHTML = '<div class="carregando">Carregando…</div>';
     const terminais = await chamarApi("/terminais");
     const podeBloquear = temPermissao("terminais", "bloquear");
 
     const linhas = terminais
-      .map((t) => `<tr>
+      .map((t) => {
+        const vivo = t.ultimo_acesso_em && (Date.now() - new Date(t.ultimo_acesso_em).getTime()) < JANELA_TERMINAL_VIVO_MS;
+        const tela = vivo ? rotuloDaTela(t.tela_atual) : null;
+        return `<tr>
         <td>
           <strong>Nº ${String(t.id).padStart(3, "0")}</strong>
           ${t.nome ? `<div class="texto-suave">${escapeHtml(t.nome)}</div>` : ""}
         </td>
         <td>${escapeHtml(t.usuario_ultimo_acesso_nome || "—")}</td>
+        <td>
+          ${t.bloqueado
+            ? '<span class="selo bloqueado">Bloqueado</span>'
+            : vivo
+              ? '<span class="selo ativo">● Ao vivo</span>'
+              : `<span class="texto-suave">Offline${t.ultimo_acesso_em ? " — visto " + fmtData(t.ultimo_acesso_em) : ""}</span>`}
+        </td>
+        <td>${vivo ? escapeHtml(tela || "—") : "—"}</td>
         <td>${escapeHtml(t.ip_ultimo_acesso || "—")}</td>
         <td>${escapeHtml(t.versao_app_ultima || "—")}</td>
-        <td>${t.ultimo_acesso_em ? fmtData(t.ultimo_acesso_em) : "—"}</td>
-        <td>${t.bloqueado ? '<span class="selo bloqueado">Bloqueado</span>' : '<span class="selo ativo">Ativo</span>'}</td>
         <td>
           ${podeBloquear ? `<button class="botao secundario pequeno" data-acao="renomear-terminal" data-id="${t.id}" data-nome="${escapeHtml(t.nome || "")}">Renomear</button>` : ""}
           ${podeBloquear
@@ -2129,22 +2189,25 @@
                 : `<button class="botao perigo pequeno" data-acao="bloquear-terminal" data-id="${t.id}">Bloquear</button>`)
             : ""}
         </td>
-      </tr>`)
+      </tr>`;
+      })
       .join("");
 
     renderShell(
       `<h2>Terminais</h2>
        <div class="cartao">
          <p class="texto-suave">Máquinas que já acessaram o sistema pela rede. Cada uma se registra sozinha ao
-         entrar — não precisa cadastrar nada aqui. Bloquear um terminal impede que ele continue usando o sistema
-         (útil, por exemplo, se um notebook saiu da empresa) sem precisar mexer no usuário/senha de ninguém.</p>
+         entrar — não precisa cadastrar nada aqui. "Ao vivo" e a tela atual atualizam sozinhos a cada 10s enquanto
+         esta página estiver aberta. Bloquear um terminal impede que ele continue usando o sistema (útil, por
+         exemplo, se um notebook saiu da empresa) sem precisar mexer no usuário/senha de ninguém.</p>
          <table>
-           <thead><tr><th>Terminal</th><th>Último usuário</th><th>IP</th><th>Versão</th><th>Última conexão</th><th>Status</th><th></th></tr></thead>
+           <thead><tr><th>Terminal</th><th>Último usuário</th><th>Status</th><th>Tela atual</th><th>IP</th><th>Versão</th><th></th></tr></thead>
            <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum terminal registrado ainda.</td></tr>'}</tbody>
          </table>
        </div>`,
       "terminais"
     );
+    if (!silencioso) iniciarPollingTerminais();
   }
 
   function modalRenomearTerminal(terminalId, nomeAtual) {

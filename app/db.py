@@ -179,6 +179,7 @@ SCHEMA_FILES = [
     "schema_fase168.sql",  # Fase 168 — rate limit por IP em /auth/login (achado de auditoria de segurança)
     "schema_fase171.sql",  # Fase 171 — CRM: Funil de Vendas (Oportunidades)
     "schema_fase172.sql",  # Fase 172 — 2FA configurável (Administração > Segurança)
+    "schema_fase176.sql",  # Fase 176 — painel ao vivo: tela atual de cada terminal
 ]
 
 

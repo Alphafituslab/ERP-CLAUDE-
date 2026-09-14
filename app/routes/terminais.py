@@ -57,6 +57,12 @@ def heartbeat():
         raise ApiError("terminal_uid inválido.", status=400)
     versao_app = (dados.get("versao_app") or "").strip() or None
     nome_sugerido = (dados.get("nome") or "").strip() or None
+    # Fase 176 — pedido do usuário: saber em tempo real o que cada terminal
+    # está fazendo, não só quando foi visto por último. Guardamos o hash de
+    # rota cru (ex.: "#/financeiro") como o front mandar; limitado por
+    # segurança pelo mesmo motivo do terminal_uid acima — nunca confiar no
+    # tamanho de algo vindo do cliente.
+    tela_atual = (dados.get("tela_atual") or "").strip()[:200] or None
 
     conn = get_db()
     existente = conn.execute("SELECT * FROM terminais WHERE terminal_uid = ?", (terminal_uid,)).fetchone()
@@ -72,10 +78,11 @@ def heartbeat():
             """
             UPDATE terminais
             SET ip_ultimo_acesso = ?, user_agent_ultimo_acesso = ?, usuario_id_ultimo_acesso = ?,
-                versao_app_ultima = ?, ultimo_acesso_em = ?
+                versao_app_ultima = ?, ultimo_acesso_em = ?, tela_atual = ?, tela_atualizada_em = ?
             WHERE id = ?
             """,
-            (client_ip(), client_device(), usuario_atual["id"], versao_app, agora, existente["id"]),
+            (client_ip(), client_device(), usuario_atual["id"], versao_app, agora,
+             tela_atual, agora if tela_atual else existente["tela_atualizada_em"], existente["id"]),
         )
         terminal_id = existente["id"]
     else:
@@ -83,11 +90,12 @@ def heartbeat():
             """
             INSERT INTO terminais
                 (terminal_uid, nome, ip_ultimo_acesso, user_agent_ultimo_acesso,
-                 usuario_id_ultimo_acesso, versao_app_ultima, ultimo_acesso_em)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 usuario_id_ultimo_acesso, versao_app_ultima, ultimo_acesso_em,
+                 tela_atual, tela_atualizada_em)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (terminal_uid, nome_sugerido, client_ip(), client_device(),
-             usuario_atual["id"], versao_app, agora),
+             usuario_atual["id"], versao_app, agora, tela_atual, agora if tela_atual else None),
         )
         terminal_id = cur.lastrowid
         audit.registrar(
