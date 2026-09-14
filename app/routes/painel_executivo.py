@@ -285,10 +285,11 @@ def _funil_pedidos(conn, inicio, fim):
 def _clientes_sem_atendimento(conn, inicio, fim, limite=20):
     rows = conn.execute(
         """
-        SELECT c.id, c.razao_social, c.nome_fantasia, c.uf,
+        SELECT c.id, c.razao_social, c.nome_fantasia, c.uf, u.nome AS vendedor_responsavel_nome,
                (SELECT MAX(pv.criado_em) FROM pedidos_venda pv
                 WHERE pv.cliente_id = c.id AND pv.status != 'cancelado') AS ultimo_pedido_em
         FROM clientes c
+        LEFT JOIN usuarios u ON u.id = c.vendedor_responsavel_id
         WHERE c.status = 'ativo'
         """
     ).fetchall()
@@ -312,6 +313,7 @@ def _clientes_sem_atendimento(conn, inicio, fim, limite=20):
             "cliente_id": r["id"],
             "nome": r["nome_fantasia"] or r["razao_social"],
             "uf": r["uf"],
+            "vendedor_responsavel_nome": r["vendedor_responsavel_nome"],
             "ultimo_pedido_em": ultimo,
             "dias_sem_pedido": dias_sem_pedido,
         })

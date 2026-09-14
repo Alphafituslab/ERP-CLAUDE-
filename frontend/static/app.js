@@ -17000,11 +17000,12 @@
         .join("");
 
       clientesSemAtendimentoHtml = secComercial.clientes_sem_atendimento.length
-        ? `<table class="pe-tabela-simples"><thead><tr><th>Cliente</th><th>UF</th><th>Último pedido</th><th>Dias sem comprar</th></tr></thead><tbody>
+        ? `<table class="pe-tabela-simples"><thead><tr><th>Cliente</th><th>UF</th><th>Último pedido</th><th>Dias sem comprar</th><th>Vendedor/Televendas</th></tr></thead><tbody>
             ${secComercial.clientes_sem_atendimento.map((c) => `<tr>
               <td>${escapeHtml(c.nome)}</td><td>${escapeHtml(c.uf || "—")}</td>
               <td>${c.ultimo_pedido_em ? fmtData(c.ultimo_pedido_em) : "Nunca comprou"}</td>
               <td>${c.dias_sem_pedido ?? "—"}</td>
+              <td>${escapeHtml(c.vendedor_responsavel_nome || "Sem responsável definido")}</td>
             </tr>`).join("")}
           </tbody></table>`
         : '<p class="texto-suave">Todos os clientes ativos tiveram pedido neste período.</p>';
