@@ -1871,7 +1871,7 @@
           <td>
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-usuario" data-id="${u.id}">Editar</button>` : ""}
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="perfis-usuario" data-id="${u.id}">Perfis</button>` : ""}
-            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="resetar-senha-usuario" data-id="${u.id}" data-nome="${escapeHtml(u.nome)}">Resetar senha</button>` : ""}
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="resetar-senha-usuario" data-id="${u.id}" data-nome="${escapeHtml(u.nome)}" data-celular="${escapeHtml(u.celular || "")}">Resetar senha</button>` : ""}
             ${podeInativar && u.status === "ativo" ? `<button class="botao perigo pequeno" data-acao="inativar-usuario" data-id="${u.id}">Inativar</button>` : ""}
             ${podeInativar && u.status !== "ativo" ? `<button class="botao pequeno" data-acao="reativar-usuario" data-id="${u.id}">Reativar</button>` : ""}
           </td>
@@ -1915,6 +1915,9 @@
       <form data-form="criar-usuario">
         <div class="campo"><label>Nome</label><input name="nome" required></div>
         <div class="campo"><label>Email</label><input name="email" type="email" required></div>
+        <div class="campo"><label>Celular (WhatsApp, opcional)</label><input name="celular" placeholder="48999998888">
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Se preenchido, dá pra mandar o login e a senha provisória direto por WhatsApp ao criar.</div>
+        </div>
         <div class="campo"><label>Senha temporária</label><input name="senha" type="password" required minlength="6" maxlength="12">
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial. O usuário será obrigado a trocá-la no primeiro login.</div>
         </div>
@@ -18403,8 +18406,31 @@
             <input type="text" value="${escapeHtml(resp.senha_provisoria)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;">
           </div>
           <div class="rodape-modal">
+            ${alvo.dataset.celular ? `<button type="button" class="botao secundario" data-acao="enviar-credenciais-whatsapp" data-id="${alvo.dataset.id}" data-senha="${escapeHtml(resp.senha_provisoria)}">📲 Enviar por WhatsApp</button>` : ""}
             <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
           </div>`);
+        return;
+      }
+      case "enviar-credenciais-whatsapp": {
+        // Fase 186 — pedido do usuário: mandar login+senha provisória
+        // direto pro WhatsApp já cadastrado da pessoa, reaproveitando o
+        // mesmo canal de "Esqueci minha senha" (Evolution API já
+        // configurada em Sistema > Backups) — nunca um número digitado na
+        // hora, sempre o já associado à conta.
+        alvo.disabled = true;
+        const rotuloOriginal = alvo.textContent;
+        alvo.textContent = "Enviando…";
+        try {
+          await chamarApi(`/usuarios/${alvo.dataset.id}/enviar-credenciais-whatsapp`, {
+            method: "POST",
+            body: { senha_provisoria: alvo.dataset.senha },
+          });
+          alvo.textContent = "✓ Enviado";
+        } catch (erro) {
+          alvo.disabled = false;
+          alvo.textContent = rotuloOriginal;
+          alert(erro.message || "Não foi possível enviar por WhatsApp.");
+        }
         return;
       }
       case "inativar-usuario":
@@ -20097,9 +20123,10 @@
         const nomeCriado = dados.get("nome");
         const emailCriado = dados.get("email");
         const senhaCriada = dados.get("senha");
-        await chamarApi("/usuarios", {
+        const celularCriado = (dados.get("celular") || "").trim();
+        const usuarioCriado = await chamarApi("/usuarios", {
           method: "POST",
-          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, perfil_ids, foto_perfil },
+          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, celular: celularCriado || null, perfil_ids, foto_perfil },
         });
         fecharModais();
         await renderUsuarios(estaNaTelaMemorialDeUsuarios());
@@ -20124,6 +20151,7 @@
             <input type="text" value="${escapeHtml(senhaCriada)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;">
           </div>
           <div class="rodape-modal">
+            ${celularCriado ? `<button type="button" class="botao secundario" data-acao="enviar-credenciais-whatsapp" data-id="${usuarioCriado.id}" data-senha="${escapeHtml(senhaCriada)}">📲 Enviar por WhatsApp</button>` : ""}
             <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
           </div>`);
         return;

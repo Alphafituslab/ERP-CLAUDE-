@@ -2,7 +2,7 @@ import datetime
 
 from flask import Blueprint, g, jsonify, request
 
-from .. import audit, security
+from .. import audit, backup_service, security
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..imagens import validar_imagem_base64
 from ..permissions import (
@@ -80,6 +80,11 @@ def criar():
     # (Fase 113, "Minha Conta") — mesma validação, mesmo formato (data
     # URI base64), reaproveitados sem duplicar a lógica de decodificação.
     foto_perfil = validar_imagem_base64(dados.get("foto_perfil"))
+    # Pedido do usuário (2026-09-16): poder já cadastrar o celular (WhatsApp)
+    # no ato da criação, pra habilitar "Enviar por WhatsApp" no login/senha
+    # provisória mostrada logo em seguida — sem precisar esperar a pessoa
+    # cadastrar o próprio celular depois em "Minha Conta" (Fase 158).
+    celular = (dados.get("celular") or "").strip() or None
     conn = get_db()
 
     if not nome or not email or not senha:
@@ -107,10 +112,10 @@ def criar():
     senha_hash = security.hash_password(senha)
     cur = conn.execute(
         """
-        INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar, criado_por, foto_perfil)
-        VALUES (?, ?, ?, 1, ?, ?)
+        INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar, criado_por, foto_perfil, celular)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
         """,
-        (nome, email, senha_hash, usuario_atual["id"], foto_perfil),
+        (nome, email, senha_hash, usuario_atual["id"], foto_perfil, celular),
     )
     novo_id = cur.lastrowid
 
@@ -213,6 +218,52 @@ def resetar_senha(usuario_id):
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_atual["id"],
                      acao="senha_resetada_por_administrador", ip=client_ip(), dispositivo=client_device())
     return jsonify({"ok": True, "senha_provisoria": senha_provisoria, "email": row["email"]})
+
+
+@bp.post("/<int:usuario_id>/enviar-credenciais-whatsapp")
+@requires_permission("usuarios", "editar")
+def enviar_credenciais_whatsapp(usuario_id):
+    """Fase 186 — pedido do usuário: ao criar um usuário ou resetar a senha
+    dele, se a pessoa já tiver celular (WhatsApp) cadastrado, poder mandar
+    login + senha provisória direto pra ela por lá, em vez de precisar
+    copiar/colar manualmente em outra conversa. Reaproveita o MESMO canal
+    já usado em `/auth/recuperar-senha` (Fase 158) — a mesma Evolution API
+    configurada em Sistema > Backups, sem integração nova nenhuma. O texto
+    (email/senha) só existe nesta chamada: como a senha provisória nunca é
+    salva em lugar recuperável nenhum, é o FRONTEND (que acabou de recebê-la
+    da resposta de criar/resetar) quem manda ela de volta aqui pra ser
+    repassada — nunca lida do banco."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    senha_provisoria = dados.get("senha_provisoria") or ""
+    if not senha_provisoria:
+        raise ApiError("Informe a senha provisória a enviar.", status=400)
+    conn = get_db()
+    row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    if row is None:
+        raise ApiError("Usuário não encontrado.", status=404)
+    row = dict(row)
+    # O número usado é sempre o já cadastrado na conta — nunca um número
+    # informado na hora por quem está enviando, pra garantir que a senha só
+    # vai pro WhatsApp que a própria pessoa já associou ao email dela.
+    if not row.get("celular"):
+        raise ApiError("Este usuário não tem celular (WhatsApp) cadastrado.", status=400)
+
+    texto = (
+        "Alphafitus OS — acesso ao sistema\n\n"
+        f"Login: {row['email']}\n"
+        f"Senha provisória: {senha_provisoria}\n\n"
+        "Use essa senha só na primeira vez — o sistema vai pedir pra você escolher a senha definitiva."
+    )
+    config_whats = backup_service.obter_configuracao(conn)
+    try:
+        backup_service.enviar_texto_whatsapp(config_whats, row["celular"], texto)
+    except Exception as erro:
+        raise ApiError(f"Falha ao enviar por WhatsApp: {erro}", status=502)
+
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_atual["id"],
+                     acao="credenciais_enviadas_por_whatsapp", ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True})
 
 
 @bp.put("/<int:usuario_id>/perfis")
