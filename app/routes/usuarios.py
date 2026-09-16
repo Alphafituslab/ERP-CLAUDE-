@@ -4,6 +4,7 @@ from flask import Blueprint, g, jsonify, request
 
 from .. import audit, security
 from ..context import ApiError, client_device, client_ip, get_db
+from ..imagens import validar_imagem_base64
 from ..permissions import bloquear_atribuicao_alem_das_proprias_permissoes, requires_permission
 
 bp = Blueprint("usuarios", __name__, url_prefix="/api/v1/usuarios")
@@ -70,6 +71,11 @@ def criar():
     email = (dados.get("email") or "").strip().lower()
     senha = dados.get("senha") or ""
     perfil_ids = dados.get("perfil_ids") or []
+    # Pedido do usuário (2026-09-16): poder já colocar a foto no ato do
+    # cadastro, em vez de só o próprio usuário conseguir subir depois
+    # (Fase 113, "Minha Conta") — mesma validação, mesmo formato (data
+    # URI base64), reaproveitados sem duplicar a lógica de decodificação.
+    foto_perfil = validar_imagem_base64(dados.get("foto_perfil"))
     conn = get_db()
 
     if not nome or not email or not senha:
@@ -97,10 +103,10 @@ def criar():
     senha_hash = security.hash_password(senha)
     cur = conn.execute(
         """
-        INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar, criado_por)
-        VALUES (?, ?, ?, 1, ?)
+        INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar, criado_por, foto_perfil)
+        VALUES (?, ?, ?, 1, ?, ?)
         """,
-        (nome, email, senha_hash, usuario_atual["id"]),
+        (nome, email, senha_hash, usuario_atual["id"], foto_perfil),
     )
     novo_id = cur.lastrowid
 

@@ -1861,6 +1861,11 @@
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Mínimo 12 caracteres, com maiúscula, minúscula, número e símbolo. O usuário será obrigado a trocá-la no primeiro login.</div>
         </div>
         <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoes || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div></div>
+        <div class="campo">
+          <label>Foto (opcional)</label>
+          <input type="file" accept="image/png,image/jpeg,image/webp" name="foto">
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">JPEG, PNG ou WEBP, até 2 MB — o próprio usuário também pode subir/trocar depois em "Minha Conta".</div>
+        </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Criar</button>
@@ -19627,9 +19632,11 @@
       }
       case "criar-usuario": {
         const perfil_ids = dados.getAll("perfil_ids").map(Number);
+        const arquivoFoto = form.querySelector('input[type="file"]').files[0];
+        const foto_perfil = arquivoFoto ? await lerArquivoComoBase64(arquivoFoto) : null;
         await chamarApi("/usuarios", {
           method: "POST",
-          body: { nome: dados.get("nome"), email: dados.get("email"), senha: dados.get("senha"), perfil_ids },
+          body: { nome: dados.get("nome"), email: dados.get("email"), senha: dados.get("senha"), perfil_ids, foto_perfil },
         });
         fecharModais();
         definirFlash("ok", "Usuário criado.");
