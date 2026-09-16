@@ -479,6 +479,22 @@ begin
       Parametros := '-NoProfile -ExecutionPolicy Bypass -File "' + ComandoPs1 +
         '" -Servidor "' + EnderecoServidor + '"';
       Exec('powershell.exe', Parametros, '', SW_SHOW, ewWaitUntilTerminated, ResultCode);
+      // Achado real (usuário relatou 2026-09-16): instalação terminava
+      // "concluída" mesmo quando instalar_terminal.ps1 falhava no meio
+      // do caminho (ex.: antivírus interferindo na criação do atalho) —
+      // este instalador nunca checava o resultado. Agora avisa
+      // explicitamente em vez de deixar a pessoa achar que deu tudo
+      // certo sem nenhum atalho na tela.
+      if ResultCode <> 0 then
+      begin
+        MsgBox(
+          'A instalação em si concluiu, mas a criação do atalho na Área de Trabalho ' +
+          'pode não ter funcionado (ex.: bloqueado por antivírus). Enquanto isso, você já ' +
+          'pode usar o sistema abrindo o Chrome ou Edge e acessando ' + EnderecoServidor + ' ' +
+          'diretamente. Pra tentar criar o atalho de novo, rode "Instalar um Terminal em outro ' +
+          'computador" (atalho no Menu Iniciar do Servidor) ou o Terminal_Instalar.bat desta pasta.',
+          mbInformation, MB_OK);
+      end;
       Exit;
     end;
 

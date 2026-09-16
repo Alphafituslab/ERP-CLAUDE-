@@ -33,13 +33,21 @@ Escrever '  Este computador so ACESSA o sistema - o Alphafitus OS de' White
 Escrever '  verdade (com o banco de dados) roda no SERVIDOR.' White
 Escrever ''
 
-if ([string]::IsNullOrWhiteSpace($Servidor)) {
+# Guarda ANTES de sobrescrever $Servidor: usado abaixo pra nunca travar
+# esperando Enter quando quem chamou foi o instalador principal (.iss),
+# que roda isto com -Servidor já preenchido e ninguém necessariamente
+# olhando a janela — achado real (2026-09-16): um "Read-Host" sem essa
+# guarda, se disparado nesse caminho, prende o instalador inteiro (ele
+# espera este processo terminar) até alguém notar e apertar Enter.
+$modoInterativo = [string]::IsNullOrWhiteSpace($Servidor)
+
+if ($modoInterativo) {
     $Servidor = Read-Host '  Endereco do servidor (ex.: 192.168.1.10:5000)'
 }
 $Servidor = $Servidor.Trim()
 if ([string]::IsNullOrWhiteSpace($Servidor)) {
     Escrever '  [X] Nenhum endereco informado. Cancelado.' Red
-    Read-Host '  Pressione Enter para fechar'
+    if ($modoInterativo) { Read-Host '  Pressione Enter para fechar' }
     exit 1
 }
 if ($Servidor -notmatch '^https?://') { $Servidor = "http://$Servidor" }
@@ -68,7 +76,7 @@ if (-not $conectou) {
     Escrever ''
     Escrever '      O atalho NAO foi criado - rode este instalador de' Yellow
     Escrever '      novo depois de confirmar o endereco certo.' Yellow
-    Read-Host '  Pressione Enter para fechar'
+    if ($modoInterativo) { Read-Host '  Pressione Enter para fechar' }
     exit 1
 }
 
@@ -84,23 +92,62 @@ $navegador = $candidatos | Where-Object { Test-Path $_ } | Select-Object -First 
 if (-not $navegador) {
     Escrever '  [X] Nao encontrei Chrome nem Edge neste computador.' Red
     Escrever '      Instale o Google Chrome e rode este instalador de novo.' Red
-    Read-Host '  Pressione Enter para fechar'
+    if ($modoInterativo) { Read-Host '  Pressione Enter para fechar' }
     exit 1
 }
 Escrever "  [2/3] Navegador encontrado: $(Split-Path $navegador -Leaf)" Green
 
 # --- 3. Criar o atalho na area de trabalho -------------------
+# Achado real (usuario relatou 2026-09-16): instalacao terminou "certinho"
+# mas o atalho nao apareceu. Duas causas plausiveis, as duas silenciosas
+# antes deste fix: (a) o instalador principal rodou elevado (dialogo
+# "instalar para todos os usuarios") - nesse caso [Environment]::
+# GetFolderPath('Desktop') aponta pro desktop do contexto ADMIN, nao pro
+# da pessoa sentada na maquina; (b) um antivirus (McAfee confirmado
+# interferindo neste mesmo instalador noutro caso) bloqueia a criacao via
+# COM (WScript.Shell) sem avisar nada, e como nao havia try/catch aqui,
+# um erro nesse ponto matava o script inteiro (com $ErrorActionPreference
+# = 'Stop' no topo) ANTES de imprimir qualquer aviso - e o instalador
+# principal (.iss) nunca checava se este script terminou bem, entao a
+# tela final dizia "Concluido" mesmo com o atalho nunca criado.
+# Fix: tenta em DUAS pastas (a do usuario atual e a "Area de Trabalho
+# Publica", visivel pra qualquer conta que logar nesse PC) - o que
+# cobre o caso (a); e cada tentativa tem seu proprio try/catch, entao uma
+# falha isolada (caso (b)) fica visivel e registrada, sem derrubar o
+# resto do script (a pasta de backup do passo 4 continua sendo criada
+# mesmo se o atalho falhar).
+function CriarAtalhoDesktop($CaminhoPasta, $NomeArquivo, $Alvo, $Argumentos, $Descricao) {
+    try {
+        if (-not (Test-Path $CaminhoPasta)) { return $false }
+        $shellLocal = New-Object -ComObject WScript.Shell
+        $atalhoLocal = $shellLocal.CreateShortcut((Join-Path $CaminhoPasta $NomeArquivo))
+        $atalhoLocal.TargetPath  = $Alvo
+        if ($Argumentos) { $atalhoLocal.Arguments = $Argumentos }
+        $atalhoLocal.Description = $Descricao
+        $atalhoLocal.Save()
+        return $true
+    } catch {
+        Escrever "  [!] Nao consegui criar atalho em '$CaminhoPasta': $($_.Exception.Message)" Yellow
+        return $false
+    }
+}
+
 $areaTrabalho = [Environment]::GetFolderPath('Desktop')
-$caminhoAtalho = Join-Path $areaTrabalho "$NOME_ATALHO.lnk"
+$areaTrabalhoPublica = [Environment]::GetFolderPath('CommonDesktopDirectory')
 
-$shell = New-Object -ComObject WScript.Shell
-$atalho = $shell.CreateShortcut($caminhoAtalho)
-$atalho.TargetPath  = $navegador
-$atalho.Arguments   = "--app=$Servidor"
-$atalho.Description = "Alphafitus OS (terminal) - $Servidor"
-$atalho.Save()
+$criouUsuario = CriarAtalhoDesktop $areaTrabalho "$NOME_ATALHO.lnk" $navegador "--app=$Servidor" "Alphafitus OS (terminal) - $Servidor"
+$criouPublico = $false
+if ($areaTrabalhoPublica -and ($areaTrabalhoPublica -ne $areaTrabalho)) {
+    $criouPublico = CriarAtalhoDesktop $areaTrabalhoPublica "$NOME_ATALHO.lnk" $navegador "--app=$Servidor" "Alphafitus OS (terminal) - $Servidor"
+}
 
-Escrever '  [3/3] Atalho criado na area de trabalho' Green
+if ($criouUsuario -or $criouPublico) {
+    Escrever '  [3/3] Atalho criado na area de trabalho' Green
+} else {
+    Escrever '  [!] NAO consegui criar o atalho na area de trabalho (veja o motivo acima).' Red
+    Escrever '      O sistema já está acessível mesmo assim: abra o Chrome/Edge e' Yellow
+    Escrever "      acesse $Servidor manualmente enquanto isso não é corrigido." Yellow
+}
 
 # --- 4. Pasta fixa de backup + atalho pra ela -----------------
 # Fase 180 - pedido do usuario: todo backup baixado deste Terminal (botao
@@ -116,10 +163,10 @@ try {
     if (-not (Test-Path $PASTA_BACKUP_FIXA)) {
         New-Item -ItemType Directory -Path $PASTA_BACKUP_FIXA -Force | Out-Null
     }
-    $caminhoAtalhoPasta = Join-Path $areaTrabalho 'Backups do Alphafitus.lnk'
-    $atalhoPasta = $shell.CreateShortcut($caminhoAtalhoPasta)
-    $atalhoPasta.TargetPath = $PASTA_BACKUP_FIXA
-    $atalhoPasta.Save()
+    $criouPastaUsuario = CriarAtalhoDesktop $areaTrabalho 'Backups do Alphafitus.lnk' $PASTA_BACKUP_FIXA '' 'Pasta de backups do Alphafitus OS'
+    if ($areaTrabalhoPublica -and ($areaTrabalhoPublica -ne $areaTrabalho)) {
+        CriarAtalhoDesktop $areaTrabalhoPublica 'Backups do Alphafitus.lnk' $PASTA_BACKUP_FIXA '' 'Pasta de backups do Alphafitus OS' | Out-Null
+    }
     Escrever "  [4/4] Pasta de backup pronta: $PASTA_BACKUP_FIXA" Green
 } catch {
     # Nao critico - o Terminal funciona normalmente sem isso, so nao tera
@@ -144,4 +191,8 @@ Escrever '   Se o endereco do servidor mudar no futuro, rode este' DarkGray
 Escrever '   instalador de novo com o endereco novo.' DarkGray
 Escrever '  ============================================' Cyan
 Escrever ''
-if (-not $Servidor) { Read-Host '  Pressione Enter para fechar' }
+# Antes checava "if (-not $Servidor)" - sempre falso aqui (o script já
+# teria saído mais cedo se $Servidor estivesse vazio), então essa pausa
+# nunca disparava nem no modo manual. Corrigido pra usar o mesmo
+# $modoInterativo de cima.
+if ($modoInterativo) { Read-Host '  Pressione Enter para fechar' }
