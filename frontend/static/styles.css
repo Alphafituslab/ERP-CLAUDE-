@@ -61,11 +61,17 @@
    claros que o padrão, mesma lógica do tema "escuro" logo acima, pra
    continuarem visíveis num fundo escuro. */
 [data-tema="verde-escuro"] {
-  --fundo: #071912;
-  --superficie: #0f2a20;
+  /* Pedido do usuário: o fundo da tela tem que ser a MESMA cor do menu
+     lateral, não só "parecida" — `.barra-lateral` (tema-3d.css) é um
+     gradiente que vai do teal de marca até #071912, passando por #0b2b20
+     bem no meio (46%); esse tom do meio é o que domina visualmente a
+     maior parte da barra, então é ele (não o extremo mais escuro do
+     gradiente) que reaparece aqui como cor sólida do fundo. */
+  --fundo: #0b2b20;
+  --superficie: #123a2c;
   --texto: #e8f5f0;
   --texto-suave: #9fc9ba;
-  --borda: #1c3d31;
+  --borda: #1f4a38;
   --azul: #22c58d;
   --azul-claro: #4ee2ab;
 }
@@ -129,7 +135,7 @@ body::before {
   pointer-events: none;
   z-index: 0;
 }
-[data-tema="escuro"], [data-tema="verde-escuro"] body::before { opacity: 0.07; }
+[data-tema="escuro"] body::before , [data-tema="verde-escuro"] body::before { opacity: 0.07; }
 
 /* ---------- Tela de login ---------- */
 .tela-login {
@@ -213,8 +219,8 @@ body::before {
   color: var(--azul); text-decoration: none; font-size: 13px; font: inherit;
 }
 .botao-link:hover { text-decoration: underline; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .link-esqueci-senha a,
-[data-tema="escuro"], [data-tema="verde-escuro"] .botao-link { color: var(--azul-claro); }
+[data-tema="escuro"] .link-esqueci-senha a, [data-tema="verde-escuro"] .link-esqueci-senha a,
+[data-tema="escuro"] .botao-link , [data-tema="verde-escuro"] .botao-link { color: var(--azul-claro); }
 
 /* Fase 160 — destaca valor negativo em tabela de histórico financeiro. */
 .texto-vermelho { color: var(--vermelho); }
@@ -390,7 +396,7 @@ body::before {
   margin-bottom: 16px;
   border: 1px solid #f5c6c2;
 }
-[data-tema="escuro"], [data-tema="verde-escuro"] .mensagem-erro { background: #3a1f1e; border-color: #5c2b28; }
+[data-tema="escuro"] .mensagem-erro , [data-tema="verde-escuro"] .mensagem-erro { background: #3a1f1e; border-color: #5c2b28; }
 
 .mensagem-ok {
   background: #eaf6ec;
@@ -401,7 +407,7 @@ body::before {
   margin-bottom: 16px;
   border: 1px solid #c3e6cb;
 }
-[data-tema="escuro"], [data-tema="verde-escuro"] .mensagem-ok { background: #14301d; border-color: #1f4a2a; }
+[data-tema="escuro"] .mensagem-ok , [data-tema="verde-escuro"] .mensagem-ok { background: #14301d; border-color: #1f4a2a; }
 
 /* ---------- Layout principal ---------- */
 .layout { display: flex; min-height: 100vh; }
@@ -711,9 +717,9 @@ body::before {
 .pilula-status-servidor.conectado { border-color: #c3e6cb; background: #eaf6ec; color: var(--verde); }
 .pilula-status-servidor.desconectado,
 .pilula-status-servidor.bloqueado { border-color: #f5c6c2; background: #fdecea; color: var(--vermelho); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .pilula-status-servidor.conectado { background: #14301d; border-color: #1f4a2a; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .pilula-status-servidor.desconectado,
-[data-tema="escuro"], [data-tema="verde-escuro"] .pilula-status-servidor.bloqueado { background: #3a1f1e; border-color: #5c2b28; }
+[data-tema="escuro"] .pilula-status-servidor.conectado , [data-tema="verde-escuro"] .pilula-status-servidor.conectado { background: #14301d; border-color: #1f4a2a; }
+[data-tema="escuro"] .pilula-status-servidor.desconectado, [data-tema="verde-escuro"] .pilula-status-servidor.desconectado,
+[data-tema="escuro"] .pilula-status-servidor.bloqueado , [data-tema="verde-escuro"] .pilula-status-servidor.bloqueado { background: #3a1f1e; border-color: #5c2b28; }
 
 /* Fase 38 — o botão de hambúrguer só existe visualmente em telas
    estreitas (ver media query mais abaixo); em telas largas a barra
@@ -797,7 +803,7 @@ body::before {
 
 .pagina { padding: 24px; flex: 1; overflow-y: auto; }
 .pagina h2 { margin-top: 0; color: var(--azul); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .pagina h2 { color: var(--azul-claro); }
+[data-tema="escuro"] .pagina h2 , [data-tema="verde-escuro"] .pagina h2 { color: var(--azul-claro); }
 
 .cartao {
   background: var(--superficie);
@@ -820,7 +826,7 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--borda); }
 th { color: var(--texto-suave); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.03em; }
 tr:hover td { background: rgba(0,0,0,0.02); }
-[data-tema="escuro"], [data-tema="verde-escuro"] tr:hover td { background: rgba(255,255,255,0.03); }
+[data-tema="escuro"] tr:hover td , [data-tema="verde-escuro"] tr:hover td { background: rgba(255,255,255,0.03); }
 
 .selo {
   display: inline-block;
@@ -834,15 +840,15 @@ tr:hover td { background: rgba(0,0,0,0.02); }
 .selo.bloqueado { background: #fdecea; color: var(--vermelho); }
 .selo.amarelo { background: #fdf6e3; color: var(--amarelo); }
 .selo.azul { background: #e6eef7; color: var(--azul-claro); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .selo.ativo { background: #14301d; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .selo.inativo { background: #232b38; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .selo.bloqueado { background: #3a1f1e; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .selo.amarelo { background: #3a2f10; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .selo.azul { background: #1c2c40; }
+[data-tema="escuro"] .selo.ativo , [data-tema="verde-escuro"] .selo.ativo { background: #14301d; }
+[data-tema="escuro"] .selo.inativo , [data-tema="verde-escuro"] .selo.inativo { background: #232b38; }
+[data-tema="escuro"] .selo.bloqueado , [data-tema="verde-escuro"] .selo.bloqueado { background: #3a1f1e; }
+[data-tema="escuro"] .selo.amarelo , [data-tema="verde-escuro"] .selo.amarelo { background: #3a2f10; }
+[data-tema="escuro"] .selo.azul , [data-tema="verde-escuro"] .selo.azul { background: #1c2c40; }
 
 /* Fase 6 — realça linhas de conta a receber/pagar vencida numa tabela */
 tr.linha-alerta td { background: #fdecea; }
-[data-tema="escuro"], [data-tema="verde-escuro"] tr.linha-alerta td { background: #3a1f1e; }
+[data-tema="escuro"] tr.linha-alerta td , [data-tema="verde-escuro"] tr.linha-alerta td { background: #3a1f1e; }
 
 .linha-detalhe { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 8px; }
 .linha-detalhe .rotulo { color: var(--texto-suave); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
@@ -896,7 +902,7 @@ tr.linha-alerta td { background: #fdecea; }
 .portfolio-card-topo { display: flex; justify-content: space-between; align-items: center; }
 .portfolio-card h4 { flex: 1; font-size: 14px; line-height: 1.3; }
 .link-voltar { color: var(--azul); text-decoration: none; font-size: 13px; display: inline-block; margin-bottom: 12px; cursor: pointer; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .link-voltar { color: var(--azul-claro); }
+[data-tema="escuro"] .link-voltar , [data-tema="verde-escuro"] .link-voltar { color: var(--azul-claro); }
 
 /* Fase 156 — tela "Sincronizando agora" ao abrir o App de Vendas (ver
    renderSplashSincronizacaoVendas em app.js). */
@@ -937,10 +943,10 @@ tr.linha-alerta td { background: #fdecea; }
   padding: 12px 14px;
   background: rgba(0,0,0,0.015);
 }
-[data-tema="escuro"], [data-tema="verde-escuro"] .kpi { background: rgba(255,255,255,0.02); }
+[data-tema="escuro"] .kpi , [data-tema="verde-escuro"] .kpi { background: rgba(255,255,255,0.02); }
 .kpi-rotulo { color: var(--texto-suave); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
 .kpi-valor { font-size: 22px; font-weight: 700; color: var(--azul); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .kpi-valor { color: var(--azul-claro); }
+[data-tema="escuro"] .kpi-valor , [data-tema="verde-escuro"] .kpi-valor { color: var(--azul-claro); }
 .kpi-extra { font-size: 12px; }
 
 /* Fase 8 — árvore de genealogia (rastreabilidade / recall) */
@@ -953,7 +959,7 @@ tr.linha-alerta td { background: #fdecea; }
 }
 .arvore-genealogia li { margin: 6px 0; }
 tr.linha-selecionada td { background: #e6eef7; }
-[data-tema="escuro"], [data-tema="verde-escuro"] tr.linha-selecionada td { background: #1c2c40; }
+[data-tema="escuro"] tr.linha-selecionada td , [data-tema="verde-escuro"] tr.linha-selecionada td { background: #1c2c40; }
 
 .fundo-modal {
   position: fixed; inset: 0; background: rgba(0,0,0,0.45);
@@ -969,7 +975,7 @@ tr.linha-selecionada td { background: #e6eef7; }
    direito nos 480px padrão — usada via abrirModal(html, { largo: true }). */
 .modal.modal-largo { width: 760px; }
 .modal h3 { margin-top: 0; color: var(--azul); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .modal h3 { color: var(--azul-claro); }
+[data-tema="escuro"] .modal h3 , [data-tema="verde-escuro"] .modal h3 { color: var(--azul-claro); }
 
 .rodape-modal { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
@@ -994,7 +1000,7 @@ tr.linha-selecionada td { background: #e6eef7; }
    sempre tem prioridade sobre a folha de estilo padrão do navegador. */
 .badge-notificacoes[hidden] { display: none; }
 .linha-nao-lida { font-weight: 600; }
-[data-tema="escuro"], [data-tema="verde-escuro"] .linha-nao-lida { font-weight: 600; }
+[data-tema="escuro"] .linha-nao-lida , [data-tema="verde-escuro"] .linha-nao-lida { font-weight: 600; }
 
 
 .chip-modulo {
@@ -1173,13 +1179,13 @@ tr.linha-selecionada td { background: #e6eef7; }
 .cartao-resumo-links a { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; text-decoration: none; color: var(--texto); border-bottom: 1px solid var(--borda); }
 .cartao-resumo-links a:last-child { border-bottom: none; }
 .cartao-resumo-links a:hover { color: var(--azul); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .cartao-resumo-links a:hover { color: var(--azul-claro); }
+[data-tema="escuro"] .cartao-resumo-links a:hover , [data-tema="verde-escuro"] .cartao-resumo-links a:hover { color: var(--azul-claro); }
 
 .lista-progresso { border: 1px solid var(--borda); border-radius: var(--raio); overflow: hidden; background: var(--superficie); }
 .linha-progresso { display: flex; align-items: center; gap: 12px; padding: 12px 16px; text-decoration: none; color: inherit; border-bottom: 1px solid var(--borda); }
 .linha-progresso:last-child { border-bottom: none; }
 .linha-progresso:hover { background: rgba(0,0,0,0.02); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .linha-progresso:hover { background: rgba(255,255,255,0.03); }
+[data-tema="escuro"] .linha-progresso:hover , [data-tema="verde-escuro"] .linha-progresso:hover { background: rgba(255,255,255,0.03); }
 .linha-progresso .progresso-info { flex: 1; min-width: 0; }
 .linha-progresso .progresso-titulo { font-weight: 600; font-size: 13px; margin: 0; }
 .linha-progresso .progresso-codigo { font-size: 11px; color: var(--texto-suave); margin: 2px 0 0; font-family: ui-monospace, monospace; }
@@ -1195,7 +1201,7 @@ tr.linha-selecionada td { background: #e6eef7; }
 .aps-agenda-linha { display: flex; border-bottom: 1px solid var(--borda); }
 .aps-agenda-linha:last-child { border-bottom: none; }
 .aps-agenda-linha.aps-agenda-cabecalho { background: rgba(0,0,0,0.02); }
-[data-tema="escuro"], [data-tema="verde-escuro"] .aps-agenda-linha.aps-agenda-cabecalho { background: rgba(255,255,255,0.03); }
+[data-tema="escuro"] .aps-agenda-linha.aps-agenda-cabecalho , [data-tema="verde-escuro"] .aps-agenda-linha.aps-agenda-cabecalho { background: rgba(255,255,255,0.03); }
 .aps-agenda-nome-centro {
   width: 220px; flex-shrink: 0; padding: 10px 12px; font-weight: 600; font-size: 13px;
   display: flex; flex-direction: column; gap: 4px; border-right: 1px solid var(--borda);
