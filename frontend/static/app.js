@@ -1740,13 +1740,13 @@
           <form data-form="redefinir-senha" data-token="${escapeHtml(token)}">
             <div class="campo">
               <label for="redefinir-senha-nova">Nova senha</label>
-              <input id="redefinir-senha-nova" name="senha_nova" type="password" autocomplete="new-password" required autofocus>
+              <input id="redefinir-senha-nova" name="senha_nova" type="password" autocomplete="new-password" required minlength="6" maxlength="12" autofocus>
             </div>
             <div class="campo">
               <label for="redefinir-senha-confirmar">Confirmar nova senha</label>
-              <input id="redefinir-senha-confirmar" name="senha_confirmar" type="password" autocomplete="new-password" required>
+              <input id="redefinir-senha-confirmar" name="senha_confirmar" type="password" autocomplete="new-password" required minlength="6" maxlength="12">
             </div>
-            <div class="dica">Mínimo 12 caracteres, com maiúscula, minúscula, número e caractere especial.</div>
+            <div class="dica">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial.</div>
             <button class="botao largura-total" type="submit">Redefinir senha</button>
           </form>
           <p class="link-esqueci-senha"><a href="#/login">Voltar para o login</a></p>
@@ -1790,12 +1790,12 @@
           <form data-form="login-trocar-senha-obrigatoria">
             <div class="campo">
               <label for="nova-senha-obrigatoria">Nova senha</label>
-              <input id="nova-senha-obrigatoria" name="senha_nova" type="password" required minlength="12" autofocus>
-              <div class="texto-suave" style="margin-top:4px;font-size:12px;">Mínimo 12 caracteres, com maiúscula, minúscula, número e símbolo.</div>
+              <input id="nova-senha-obrigatoria" name="senha_nova" type="password" required minlength="6" maxlength="12" autofocus>
+              <div class="texto-suave" style="margin-top:4px;font-size:12px;">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial.</div>
             </div>
             <div class="campo">
               <label for="confirmar-senha-obrigatoria">Confirmar nova senha</label>
-              <input id="confirmar-senha-obrigatoria" name="senha_confirmar" type="password" required minlength="12">
+              <input id="confirmar-senha-obrigatoria" name="senha_confirmar" type="password" required minlength="6" maxlength="12">
             </div>
             <div class="campo">
               <label for="email-login-obrigatoria">E-mail de login</label>
@@ -1915,8 +1915,8 @@
       <form data-form="criar-usuario">
         <div class="campo"><label>Nome</label><input name="nome" required></div>
         <div class="campo"><label>Email</label><input name="email" type="email" required></div>
-        <div class="campo"><label>Senha temporária</label><input name="senha" type="password" required minlength="12">
-          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Mínimo 12 caracteres, com maiúscula, minúscula, número e símbolo. O usuário será obrigado a trocá-la no primeiro login.</div>
+        <div class="campo"><label>Senha temporária</label><input name="senha" type="password" required minlength="6" maxlength="12">
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial. O usuário será obrigado a trocá-la no primeiro login.</div>
         </div>
         <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoes || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div></div>
         <div class="campo">
@@ -2755,10 +2755,11 @@
            </div>
            <div class="campo"><label>Nova senha</label>
              <div class="campo-senha">
-               <input id="conta-senha-nova" name="senha_nova" type="password" required minlength="12">
+               <input id="conta-senha-nova" name="senha_nova" type="password" required minlength="6" maxlength="12">
                <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha"
                        data-alvo="conta-senha-nova" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
              </div>
+             <div class="texto-suave" style="margin-top:4px;font-size:12px;">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial.</div>
            </div>
            <button class="botao" type="submit">Trocar senha</button>
          </form>

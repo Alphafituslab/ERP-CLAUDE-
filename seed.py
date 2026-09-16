@@ -912,10 +912,12 @@ PERFIS_PADRAO = [
 ]
 
 
-def _gerar_senha_forte(tamanho=16):
+def _gerar_senha_forte(tamanho=12):
     # Movida pra app/security.py (gerar_senha_forte) pra ser reaproveitada
     # também no reset de senha feito por um administrador — mantido este
     # nome/assinatura aqui só pra não precisar tocar nas chamadas abaixo.
+    # `tamanho` tem que respeitar o máximo de 12 da política atual
+    # (validar_politica_senha) — 16 aqui faria essa função nunca terminar.
     return security.gerar_senha_forte(tamanho)
 
 

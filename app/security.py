@@ -66,25 +66,29 @@ def email_valido(email: str) -> bool:
 
 
 def validar_politica_senha(senha: str):
-    """Retorna lista de violações (vazia = senha aceita)."""
+    """Retorna lista de violações (vazia = senha aceita).
+
+    Pedido do usuário (2026-09-16): política mais simples — 6 a 12
+    caracteres, exigindo só 1 letra maiúscula e 1 caractere especial
+    (deixou de exigir minúscula/número obrigatórios, ao contrário da
+    política anterior de mín. 12). Mantida a checagem de senhas óbvias
+    demais mesmo com a regra mais curta."""
     problemas = []
-    if len(senha) < 12:
-        problemas.append("A senha deve ter no mínimo 12 caracteres.")
-    if not any(c.islower() for c in senha):
-        problemas.append("A senha deve conter ao menos uma letra minúscula.")
+    if len(senha) < 6:
+        problemas.append("A senha deve ter no mínimo 6 caracteres.")
+    if len(senha) > 12:
+        problemas.append("A senha deve ter no máximo 12 caracteres.")
     if not any(c.isupper() for c in senha):
         problemas.append("A senha deve conter ao menos uma letra maiúscula.")
-    if not any(c.isdigit() for c in senha):
-        problemas.append("A senha deve conter ao menos um número.")
     if not any(not c.isalnum() for c in senha):
         problemas.append("A senha deve conter ao menos um caractere especial.")
-    senhas_comuns = {"password", "123456789012", "senha1234567", "qwertyuiop12"}
+    senhas_comuns = {"password", "senha123", "qwerty123"}
     if senha.lower() in senhas_comuns:
         problemas.append("Esta senha é comum demais e não pode ser usada.")
     return problemas
 
 
-def gerar_senha_forte(tamanho: int = 16) -> str:
+def gerar_senha_forte(tamanho: int = 12) -> str:
     """Movida de seed.py (só gerava a senha inicial do Administrador) pra
     cá, pra ser reaproveitada também quando um administrador reseta a
     senha de outro usuário (ver app/routes/usuarios.py) — mesmo alfabeto,
@@ -93,12 +97,11 @@ def gerar_senha_forte(tamanho: int = 16) -> str:
     Alfabeto pensado para uma pessoa conseguir digitar ou copiar sem
     erro, a partir de relatos reais de instalação: sem "0"/"O" nem
     "1"/"l"/"I" (fáceis de confundir numa fonte de console), e só um
-    punhado de símbolos bem distintos entre si. Continua forte o
-    bastante para uma senha de uso único, forçada a trocar no primeiro
-    login: com esses ~64 caracteres possíveis e 16 posições, ainda são
-    ~2^96 combinações — muito acima do necessário pra resistir a
-    qualquer tentativa de adivinhação nesse curtíssimo intervalo de vida
-    da senha."""
+    punhado de símbolos bem distintos entre si.
+    `tamanho` padrão em 12 — o MÁXIMO aceito pela política atual
+    (`validar_politica_senha`, 6 a 12 caracteres): com 16 esta função
+    entrava em loop infinito, já que nenhuma senha gerada jamais passaria
+    na própria validação de tamanho máximo."""
     alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#$-_"
     while True:
         senha = "".join(secrets.choice(alfabeto) for _ in range(tamanho))
