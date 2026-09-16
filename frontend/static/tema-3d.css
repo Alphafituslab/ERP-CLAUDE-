@@ -609,3 +609,59 @@ tbody tr { transition: background 0.12s ease; }
 
 /* Painel/memorial: manter o mesmo tratamento elevado. */
 .memorial-nav { box-shadow: var(--elev-2); }
+
+/* Fase 185 — pedido do usuário: uma versão "tudo claro, limpo" — até aqui
+   o menu lateral era SEMPRE o gradiente escuro de marca (teal→verde
+   quase preto), em qualquer tema, com todo texto/ícone/hover pensado pra
+   cima de fundo escuro (branco translúcido). Pro tema "Claro" ficar de
+   fato uniforme (a mesma ideia já aplicada ao "Verde escuro" — tela
+   inteira num tom só, sem parte clara e parte escura misturadas), o
+   menu aqui vira branco/`--superficie` também, e cada regra que dependia
+   de "branco translúcido sobre fundo escuro" ganha o equivalente escuro
+   translúcido sobre fundo claro (`--texto`, não branco fixo, pra também
+   funcionar certo se um dia o `--superficie` do tema claro mudar).
+   Precisa vir DEPOIS das regras equivalentes acima (mesmo arquivo, sem
+   `!important`) pra vencer na cascata — por isso está aqui no fim. */
+[data-tema="claro"] .barra-lateral {
+  background: var(--superficie);
+  box-shadow: none;
+  border-right: 1px solid var(--borda);
+}
+[data-tema="claro"] .barra-lateral-blob { display: none; }
+[data-tema="claro"] .barra-lateral::after { display: none; }
+[data-tema="claro"] .barra-lateral,
+[data-tema="claro"] .link-nav,
+[data-tema="claro"] .rodape-lateral-nome { color: var(--texto); }
+[data-tema="claro"] .barra-lateral .marca,
+[data-tema="claro"] .rodape-lateral-usuario { border-color: var(--borda); }
+[data-tema="claro"] .barra-lateral .marca small,
+[data-tema="claro"] .rodape-lateral-cargo { color: var(--texto-suave); }
+[data-tema="claro"] .link-nav { background: color-mix(in srgb, var(--texto) 4%, transparent); }
+[data-tema="claro"] .link-nav:hover { background: color-mix(in srgb, var(--texto) 8%, transparent); }
+[data-tema="claro"] .link-nav.ativo {
+  background: color-mix(in srgb, var(--marca-verde) 12%, var(--superficie));
+  color: var(--azul);
+}
+[data-tema="claro"] .barra-lateral-grupo summary { color: color-mix(in srgb, var(--texto) 62%, transparent); }
+[data-tema="claro"] .barra-lateral-grupo[open] summary,
+[data-tema="claro"] .barra-lateral-grupo summary:hover,
+[data-tema="claro"] .barra-lateral-subgrupo[open] summary,
+[data-tema="claro"] .barra-lateral-subgrupo summary:hover { color: var(--texto); }
+[data-tema="claro"] .barra-lateral-subgrupo summary { color: color-mix(in srgb, var(--texto) 55%, transparent); }
+[data-tema="claro"] .rodape-lateral-backup-botao,
+[data-tema="claro"] .rodape-lateral-backup-engrenagem,
+[data-tema="claro"] .rodape-lateral-sair {
+  background: color-mix(in srgb, var(--texto) 6%, transparent);
+  color: color-mix(in srgb, var(--texto) 75%, transparent);
+}
+[data-tema="claro"] .rodape-lateral-backup-botao:hover,
+[data-tema="claro"] .rodape-lateral-backup-engrenagem:hover,
+[data-tema="claro"] .rodape-lateral-sair:hover {
+  background: color-mix(in srgb, var(--texto) 12%, transparent);
+  color: var(--texto);
+}
+[data-tema="claro"] .rodape-lateral-backup-progresso .barra-progresso { background: color-mix(in srgb, var(--texto) 10%, transparent); }
+[data-tema="claro"] .rodape-lateral-backup-progresso .progresso-pct { color: color-mix(in srgb, var(--texto) 70%, transparent); }
+[data-tema="claro"] .rodape-lateral-avatar,
+[data-tema="claro"] .rodape-lateral-avatar-foto { background: color-mix(in srgb, var(--texto) 10%, transparent); }
+[data-tema="claro"] .versao-sistema-rodape { color: color-mix(in srgb, var(--texto) 40%, transparent); }
