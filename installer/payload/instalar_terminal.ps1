@@ -116,7 +116,19 @@ Escrever "  [2/3] Navegador encontrado: $(Split-Path $navegador -Leaf)" Green
 # falha isolada (caso (b)) fica visivel e registrada, sem derrubar o
 # resto do script (a pasta de backup do passo 4 continua sendo criada
 # mesmo se o atalho falhar).
-function CriarAtalhoDesktop($CaminhoPasta, $NomeArquivo, $Alvo, $Argumentos, $Descricao) {
+# Achado real (usuario relatou 2026-09-16, mesma conversa do fix acima):
+# o atalho criado aqui nunca definia um icone proprio - ficava com o
+# icone generico do navegador (Chrome/Edge) em vez do desenho do
+# Alphafitus que o usuario ja tinha decidido/usa em todo o resto do
+# sistema. $PSScriptRoot resolve pra pasta onde ESTE script esta (que e
+# {app} numa instalacao de verdade, ja que instalar_terminal.ps1 e
+# icone.ico sao copiados juntos, lado a lado, pelo instalador principal
+# - ver [Files] em AlphafitusOS.iss) - funciona independente de onde o
+# script foi chamado (bat, atalho do Menu Iniciar, etc.).
+$IconePadrao = Join-Path $PSScriptRoot 'icone.ico'
+if (-not (Test-Path $IconePadrao)) { $IconePadrao = $null }
+
+function CriarAtalhoDesktop($CaminhoPasta, $NomeArquivo, $Alvo, $Argumentos, $Descricao, $Icone) {
     try {
         if (-not (Test-Path $CaminhoPasta)) { return $false }
         $shellLocal = New-Object -ComObject WScript.Shell
@@ -124,6 +136,7 @@ function CriarAtalhoDesktop($CaminhoPasta, $NomeArquivo, $Alvo, $Argumentos, $De
         $atalhoLocal.TargetPath  = $Alvo
         if ($Argumentos) { $atalhoLocal.Arguments = $Argumentos }
         $atalhoLocal.Description = $Descricao
+        if ($Icone) { $atalhoLocal.IconLocation = $Icone }
         $atalhoLocal.Save()
         return $true
     } catch {
@@ -135,10 +148,10 @@ function CriarAtalhoDesktop($CaminhoPasta, $NomeArquivo, $Alvo, $Argumentos, $De
 $areaTrabalho = [Environment]::GetFolderPath('Desktop')
 $areaTrabalhoPublica = [Environment]::GetFolderPath('CommonDesktopDirectory')
 
-$criouUsuario = CriarAtalhoDesktop $areaTrabalho "$NOME_ATALHO.lnk" $navegador "--app=$Servidor" "Alphafitus OS (terminal) - $Servidor"
+$criouUsuario = CriarAtalhoDesktop $areaTrabalho "$NOME_ATALHO.lnk" $navegador "--app=$Servidor" "Alphafitus OS (terminal) - $Servidor" $IconePadrao
 $criouPublico = $false
 if ($areaTrabalhoPublica -and ($areaTrabalhoPublica -ne $areaTrabalho)) {
-    $criouPublico = CriarAtalhoDesktop $areaTrabalhoPublica "$NOME_ATALHO.lnk" $navegador "--app=$Servidor" "Alphafitus OS (terminal) - $Servidor"
+    $criouPublico = CriarAtalhoDesktop $areaTrabalhoPublica "$NOME_ATALHO.lnk" $navegador "--app=$Servidor" "Alphafitus OS (terminal) - $Servidor" $IconePadrao
 }
 
 if ($criouUsuario -or $criouPublico) {
