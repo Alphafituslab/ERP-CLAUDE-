@@ -111,6 +111,7 @@ Source: "payload\status_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Ch
 Source: "payload\remover_servico.bat"; DestDir: "{app}"; Flags: ignoreversion; Check: EhServidor
 Source: "payload\Terminal_Instalar.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "payload\instalar_terminal.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "payload\Recriar_Atalho_Desktop.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "icone.ico"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -123,6 +124,11 @@ Name: "{group}\Status do Serviço"; Filename: "{app}\status_servico.bat"; Workin
 Name: "{group}\Remover Serviço do Windows"; Filename: "{app}\remover_servico.bat"; WorkingDir: "{app}"; Check: EhServidor
 Name: "{group}\Instalar um Terminal em outro computador"; Filename: "{app}\Terminal_Instalar.bat"; WorkingDir: "{app}"; Check: EhServidor
 Name: "{group}\Desinstalar Alphafitus OS"; Filename: "{uninstallexe}"
+; Fase 181 — pedido do usuário: um jeito de "resgatar" o atalho da Área de
+; Trabalho sem precisar reinstalar, a partir da própria pasta de
+; instalação — sem `Check: EhServidor` de propósito, aparece nos DOIS
+; modos (o Servidor também pode ter um uso de Terminal na mesma máquina).
+Name: "{group}\Recriar atalho na Área de Trabalho"; Filename: "{app}\Recriar_Atalho_Desktop.bat"; WorkingDir: "{app}"
 Name: "{autodesktop}\Alphafitus OS"; Filename: "{app}\{#MyAppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon; Check: EhServidor
 
 [Run]
