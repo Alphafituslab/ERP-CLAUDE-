@@ -1067,7 +1067,18 @@
     // propósito (login e tela de conversa continuam exatamente como no
     // Whatts Inbox original — sem SSO, sem embutir em iframe) — ver
     // README, "Fase 123, parte 2".
-    { rota: "http://localhost:5050", chave: "whatsapp-bundled", label: "WhatsApp", abrirNovaAba: true },
+    // Achado real (2026-09-16): esse link ficou fixo em "localhost:5050"
+    // desde a Fase 123, quando o ERP ainda rodava no computador local do
+    // escritório (mesma máquina que hospedava o Whatts Inbox embutido,
+    // então "localhost" resolvia certinho). Depois da Fase 157b (ERP
+    // migrado pro Servidor na nuvem) isso nunca foi corrigido — "localhost"
+    // num link clicado pelo NAVEGADOR DO USUÁRIO sempre aponta pro
+    // computador de quem clicou, nunca pro servidor; só "funcionava" por
+    // coincidência em máquinas que já tinham algo escutando a própria
+    // porta 5050. Usuário reportou "não abre, conexão recusada" — o
+    // endereço público de verdade (mesmo Whatts Inbox, hoje rodando no
+    // VPS) é este, já exposto via Caddy (ver Caddyfile do VPS).
+    { rota: "https://whatts.alphafitus.com.br", chave: "whatsapp-bundled", label: "WhatsApp", abrirNovaAba: true },
     { rota: "#/conta", chave: "conta", label: "Minha Conta" },
     { rota: "#/notificacoes", chave: "notificacoes", label: "Notificações" },
   ];

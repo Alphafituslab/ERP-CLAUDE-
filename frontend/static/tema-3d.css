@@ -482,7 +482,7 @@ body {
    Whatts). Por isso este seletor desliga a técnica de máscara/currentColor
    da regra genérica logo acima e usa a imagem colorida direto — senão a
    logo apareceria toda branca (silhueta), perdendo as cores da marca. */
-.link-nav[href="http://localhost:5050"]::before {
+.link-nav[href="https://whatts.alphafitus.com.br"]::before {
   /* !important necessário: a regra genérica logo acima usa
      `.link-nav[href]:not(.barra-lateral-subitem)::before`, que tem
      especificidade MAIOR que este seletor (o :not() carrega a
