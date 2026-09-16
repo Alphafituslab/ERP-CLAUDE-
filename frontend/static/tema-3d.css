@@ -623,7 +623,13 @@ tbody tr { transition: background 0.12s ease; }
    Precisa vir DEPOIS das regras equivalentes acima (mesmo arquivo, sem
    `!important`) pra vencer na cascata — por isso está aqui no fim. */
 [data-tema="claro"] .barra-lateral {
-  background: var(--superficie);
+  /* Pedido do usuário: branco puro ficou "difícil de ver" — referência
+     dada foi o Ema (rail de ícone com cor própria + conteúdo claro, não
+     tudo no mesmo branco). Em vez de copiar a estrutura do Ema (grade de
+     ícones, outro paradigma de navegação), a versão aqui pega só a IDEIA
+     — um fundo claro com um traço de cor da marca, não cinza/branco
+     neutro — mantendo o layout atual (pílulas, grupos) intocado. */
+  background: color-mix(in srgb, var(--marca-verde) 6%, var(--superficie));
   box-shadow: none;
   border-right: 1px solid var(--borda);
 }
