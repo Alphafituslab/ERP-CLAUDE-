@@ -143,9 +143,20 @@ def editar(usuario_id):
     if not security.email_valido(email):
         raise ApiError("Informe um e-mail válido.", status=400)
 
+    # Pedido do usuário (2026-09-16): a tela de Editar (administrador
+    # mexendo no cadastro de OUTRO usuário) também precisa poder colocar/
+    # trocar a foto, não só a de criação (Fase 182) e o autosserviço
+    # (Fase 113). "foto_perfil" só é tocado se a chave vier no corpo — do
+    # contrário mantém a foto atual (não força reenviar em todo PUT que
+    # só quer mudar nome/email).
+    if "foto_perfil" in dados:
+        foto_perfil = validar_imagem_base64(dados.get("foto_perfil"))
+    else:
+        foto_perfil = row["foto_perfil"]
+
     conn.execute(
-        "UPDATE usuarios SET nome = ?, email = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
-        (nome, email, _now_iso(), usuario_atual["id"], usuario_id),
+        "UPDATE usuarios SET nome = ?, email = ?, foto_perfil = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
+        (nome, email, foto_perfil, _now_iso(), usuario_atual["id"], usuario_id),
     )
 
     novo_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
@@ -155,6 +166,49 @@ def editar(usuario_id):
                      ip=client_ip(), dispositivo=client_device())
     novo["perfis"] = _perfis_do_usuario(conn, usuario_id)
     return jsonify(novo)
+
+
+@bp.post("/<int:usuario_id>/resetar-senha")
+@requires_permission("usuarios", "editar")
+def resetar_senha(usuario_id):
+    """Pedido do usuário (2026-09-16): "se o usuário perder o acesso,
+    poder ver a senha que ele colocou e reenviar, ou resetar pra um
+    padrão". Ver a senha original NÃO é possível por desenho — ela é
+    guardada só como hash de mão única (`security.hash_password`), o
+    mesmo motivo pelo qual nenhum sistema sério devolve senha em texto
+    puro (se fosse possível, qualquer vazamento do banco exporia a
+    senha de todo mundo). O equivalente seguro, que cobre a mesma
+    necessidade prática, é o que esta rota faz: gera uma senha
+    PROVISÓRIA nova, mostra ela UMA VEZ (só nesta resposta — não fica
+    salva em nenhum lugar recuperável depois) pra quem administra
+    usuários repassar à pessoa, e força a troca no próximo login (mesma
+    tela usada quando o usuário é criado, ver `senha_deve_trocar` em
+    /auth/login)."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    if row is None:
+        raise ApiError("Usuário não encontrado.", status=404)
+
+    senha_provisoria = security.gerar_senha_forte()
+    conn.execute(
+        """
+        UPDATE usuarios
+        SET senha_hash = ?, senha_deve_trocar = 1, tentativas_login_falhas = 0, bloqueado_ate = NULL
+        WHERE id = ?
+        """,
+        (security.hash_password(senha_provisoria), usuario_id),
+    )
+    # Mesmo motivo do endurecimento da Fase 169 em /auth/trocar-senha: uma
+    # sessão aberta com a senha antiga (ex.: de quem perdeu o acesso e teve
+    # a conta comprometida) não pode continuar válida depois do reset.
+    conn.execute(
+        "UPDATE sessoes SET revogado = 1, revogado_em = ? WHERE usuario_id = ? AND revogado = 0",
+        (datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ"), usuario_id),
+    )
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_atual["id"],
+                     acao="senha_resetada_por_administrador", ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True, "senha_provisoria": senha_provisoria, "email": row["email"]})
 
 
 @bp.put("/<int:usuario_id>/perfis")

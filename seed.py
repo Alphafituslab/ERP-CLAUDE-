@@ -913,22 +913,10 @@ PERFIS_PADRAO = [
 
 
 def _gerar_senha_forte(tamanho=16):
-    # Alfabeto pensado para uma pessoa conseguir digitar ou copiar sem
-    # erro, a partir de relatos reais de instalação: sem "0"/"O" nem
-    # "1"/"l"/"I" (fáceis de confundir numa fonte de console), e só um
-    # punhado de símbolos bem distintos entre si — antes o alfabeto
-    # incluía caracteres como "^", "%", "&", "(", ")", que geravam senhas
-    # visualmente mais difíceis de conferir letra por letra. Continua
-    # forte o bastante para uma senha de uso único, forçada a trocar no
-    # primeiro login (`senha_deve_trocar=1`, ver abaixo): com esses ~64
-    # caracteres possíveis e 16 posições, ainda são ~2^96 combinações —
-    # muito acima do necessário para resistir a qualquer tentativa de
-    # adivinhação nesse curtíssimo intervalo de vida da senha.
-    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#$-_"
-    while True:
-        senha = "".join(secrets.choice(alfabeto) for _ in range(tamanho))
-        if not security.validar_politica_senha(senha):
-            return senha
+    # Movida pra app/security.py (gerar_senha_forte) pra ser reaproveitada
+    # também no reset de senha feito por um administrador — mantido este
+    # nome/assinatura aqui só pra não precisar tocar nas chamadas abaixo.
+    return security.gerar_senha_forte(tamanho)
 
 
 def rodar_seed(conn=None, admin_email=None, admin_senha=None, imprimir=True):

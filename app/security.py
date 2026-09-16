@@ -84,6 +84,28 @@ def validar_politica_senha(senha: str):
     return problemas
 
 
+def gerar_senha_forte(tamanho: int = 16) -> str:
+    """Movida de seed.py (só gerava a senha inicial do Administrador) pra
+    cá, pra ser reaproveitada também quando um administrador reseta a
+    senha de outro usuário (ver app/routes/usuarios.py) — mesmo alfabeto,
+    mesma regra: sempre uma senha PROVISÓRIA de uso único, nunca uma
+    senha real escolhida por alguém.
+    Alfabeto pensado para uma pessoa conseguir digitar ou copiar sem
+    erro, a partir de relatos reais de instalação: sem "0"/"O" nem
+    "1"/"l"/"I" (fáceis de confundir numa fonte de console), e só um
+    punhado de símbolos bem distintos entre si. Continua forte o
+    bastante para uma senha de uso único, forçada a trocar no primeiro
+    login: com esses ~64 caracteres possíveis e 16 posições, ainda são
+    ~2^96 combinações — muito acima do necessário pra resistir a
+    qualquer tentativa de adivinhação nesse curtíssimo intervalo de vida
+    da senha."""
+    alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789@#$-_"
+    while True:
+        senha = "".join(secrets.choice(alfabeto) for _ in range(tamanho))
+        if not validar_politica_senha(senha):
+            return senha
+
+
 # ---------------------------------------------------------------------------
 # TOTP — RFC 6238 (compatível com Google Authenticator / Microsoft Authenticator)
 # ---------------------------------------------------------------------------

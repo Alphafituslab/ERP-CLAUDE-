@@ -251,6 +251,20 @@ def login():
                          acao="login_senha_ok_aguardando_2fa", ip=ip, dispositivo=dispositivo)
         return jsonify({"requires_2fa": True, "login_ticket": login_ticket})
 
+    # Achado real (2026-09-16): `senha_deve_trocar` já era gravado na
+    # criação do usuário e no reset de senha por um administrador, mas
+    # nada aqui de fato IMPEDIA continuar usando a senha provisória pra
+    # sempre — o campo existia mas não travava nada. Mesmo padrão de
+    # ticket de curtíssima duração já usado pro 2FA acima: em vez dos
+    # tokens finais, devolve só um ticket que só serve pra completar
+    # /auth/trocar-senha-obrigatoria — só depois de trocar de verdade é
+    # que os tokens de acesso são emitidos.
+    if usuario["senha_deve_trocar"]:
+        login_ticket = security.emitir_login_ticket(usuario["id"])
+        audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
+                         acao="login_aguardando_troca_senha_obrigatoria", ip=ip, dispositivo=dispositivo)
+        return jsonify({"requires_password_change": True, "login_ticket": login_ticket})
+
     conn.execute(
         "UPDATE usuarios SET ultimo_login_em = ?, ultimo_login_ip = ? WHERE id = ?",
         (_iso(_now()), ip, usuario["id"]),
@@ -329,6 +343,17 @@ def verificar_2fa():
                          ip=ip, dispositivo=dispositivo)
         raise AuthError("Código de dois fatores inválido.")
 
+    # Mesmo motivo do check em /auth/login: alguém com 2FA já configurado
+    # que teve a senha resetada por um administrador (ou, mais raro, uma
+    # conta nova que já veio com 2FA pré-configurado) precisa passar por
+    # essa troca antes de receber os tokens finais também por este
+    # caminho — não só pelo login sem 2FA.
+    if usuario["senha_deve_trocar"]:
+        login_ticket = security.emitir_login_ticket(usuario_id)
+        audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
+                         acao="login_2fa_ok_aguardando_troca_senha_obrigatoria", ip=ip, dispositivo=dispositivo)
+        return jsonify({"requires_password_change": True, "login_ticket": login_ticket})
+
     conn.execute(
         "UPDATE usuarios SET tentativas_login_falhas = 0, bloqueado_ate = NULL, "
         "ultimo_login_em = ?, ultimo_login_ip = ? WHERE id = ?",
@@ -341,6 +366,60 @@ def verificar_2fa():
     tokens["dispositivo_confiavel_token"] = _criar_dispositivo_confiavel_2fa(conn, usuario_id, ip, dispositivo)
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
                      acao="login_sucesso_2fa", ip=ip, dispositivo=dispositivo)
+    return jsonify(tokens)
+
+
+@bp.post("/trocar-senha-obrigatoria")
+def trocar_senha_obrigatoria():
+    """Completa o login quando /auth/login ou /auth/2fa/verificar devolveu
+    `requires_password_change: true` — troca a senha provisória (gerada
+    na criação do usuário ou num reset feito por um administrador) por
+    uma escolhida pela própria pessoa, e só então emite os tokens de
+    acesso de verdade. Mesmo padrão de troca de ticket-por-token já
+    usado em /auth/2fa/verificar — o `login_ticket` já prova que a senha
+    provisória foi validada, não pede ela de novo aqui."""
+    dados = request.get_json(silent=True) or {}
+    login_ticket = dados.get("login_ticket")
+    senha_nova = dados.get("senha_nova") or ""
+    ip = client_ip()
+    dispositivo = client_device()
+    conn = get_db()
+
+    if not login_ticket:
+        raise ApiError("Informe login_ticket.", status=400)
+
+    try:
+        payload = security.decodificar_token(login_ticket)
+    except Exception:
+        raise AuthError("Sessão de login expirada. Faça login novamente.")
+
+    if payload.get("tipo") != "login_ticket":
+        raise AuthError("Token inválido para esta operação.")
+
+    usuario_id = int(payload["sub"])
+    usuario = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    if usuario is None:
+        raise AuthError("Usuário não encontrado.")
+    usuario = dict(usuario)
+
+    if usuario["status"] != "ativo":
+        raise AuthError("Usuário inativo ou bloqueado. Fale com um administrador.")
+
+    problemas = security.validar_politica_senha(senha_nova)
+    if problemas:
+        raise ApiError("Senha não atende à política de segurança: " + " ".join(problemas), status=400)
+
+    novo_hash = security.hash_password(senha_nova)
+    agora_iso = _iso(_now())
+    conn.execute(
+        "UPDATE usuarios SET senha_hash = ?, senha_deve_trocar = 0, senha_trocada_em = ?, "
+        "ultimo_login_em = ?, ultimo_login_ip = ? WHERE id = ?",
+        (novo_hash, agora_iso, agora_iso, ip, usuario_id),
+    )
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
+                     acao="senha_obrigatoria_trocada", ip=ip, dispositivo=dispositivo)
+
+    tokens = _emitir_tokens(conn, usuario_id, ip, dispositivo)
     return jsonify(tokens)
 
 

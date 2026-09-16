@@ -1592,6 +1592,11 @@
   // LOGIN
   // =======================================================================
   let ticket2fa = null;
+  // Fase 183 — mesma ideia do ticket2fa acima, só que pro caso de troca de
+  // senha OBRIGATÓRIA (usuário novo, ou senha resetada por um
+  // administrador): guarda o login_ticket entre "login devolveu
+  // requires_password_change" e "pessoa digitou a senha nova".
+  let ticketTrocaSenhaObrigatoria = null;
   // Guarda email/senha só durante o intervalo entre "login exige 2FA" e "2FA
   // confirmado", para poder oferecer salvar a senha no navegador só depois
   // que o login como um todo (incluindo o segundo fator) realmente deu
@@ -1759,6 +1764,35 @@
     state.flash = null;
   }
 
+  // Fase 183 — pedido do usuário: senha provisória (nova conta ou reset
+  // administrativo) só pode ser usada até o PRÓXIMO login, onde uma tela
+  // obrigatória força escolher uma senha nova antes de continuar. Mesmo
+  // "cartao-login" visual do resto do fluxo de autenticação.
+  function renderLoginTrocaSenhaObrigatoria() {
+    app.innerHTML = `
+      <div class="tela-login">
+        <div class="cartao-login">
+          <img class="logo-marca" src="/static/img/logo_alphafitus.png" alt="Alphafitus">
+          <h1>Defina sua senha</h1>
+          <p class="subtitulo">Essa foi uma senha provisória — antes de continuar, escolha a senha que você vai usar de agora em diante.</p>
+          ${state.flash ? `<p class="mensagem-erro">${escapeHtml(state.flash.texto)}</p>` : ""}
+          <form data-form="login-trocar-senha-obrigatoria">
+            <div class="campo">
+              <label for="nova-senha-obrigatoria">Nova senha</label>
+              <input id="nova-senha-obrigatoria" name="senha_nova" type="password" required minlength="12" autofocus>
+              <div class="texto-suave" style="margin-top:4px;font-size:12px;">Mínimo 12 caracteres, com maiúscula, minúscula, número e símbolo.</div>
+            </div>
+            <div class="campo">
+              <label for="confirmar-senha-obrigatoria">Confirmar nova senha</label>
+              <input id="confirmar-senha-obrigatoria" name="senha_confirmar" type="password" required minlength="12">
+            </div>
+            <button class="botao largura-total" type="submit">Definir senha e entrar</button>
+          </form>
+        </div>
+      </div>`;
+    state.flash = null;
+  }
+
   // =======================================================================
   // DASHBOARD
   // =======================================================================
@@ -1814,6 +1848,7 @@
           <td>
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-usuario" data-id="${u.id}">Editar</button>` : ""}
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="perfis-usuario" data-id="${u.id}">Perfis</button>` : ""}
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="resetar-senha-usuario" data-id="${u.id}" data-nome="${escapeHtml(u.nome)}">Resetar senha</button>` : ""}
             ${podeInativar && u.status === "ativo" ? `<button class="botao perigo pequeno" data-acao="inativar-usuario" data-id="${u.id}">Inativar</button>` : ""}
             ${podeInativar && u.status !== "ativo" ? `<button class="botao pequeno" data-acao="reativar-usuario" data-id="${u.id}">Reativar</button>` : ""}
           </td>
@@ -1879,6 +1914,19 @@
       <form data-form="editar-usuario" data-id="${usuario.id}">
         <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(usuario.nome)}" required></div>
         <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(usuario.email)}" required></div>
+        <div class="campo">
+          <label>Foto</label>
+          <div class="conta-foto-linha">
+            ${usuario.foto_perfil
+              ? `<img class="conta-foto-preview" src="${usuario.foto_perfil}" alt="">`
+              : `<span class="conta-foto-preview conta-foto-preview-vazia">${escapeHtml(iniciaisUsuario(usuario.nome))}</span>`}
+            <div class="conta-foto-acoes">
+              <input type="file" accept="image/png,image/jpeg,image/webp" name="foto">
+              ${usuario.foto_perfil ? '<label style="font-size:12px;"><input type="checkbox" name="remover_foto"> Remover foto atual</label>' : ""}
+            </div>
+          </div>
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">JPEG, PNG ou WEBP, até 2 MB. Deixe em branco pra manter a foto atual.</div>
+        </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Salvar</button>
@@ -17978,6 +18026,32 @@
         modalPerfisUsuario(usuario);
         return;
       }
+      case "resetar-senha-usuario": {
+        if (!confirm(
+          `Resetar a senha de "${alvo.dataset.nome}"? A senha atual dela deixa de funcionar na hora, ` +
+          `e as sessões abertas são encerradas. Uma senha provisória nova será gerada — você vai precisar repassar pra ela.`
+        )) return;
+        const resp = await chamarApi(`/usuarios/${alvo.dataset.id}/resetar-senha`, { method: "POST" });
+        abrirModal(`
+          <h3>Senha provisória gerada</h3>
+          <p class="texto-suave">
+            Essa senha só aparece <strong>agora</strong> — não fica salva em nenhum lugar recuperável depois.
+            Copie e repasse com segurança pra <strong>${escapeHtml(alvo.dataset.nome)}</strong>.
+            No próximo login, ela será obrigada a trocar por uma senha escolhida por ela mesma.
+          </p>
+          <div class="campo">
+            <label>E-mail (login)</label>
+            <input type="text" value="${escapeHtml(resp.email)}" readonly onclick="this.select()">
+          </div>
+          <div class="campo">
+            <label>Senha provisória</label>
+            <input type="text" value="${escapeHtml(resp.senha_provisoria)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;">
+          </div>
+          <div class="rodape-modal">
+            <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
+          </div>`);
+        return;
+      }
       case "inativar-usuario":
         if (!confirm("Inativar este usuário?")) return;
         await chamarApi(`/usuarios/${alvo.dataset.id}/inativar`, { method: "POST" });
@@ -19566,6 +19640,10 @@
           credenciaisPendentes2fa = { email, senha, lembrar };
           return renderLogin2fa();
         }
+        if (resp.requires_password_change) {
+          ticketTrocaSenhaObrigatoria = resp.login_ticket;
+          return renderLoginTrocaSenhaObrigatoria();
+        }
         state.accessToken = resp.access_token;
         state.refreshToken = resp.refresh_token;
         localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
@@ -19579,6 +19657,15 @@
         const resp = await chamarApi("/auth/2fa/verificar", {
           method: "POST", semAuth: true, body: { login_ticket: ticket2fa, codigo },
         });
+        if (resp.requires_password_change) {
+          // Raro (2FA já configurado E senha provisória ao mesmo tempo —
+          // ex.: admin resetou a senha de alguém que já tinha 2FA ativo),
+          // mas precisa do mesmo tratamento do login sem 2FA.
+          ticketTrocaSenhaObrigatoria = resp.login_ticket;
+          ticket2fa = null;
+          credenciaisPendentes2fa = null;
+          return renderLoginTrocaSenhaObrigatoria();
+        }
         state.accessToken = resp.access_token;
         state.refreshToken = resp.refresh_token;
         localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
@@ -19594,6 +19681,24 @@
         }
         ticket2fa = null;
         credenciaisPendentes2fa = null;
+        return navegarPara(rotaInicialPosLogin());
+      }
+      case "login-trocar-senha-obrigatoria": {
+        const senhaNova = dados.get("senha_nova");
+        const senhaConfirmar = dados.get("senha_confirmar");
+        if (senhaNova !== senhaConfirmar) {
+          definirFlash("erro", "As senhas informadas não são iguais.");
+          return renderLoginTrocaSenhaObrigatoria();
+        }
+        const resp = await chamarApi("/auth/trocar-senha-obrigatoria", {
+          method: "POST", semAuth: true,
+          body: { login_ticket: ticketTrocaSenhaObrigatoria, senha_nova: senhaNova },
+        });
+        ticketTrocaSenhaObrigatoria = null;
+        state.accessToken = resp.access_token;
+        state.refreshToken = resp.refresh_token;
+        localStorage.setItem("alphafitus_refresh_token", state.refreshToken);
+        state.usuarioAtual = await chamarApi("/auth/me");
         return navegarPara(rotaInicialPosLogin());
       }
       case "salvar-preferencia-notificacao": {
@@ -19643,10 +19748,14 @@
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
       }
       case "editar-usuario": {
-        await chamarApi(`/usuarios/${form.dataset.id}`, {
-          method: "PUT",
-          body: { nome: dados.get("nome"), email: dados.get("email") },
-        });
+        const corpo = { nome: dados.get("nome"), email: dados.get("email") };
+        const arquivoFoto = form.querySelector('input[type="file"]').files[0];
+        if (arquivoFoto) {
+          corpo.foto_perfil = await lerArquivoComoBase64(arquivoFoto);
+        } else if (dados.get("remover_foto")) {
+          corpo.foto_perfil = null;
+        }
+        await chamarApi(`/usuarios/${form.dataset.id}`, { method: "PUT", body: corpo });
         fecharModais();
         definirFlash("ok", "Usuário atualizado.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
