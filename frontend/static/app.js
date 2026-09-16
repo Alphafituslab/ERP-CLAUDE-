@@ -1283,7 +1283,7 @@
             </div>
             <span class="espacador-barra-superior"></span>
             <button class="botao-icone botao-icone-com-badge" data-acao="ir-notificacoes" title="Notificações">🔔<span class="badge-notificacoes" data-badge-notificacoes ${state.notificacoesNaoLidas > 0 ? "" : "hidden"}>${state.notificacoesNaoLidas > 99 ? "99+" : state.notificacoesNaoLidas}</span></button>
-            <button class="botao-icone" data-acao="alternar-tema" title="Alternar fundo (claro → escuro → verde)">🌓</button>
+            <button class="botao-icone" data-acao="alternar-tema" title="Escolher tema">🌓</button>
           </div>
           <div class="pagina">${flashHtml}${conteudoHtml}</div>
         </div>
@@ -18250,14 +18250,31 @@
         );
         return;
       case "alternar-tema": {
-        // Pedido do usuário (2026-09-14): terceira opção de fundo (verde),
-        // além de claro/escuro — cicla entre as três a cada clique, mesmo
-        // padrão de sempre (um botão só, sem menu novo pra 3 opções).
-        const ORDEM_TEMAS = ["claro", "escuro", "verde"];
-        const indiceAtual = ORDEM_TEMAS.indexOf(state.tema);
-        state.tema = ORDEM_TEMAS[(indiceAtual + 1) % ORDEM_TEMAS.length];
-        localStorage.setItem("alphafitus_tema", state.tema);
-        document.documentElement.setAttribute("data-tema", state.tema);
+        // Fase 184 — pedido do usuário: o botão cicla sozinho (claro →
+        // escuro → verde → claro...) a cada clique sem avisar qual vai vir,
+        // e ele não queria mais isso — clicar agora abre uma lista pra
+        // ESCOLHER o tema explicitamente, e o escolhido fica fixo até a
+        // pessoa trocar de novo (mesma persistência de sempre, só a forma
+        // de escolher que muda).
+        const OPCOES_TEMA = [
+          { valor: "claro", rotulo: "☀️ Claro" },
+          { valor: "escuro", rotulo: "🌙 Escuro" },
+          { valor: "verde", rotulo: "🌿 Verde" },
+          { valor: "verde-escuro", rotulo: "🌲 Verde escuro" },
+        ];
+        const retangulo = alvo.getBoundingClientRect();
+        abrirMenuContexto(
+          retangulo.right - 160,
+          retangulo.bottom + 6,
+          OPCOES_TEMA.map((op) => ({
+            rotulo: (op.valor === state.tema ? "✓ " : "　 ") + op.rotulo,
+            acao: () => {
+              state.tema = op.valor;
+              localStorage.setItem("alphafitus_tema", state.tema);
+              document.documentElement.setAttribute("data-tema", state.tema);
+            },
+          }))
+        );
         return;
       }
       case "logout": {
