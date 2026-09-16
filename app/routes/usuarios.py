@@ -3,9 +3,13 @@ import datetime
 from flask import Blueprint, g, jsonify, request
 
 from .. import audit, security
-from ..context import ApiError, client_device, client_ip, get_db
+from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..imagens import validar_imagem_base64
-from ..permissions import bloquear_atribuicao_alem_das_proprias_permissoes, requires_permission
+from ..permissions import (
+    bloquear_atribuicao_alem_das_proprias_permissoes,
+    bloquear_excecao_alem_das_proprias_permissoes,
+    requires_permission,
+)
 
 bp = Blueprint("usuarios", __name__, url_prefix="/api/v1/usuarios")
 
@@ -241,6 +245,91 @@ def definir_perfis(usuario_id):
                      acao="perfis_do_usuario_alterados", valor_anterior=anteriores, valor_novo=novos,
                      ip=client_ip(), dispositivo=client_device())
     return jsonify({"usuario_id": usuario_id, "perfis": novos})
+
+
+def _excecoes_do_usuario(conn, usuario_id):
+    rows = conn.execute(
+        "SELECT permissao_id, tipo FROM usuario_permissao_excecao WHERE usuario_id = ?",
+        (usuario_id,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+@bp.get("/<int:usuario_id>/excecoes-permissao")
+@requires_permission("usuarios", "editar")
+def listar_excecoes_permissao(usuario_id):
+    conn = get_db()
+    if conn.execute("SELECT 1 FROM usuarios WHERE id = ?", (usuario_id,)).fetchone() is None:
+        raise ApiError("Usuário não encontrado.", status=404)
+    return jsonify(_excecoes_do_usuario(conn, usuario_id))
+
+
+@bp.put("/<int:usuario_id>/excecoes-permissao")
+@requires_permission("usuarios", "editar")
+def definir_excecoes_permissao(usuario_id):
+    """Fase 184 — pedido do usuário: "dentro de um único [perfil], como
+    exemplo Qualidade, tem vários abas dentro que gostaria que usuários
+    possam ou não acessar". Guarda só o DESVIO em relação ao que os perfis
+    da pessoa já dariam (ver schema_fase184.sql) — 'conceder' dá uma
+    permissão a mais que nenhum perfil dela dá, 'negar' tira uma que algum
+    perfil dela dá. Substitui a lista inteira (mesmo padrão de
+    `definir_perfis` acima), não faz merge incremental."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    excecoes = dados.get("excecoes")
+    conn = get_db()
+
+    if excecoes is None or not isinstance(excecoes, list):
+        raise ApiError("Informe 'excecoes' como lista de {permissao_id, tipo}.", status=400)
+    ids_vistos = set()
+    for e in excecoes:
+        if (
+            not isinstance(e, dict)
+            or e.get("tipo") not in ("conceder", "negar")
+            or not isinstance(e.get("permissao_id"), int)
+        ):
+            raise ApiError("Cada exceção precisa de 'permissao_id' (número) e 'tipo' ('conceder' ou 'negar').", status=400)
+        if e["permissao_id"] in ids_vistos:
+            raise ApiError(f"Permissão {e['permissao_id']} repetida na lista de exceções.", status=400)
+        ids_vistos.add(e["permissao_id"])
+
+    alvo = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    if alvo is None:
+        raise ApiError("Usuário não encontrado.", status=404)
+
+    # Mesma lógica de segregação de função de `definir_perfis`: ninguém
+    # pode alterar as PRÓPRIAS exceções (removeria um 'negar' que outro
+    # administrador colocou como restrição, ou adicionaria um 'conceder'
+    # pra si mesmo por essa via em vez da de perfil).
+    if usuario_id == usuario_atual["id"]:
+        raise ForbiddenError(
+            "Você não pode alterar suas próprias exceções de permissão "
+            "(regra de segregação de função). Peça a outro administrador para fazer essa alteração."
+        )
+
+    ids_permissoes_validas = {r["id"] for r in conn.execute("SELECT id FROM permissoes").fetchall()}
+    for permissao_id in ids_vistos:
+        if permissao_id not in ids_permissoes_validas:
+            raise ApiError(f"Permissão {permissao_id} não existe.", status=400)
+
+    bloquear_excecao_alem_das_proprias_permissoes(conn, usuario_atual["id"], excecoes)
+
+    anteriores = _excecoes_do_usuario(conn, usuario_id)
+    conn.execute("DELETE FROM usuario_permissao_excecao WHERE usuario_id = ?", (usuario_id,))
+    for e in excecoes:
+        conn.execute(
+            """
+            INSERT INTO usuario_permissao_excecao (usuario_id, permissao_id, tipo, criado_em, criado_por)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (usuario_id, e["permissao_id"], e["tipo"], _now_iso(), usuario_atual["id"]),
+        )
+    novas = _excecoes_do_usuario(conn, usuario_id)
+
+    audit.registrar(conn, tabela="usuario_permissao_excecao", registro_id=usuario_id, usuario_id=usuario_atual["id"],
+                     acao="excecoes_de_permissao_alteradas", valor_anterior=anteriores, valor_novo=novas,
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify({"usuario_id": usuario_id, "excecoes": novas})
 
 
 @bp.post("/<int:usuario_id>/inativar")

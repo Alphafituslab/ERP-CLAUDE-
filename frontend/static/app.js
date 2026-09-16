@@ -1768,7 +1768,7 @@
   // administrativo) só pode ser usada até o PRÓXIMO login, onde uma tela
   // obrigatória força escolher uma senha nova antes de continuar. Mesmo
   // "cartao-login" visual do resto do fluxo de autenticação.
-  function renderLoginTrocaSenhaObrigatoria() {
+  function renderLoginTrocaSenhaObrigatoria(emailAtual) {
     app.innerHTML = `
       <div class="tela-login">
         <div class="cartao-login">
@@ -1785,6 +1785,11 @@
             <div class="campo">
               <label for="confirmar-senha-obrigatoria">Confirmar nova senha</label>
               <input id="confirmar-senha-obrigatoria" name="senha_confirmar" type="password" required minlength="12">
+            </div>
+            <div class="campo">
+              <label for="email-login-obrigatoria">E-mail de login</label>
+              <input id="email-login-obrigatoria" name="email_novo" type="email" value="${escapeHtml(emailAtual || "")}" required>
+              <div class="texto-suave" style="margin-top:4px;font-size:12px;">Se quiser, já aproveite pra trocar o e-mail usado pra entrar — ou deixe como está.</div>
             </div>
             <button class="botao largura-total" type="submit">Definir senha e entrar</button>
           </form>
@@ -1839,7 +1844,14 @@
       .map((u) => {
         const selo = u.status === "ativo" ? "ativo" : u.status === "bloqueado" ? "bloqueado" : "inativo";
         return `<tr>
-          <td>${escapeHtml(u.nome)}</td>
+          <td>
+            <div class="usuario-nome-com-foto">
+              ${u.foto_perfil
+                ? `<img class="avatar-usuario-pequeno" src="${u.foto_perfil}" alt="">`
+                : `<span class="avatar-usuario-pequeno avatar-usuario-pequeno-vazio">${escapeHtml(iniciaisUsuario(u.nome))}</span>`}
+              <span>${escapeHtml(u.nome)}</span>
+            </div>
+          </td>
           <td>${escapeHtml(u.email)}</td>
           <td>${u.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "—"}</td>
           <td><span class="selo ${selo}">${escapeHtml(u.status)}</span></td>
@@ -1887,7 +1899,7 @@
     const opcoes = perfis
       .map((p) => `<label><input type="checkbox" name="perfil_ids" value="${p.id}"> ${escapeHtml(p.nome)}</label>`)
       .join("");
-    abrirModal(`
+    const modal = abrirModal(`
       <h3>Novo usuário</h3>
       <form data-form="criar-usuario">
         <div class="campo"><label>Nome</label><input name="nome" required></div>
@@ -1900,23 +1912,26 @@
           <label>Foto (opcional)</label>
           <input type="file" accept="image/png,image/jpeg,image/webp" name="foto">
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">JPEG, PNG ou WEBP, até 2 MB — o próprio usuário também pode subir/trocar depois em "Minha Conta".</div>
+          ${htmlAjustadorFoto("novo-usuario")}
         </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Criar</button>
         </div>
       </form>`);
+    const formulario = modal.querySelector("form[data-form='criar-usuario']");
+    formulario._ajustadorFoto = ligarAjustadorFoto(formulario, "novo-usuario");
   }
 
   function modalEditarUsuario(usuario) {
-    abrirModal(`
+    const modal = abrirModal(`
       <h3>Editar usuário</h3>
       <form data-form="editar-usuario" data-id="${usuario.id}">
         <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(usuario.nome)}" required></div>
         <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(usuario.email)}" required></div>
         <div class="campo">
           <label>Foto</label>
-          <div class="conta-foto-linha">
+          <div class="conta-foto-linha" data-conta-foto-linha>
             ${usuario.foto_perfil
               ? `<img class="conta-foto-preview" src="${usuario.foto_perfil}" alt="">`
               : `<span class="conta-foto-preview conta-foto-preview-vazia">${escapeHtml(iniciaisUsuario(usuario.nome))}</span>`}
@@ -1926,32 +1941,155 @@
             </div>
           </div>
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">JPEG, PNG ou WEBP, até 2 MB. Deixe em branco pra manter a foto atual.</div>
+          ${htmlAjustadorFoto("editar-usuario")}
         </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Salvar</button>
         </div>
       </form>`);
+    const formulario = modal.querySelector("form[data-form='editar-usuario']");
+    formulario._ajustadorFoto = ligarAjustadorFoto(formulario, "editar-usuario");
+    // Ao escolher um arquivo novo, esconde só a PRÉVIA estática antiga (a
+    // foto já salva) — não o input de arquivo, que é irmão dela dentro do
+    // mesmo wrapper. O canvas do ajustador assume o lugar dela visualmente,
+    // já que é ELE que vira o novo `foto_perfil` no submit, não o arquivo.
+    const inputArquivo = formulario.querySelector('input[type="file"][name="foto"]');
+    const previaAntiga = formulario.querySelector(".conta-foto-preview");
+    if (inputArquivo && previaAntiga) {
+      inputArquivo.addEventListener("change", () => {
+        // `.conta-foto-preview-vazia` (as iniciais) tem `display:flex` no
+        // CSS do próprio autor — o atributo `hidden` (regra do navegador)
+        // perde dessa regra na cascata, então escondemos via style inline
+        // (sempre vence) em vez de `.hidden`.
+        if (inputArquivo.files && inputArquivo.files[0]) previaAntiga.style.display = "none";
+      });
+    }
   }
 
-  function modalPerfisUsuario(usuario) {
+  // Fase 184 — pedido do usuário: "dentro de um único, como exemplo
+  // Qualidade, tem vários abas dentro que gostaria que usuários possam ou
+  // não acessar" — clicar no nome de um perfil aqui (ex.: Regulatório)
+  // expande as permissões individuais DAQUELE perfil, pra liberar ou
+  // bloquear uma permissão específica só pra ESSA pessoa, sem mexer no
+  // perfil em si (que vale pra todo mundo que o tem). Mapa
+  // permissão→perfis que a concedem é usado tanto pra saber o estado
+  // "efetivo" inicial (concedida por QUALQUER perfil da pessoa, não só o
+  // que está sendo expandido — a mesma permissão pode existir em mais de
+  // um perfil) quanto pra recalcular ao vivo quando um perfil é
+  // marcado/desmarcado (ver `_recalcularAjusteFinoPermissoes` abaixo).
+  async function modalPerfisUsuario(usuario) {
     const perfis = state.cache.perfis || [];
     const atuais = new Set(usuario.perfis.map((p) => p.id));
-    const opcoes = perfis
+    // Exceções por usuário nunca podem ser auto-editadas (mesma regra de
+    // segregação de função do restante do sistema — ver
+    // bloquear_excecao_alem_das_proprias_permissoes no backend): editar as
+    // PRÓPRIAS exceções deixaria alguém remover um "negar" que outro
+    // administrador colocou como restrição nela mesma. Pra uma conta
+    // própria, nem busca as exceções — só mostra a atribuição de perfis,
+    // igual era antes desta fase.
+    const ehEuMesmo = state.usuarioAtual && usuario.id === state.usuarioAtual.id;
+    const excecoes = ehEuMesmo ? [] : await chamarApi(`/usuarios/${usuario.id}/excecoes-permissao`);
+    const concedidas = new Set(excecoes.filter((e) => e.tipo === "conceder").map((e) => e.permissao_id));
+    const negadas = new Set(excecoes.filter((e) => e.tipo === "negar").map((e) => e.permissao_id));
+
+    const permissaoParaPerfis = new Map();
+    perfis.forEach((p) => {
+      (p.permissoes || []).forEach((perm) => {
+        if (!permissaoParaPerfis.has(perm.id)) permissaoParaPerfis.set(perm.id, new Set());
+        permissaoParaPerfis.get(perm.id).add(p.id);
+      });
+    });
+    const concedidaPorAlgumPerfil = (permissaoId) =>
+      [...(permissaoParaPerfis.get(permissaoId) || [])].some((perfilId) => atuais.has(perfilId));
+
+    const opcoesPerfis = perfis
       .map(
         (p) =>
           `<label><input type="checkbox" name="perfil_ids" value="${p.id}" ${atuais.has(p.id) ? "checked" : ""}> ${escapeHtml(p.nome)}</label>`
       )
       .join("");
-    abrirModal(`
+
+    const ajusteFinoHtml = ehEuMesmo
+      ? `<p class="texto-suave" style="font-size:12px;margin-top:0;">
+           Peça a outro administrador para ajustar permissões individuais da sua própria conta
+           (regra de segregação de função — ninguém pode alterar as próprias exceções).
+         </p>`
+      : `<p class="texto-suave" style="font-size:12px;margin-top:0;">
+           Clique num perfil abaixo pra liberar ou bloquear uma permissão específica só para
+           <strong>${escapeHtml(usuario.nome)}</strong> — sem afetar mais ninguém que tenha esse mesmo perfil.
+         </p>` +
+        perfis
+          .filter((p) => (p.permissoes || []).length)
+          .map((p) => {
+            const itens = p.permissoes
+              .map((perm) => {
+                const efetivo = (concedidaPorAlgumPerfil(perm.id) || concedidas.has(perm.id)) && !negadas.has(perm.id);
+                return `<label><input type="checkbox" data-excecao-permissao="${perm.id}" ${efetivo ? "checked" : ""}> ${escapeHtml(perm.acao)}</label>`;
+              })
+              .join("");
+            return `<details class="perfil-ajuste-fino-item">
+              <summary>${escapeHtml(p.nome)}</summary>
+              <div class="grade-checkbox">${itens}</div>
+            </details>`;
+          })
+          .join("");
+
+    const modal = abrirModal(`
       <h3>Perfis de ${escapeHtml(usuario.nome)}</h3>
       <form data-form="definir-perfis-usuario" data-id="${usuario.id}">
-        <div class="grade-checkbox">${opcoes}</div>
+        <div class="grade-checkbox">${opcoesPerfis}</div>
+        <div class="perfis-ajuste-fino">${ajusteFinoHtml}</div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Salvar</button>
         </div>
       </form>`);
+
+    const formulario = modal.querySelector("form[data-form='definir-perfis-usuario']");
+    formulario._permissaoParaPerfis = permissaoParaPerfis;
+    formulario._ehEuMesmo = ehEuMesmo;
+    if (ehEuMesmo) return;
+    // Se o admin desmarcar um perfil inteiro (ex.: remover "Qualidade"), as
+    // permissões individuais dele que ainda estavam marcadas (herdadas
+    // daquele perfil) precisam acompanhar — senão viram exceções
+    // "conceder" acidentais que recriam, uma por uma, o mesmo acesso que
+    // acabou de ser removido. Só NÃO mexe numa caixinha que o próprio
+    // admin já tocou manualmente (`dataset.tocado`) — essa é uma decisão
+    // deliberada (ex.: manter só essa permissão mesmo sem o perfil todo) e
+    // tem que sobreviver a outros perfis sendo ligados/desligados.
+    function recalcularAjusteFino() {
+      const idsPerfisMarcados = new Set(
+        [...formulario.querySelectorAll('input[name="perfil_ids"]:checked')].map((cb) => Number(cb.value))
+      );
+      formulario.querySelectorAll("[data-excecao-permissao]").forEach((cb) => {
+        if (cb.dataset.tocado) return;
+        const permissaoId = Number(cb.dataset.excecaoPermissao);
+        const perfisQueConcedem = permissaoParaPerfis.get(permissaoId) || new Set();
+        cb.checked = [...perfisQueConcedem].some((perfilId) => idsPerfisMarcados.has(perfilId));
+      });
+    }
+    formulario.querySelectorAll('input[name="perfil_ids"]').forEach((cb) => {
+      cb.addEventListener("change", recalcularAjusteFino);
+    });
+    // A MESMA permissão pode pertencer a mais de um perfil (ex.: um perfil
+    // amplo que já inclui tudo, ou dois perfis que compartilham uma ação) —
+    // cada perfil expandido renderiza sua PRÓPRIA caixinha pra ela, então a
+    // mesma permissão pode ter várias caixinhas em seções diferentes.
+    // Marcar/desmarcar UMA precisa refletir em TODAS as outras do mesmo
+    // permissao_id — senão o toggle feito numa seção some silenciosamente,
+    // "vencido" por uma cópia intocada em outra seção ainda marcada.
+    formulario.querySelectorAll("[data-excecao-permissao]").forEach((cb) => {
+      cb.addEventListener("change", () => {
+        cb.dataset.tocado = "1";
+        const permissaoId = cb.dataset.excecaoPermissao;
+        formulario.querySelectorAll(`[data-excecao-permissao="${permissaoId}"]`).forEach((irmao) => {
+          if (irmao === cb) return;
+          irmao.checked = cb.checked;
+          irmao.dataset.tocado = "1";
+        });
+      });
+    });
   }
 
   // =======================================================================
@@ -2550,7 +2688,7 @@
 
        <div class="cartao">
          <h3 style="margin-top:0;">Foto de perfil</h3>
-         <div class="conta-foto-linha">
+         <div class="conta-foto-linha" data-conta-foto-linha>
            ${me.foto_perfil
              ? `<img class="conta-foto-preview" src="${me.foto_perfil}" alt="">`
              : `<span class="conta-foto-preview conta-foto-preview-vazia">${escapeHtml(iniciaisUsuario(me.nome))}</span>`}
@@ -2560,6 +2698,7 @@
                <button type="submit" class="botao secundario pequeno">Salvar foto</button>
                ${me.foto_perfil ? '<button type="button" class="botao perigo pequeno" data-acao="remover-foto-perfil">Remover foto</button>' : ""}
              </div>
+             ${htmlAjustadorFoto("minha-conta")}
            </form>
          </div>
          <p class="texto-suave">JPEG, PNG ou WEBP, até 2 MB.</p>
@@ -2635,6 +2774,18 @@
        </div>`,
       "conta"
     );
+    const formularioFoto = document.querySelector("form[data-form='salvar-foto-perfil']");
+    if (formularioFoto) {
+      formularioFoto._ajustadorFoto = ligarAjustadorFoto(formularioFoto, "minha-conta");
+      const linhaFotoAntiga = formularioFoto.closest("[data-conta-foto-linha]");
+      const inputArquivo = formularioFoto.querySelector('input[type="file"][name="foto"]');
+      const previaAntiga = linhaFotoAntiga && linhaFotoAntiga.querySelector(".conta-foto-preview");
+      if (previaAntiga && inputArquivo) {
+        inputArquivo.addEventListener("change", () => {
+          if (inputArquivo.files && inputArquivo.files[0]) previaAntiga.style.display = "none";
+        });
+      }
+    }
   }
 
   function modalConfirmar2fa(secret, otpauthUri) {
@@ -10395,6 +10546,181 @@
     });
   }
 
+  // Fase 184 — pedido do usuário: pré-visualizar a foto de perfil antes de
+  // salvar, com opção de arrastar (ou usar as setas) pra ajustar o
+  // enquadramento. A foto acaba aparecendo em vários lugares como <img>
+  // comum (linha da tabela de Usuários, Minha Conta, sidebar) — não dá pra
+  // aplicar um recorte diferente em cada lugar via CSS, então o
+  // enquadramento escolhido aqui precisa já vir "assado" dentro do próprio
+  // arquivo salvo. Por isso desenha num <canvas> de resolução fixa
+  // (TAMANHO_SAIDA_FOTO) com a mesma matemática do `object-fit: cover`
+  // (escala = o MAIOR fator que cobre o quadro inteiro, nunca deixa borda
+  // vazia) e exporta o resultado via toDataURL — isso vira o próprio valor
+  // de `foto_perfil` mandado pro backend, no lugar do arquivo cru.
+  const TAMANHO_SAIDA_FOTO = 220;
+
+  function criarAjustadorFoto(canvas, elementoSetas) {
+    const ctx = canvas.getContext("2d");
+    const lado = canvas.width;
+    let img = null;
+    let escalaBase = 1;
+    let deslocX = 0;
+    let deslocY = 0;
+    let arrastando = false;
+    let ultimoX = 0;
+    let ultimoY = 0;
+
+    function limitarDeslocamento() {
+      if (!img) return;
+      const folgaX = Math.max(0, (img.width * escalaBase - lado) / 2 / escalaBase);
+      const folgaY = Math.max(0, (img.height * escalaBase - lado) / 2 / escalaBase);
+      deslocX = Math.max(-folgaX, Math.min(folgaX, deslocX));
+      deslocY = Math.max(-folgaY, Math.min(folgaY, deslocY));
+    }
+
+    function desenhar() {
+      ctx.clearRect(0, 0, lado, lado);
+      if (!img) {
+        ctx.fillStyle = "rgba(0,0,0,0.08)";
+        ctx.fillRect(0, 0, lado, lado);
+        return;
+      }
+      const larguraExibida = img.width * escalaBase;
+      const alturaExibida = img.height * escalaBase;
+      const centroX = lado / 2 - deslocX * escalaBase;
+      const centroY = lado / 2 - deslocY * escalaBase;
+      ctx.drawImage(img, centroX - larguraExibida / 2, centroY - alturaExibida / 2, larguraExibida, alturaExibida);
+    }
+
+    function mover(dx, dy) {
+      if (!img) return;
+      // dx/dy chegam em px de TELA (arraste do mouse/dedo ou clique na
+      // seta) — convertidos pra px da imagem ORIGINAL, senão arrastar uma
+      // foto muito maior que o quadro anda rápido demais.
+      deslocX -= dx / escalaBase;
+      deslocY -= dy / escalaBase;
+      limitarDeslocamento();
+      desenhar();
+    }
+
+    function carregarArquivo(arquivo) {
+      return new Promise((resolve, reject) => {
+        const leitor = new FileReader();
+        leitor.onload = () => {
+          const imagem = new Image();
+          imagem.onload = () => {
+            img = imagem;
+            escalaBase = Math.max(lado / img.width, lado / img.height);
+            deslocX = 0;
+            deslocY = 0;
+            desenhar();
+            resolve();
+          };
+          imagem.onerror = () => reject(new Error("Não foi possível abrir essa imagem."));
+          imagem.src = leitor.result;
+        };
+        leitor.onerror = () => reject(leitor.error || new Error("Falha ao ler o arquivo."));
+        leitor.readAsDataURL(arquivo);
+      });
+    }
+
+    canvas.addEventListener("mousedown", (ev) => {
+      if (!img) return;
+      arrastando = true;
+      ultimoX = ev.clientX;
+      ultimoY = ev.clientY;
+    });
+    window.addEventListener("mousemove", (ev) => {
+      if (!arrastando) return;
+      mover(ev.clientX - ultimoX, ev.clientY - ultimoY);
+      ultimoX = ev.clientX;
+      ultimoY = ev.clientY;
+    });
+    window.addEventListener("mouseup", () => { arrastando = false; });
+    canvas.addEventListener(
+      "touchstart",
+      (ev) => {
+        if (!img || !ev.touches.length) return;
+        arrastando = true;
+        ultimoX = ev.touches[0].clientX;
+        ultimoY = ev.touches[0].clientY;
+      },
+      { passive: true }
+    );
+    canvas.addEventListener(
+      "touchmove",
+      (ev) => {
+        if (!arrastando || !ev.touches.length) return;
+        mover(ev.touches[0].clientX - ultimoX, ev.touches[0].clientY - ultimoY);
+        ultimoX = ev.touches[0].clientX;
+        ultimoY = ev.touches[0].clientY;
+      },
+      { passive: true }
+    );
+    canvas.addEventListener("touchend", () => { arrastando = false; });
+
+    if (elementoSetas) {
+      const PASSO = 18;
+      elementoSetas.querySelectorAll("[data-mover]").forEach((botao) => {
+        botao.addEventListener("click", () => {
+          const [dx, dy] = botao.dataset.mover.split(",").map(Number);
+          mover(dx * PASSO, dy * PASSO);
+        });
+      });
+    }
+
+    desenhar();
+
+    return {
+      carregarArquivo,
+      temImagem: () => !!img,
+      obterDataUrl: () => canvas.toDataURL("image/jpeg", 0.9),
+    };
+  }
+
+  // Monta o bloco de HTML do ajustador (canvas + setas), reaproveitado nos
+  // 3 lugares que permitem foto de perfil (novo usuário, editar usuário,
+  // Minha Conta) — `idBase` evita colisão de refs quando mais de um
+  // formulário com foto existir na mesma página.
+  function htmlAjustadorFoto(idBase) {
+    return `<div class="ajuste-foto" data-ajuste-foto="${idBase}" hidden>
+      <canvas width="${TAMANHO_SAIDA_FOTO}" height="${TAMANHO_SAIDA_FOTO}"></canvas>
+      <div class="ajuste-foto-setas" data-ajuste-foto-setas>
+        <span></span><button type="button" data-mover="0,-1" title="Mover para cima">↑</button><span></span>
+        <button type="button" data-mover="-1,0" title="Mover para a esquerda">←</button>
+        <span></span>
+        <button type="button" data-mover="1,0" title="Mover para a direita">→</button>
+        <span></span><button type="button" data-mover="0,1" title="Mover para baixo">↓</button><span></span>
+      </div>
+      <div class="texto-suave" style="font-size:12px;">Arraste a foto (ou use as setas) para ajustar o enquadramento.</div>
+    </div>`;
+  }
+
+  // Liga um <input type="file"> ao ajustador: ao escolher uma imagem,
+  // carrega no canvas e revela o bloco de ajuste. Devolve o objeto do
+  // ajustador (`criarAjustadorFoto`) pra o handler de submit consultar
+  // `temImagem()`/`obterDataUrl()` na hora de montar o corpo da requisição.
+  function ligarAjustadorFoto(formulario, idBase) {
+    const inputArquivo = formulario.querySelector('input[type="file"][name="foto"]');
+    const bloco = formulario.querySelector(`[data-ajuste-foto="${idBase}"]`);
+    if (!inputArquivo || !bloco) return null;
+    const canvas = bloco.querySelector("canvas");
+    const setas = bloco.querySelector("[data-ajuste-foto-setas]");
+    const ajustador = criarAjustadorFoto(canvas, setas);
+    inputArquivo.addEventListener("change", async () => {
+      const arquivo = inputArquivo.files && inputArquivo.files[0];
+      if (!arquivo) return;
+      try {
+        await ajustador.carregarArquivo(arquivo);
+        bloco.hidden = false;
+      } catch (erro) {
+        alert(erro.message || "Não foi possível abrir essa imagem.");
+        inputArquivo.value = "";
+      }
+    });
+    return ajustador;
+  }
+
   // Fase 46 — mesma ideia de lerArquivoComoBase64(), mas devolvendo texto
   // puro: o snapshot é um arquivo .json normal, sem necessidade nenhuma de
   // base64 (o backend já recebe/devolve JSON puro nesta rota).
@@ -18023,7 +18349,7 @@
       }
       case "perfis-usuario": {
         const usuario = await chamarApi(`/usuarios/${alvo.dataset.id}`);
-        modalPerfisUsuario(usuario);
+        await modalPerfisUsuario(usuario);
         return;
       }
       case "resetar-senha-usuario": {
@@ -19642,7 +19968,7 @@
         }
         if (resp.requires_password_change) {
           ticketTrocaSenhaObrigatoria = resp.login_ticket;
-          return renderLoginTrocaSenhaObrigatoria();
+          return renderLoginTrocaSenhaObrigatoria(resp.email_atual);
         }
         state.accessToken = resp.access_token;
         state.refreshToken = resp.refresh_token;
@@ -19664,7 +19990,7 @@
           ticketTrocaSenhaObrigatoria = resp.login_ticket;
           ticket2fa = null;
           credenciaisPendentes2fa = null;
-          return renderLoginTrocaSenhaObrigatoria();
+          return renderLoginTrocaSenhaObrigatoria(resp.email_atual);
         }
         state.accessToken = resp.access_token;
         state.refreshToken = resp.refresh_token;
@@ -19688,11 +20014,11 @@
         const senhaConfirmar = dados.get("senha_confirmar");
         if (senhaNova !== senhaConfirmar) {
           definirFlash("erro", "As senhas informadas não são iguais.");
-          return renderLoginTrocaSenhaObrigatoria();
+          return renderLoginTrocaSenhaObrigatoria(dados.get("email_novo"));
         }
         const resp = await chamarApi("/auth/trocar-senha-obrigatoria", {
           method: "POST", semAuth: true,
-          body: { login_ticket: ticketTrocaSenhaObrigatoria, senha_nova: senhaNova },
+          body: { login_ticket: ticketTrocaSenhaObrigatoria, senha_nova: senhaNova, email_novo: dados.get("email_novo") },
         });
         ticketTrocaSenhaObrigatoria = null;
         state.accessToken = resp.access_token;
@@ -19737,21 +20063,47 @@
       }
       case "criar-usuario": {
         const perfil_ids = dados.getAll("perfil_ids").map(Number);
-        const arquivoFoto = form.querySelector('input[type="file"]').files[0];
-        const foto_perfil = arquivoFoto ? await lerArquivoComoBase64(arquivoFoto) : null;
+        const ajustadorFoto = form._ajustadorFoto;
+        const foto_perfil = ajustadorFoto && ajustadorFoto.temImagem() ? ajustadorFoto.obterDataUrl() : null;
+        const nomeCriado = dados.get("nome");
+        const emailCriado = dados.get("email");
+        const senhaCriada = dados.get("senha");
         await chamarApi("/usuarios", {
           method: "POST",
-          body: { nome: dados.get("nome"), email: dados.get("email"), senha: dados.get("senha"), perfil_ids, foto_perfil },
+          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, perfil_ids, foto_perfil },
         });
         fecharModais();
-        definirFlash("ok", "Usuário criado.");
-        return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+        await renderUsuarios(estaNaTelaMemorialDeUsuarios());
+        // Pedido do usuário: reforçar bem visível "anote login e senha" logo
+        // ao criar — mesmo a senha tendo sido digitada pelo próprio
+        // administrador (não gerada pelo sistema), fica fácil esquecer de
+        // copiar antes de fechar o formulário. No primeiro login da pessoa,
+        // `senha_deve_trocar` (sempre 1 na criação) já obriga a troca.
+        abrirModal(`
+          <h3>Usuário criado</h3>
+          <p class="texto-suave">
+            <strong>Anote o login e a senha</strong> agora, pra repassar com segurança pra
+            <strong>${escapeHtml(nomeCriado)}</strong> — essa tela não abre de novo depois de fechada.
+            No primeiro login, ela será obrigada a trocar por uma senha escolhida por ela mesma.
+          </p>
+          <div class="campo">
+            <label>E-mail (login)</label>
+            <input type="text" value="${escapeHtml(emailCriado)}" readonly onclick="this.select()">
+          </div>
+          <div class="campo">
+            <label>Senha temporária</label>
+            <input type="text" value="${escapeHtml(senhaCriada)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;">
+          </div>
+          <div class="rodape-modal">
+            <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
+          </div>`);
+        return;
       }
       case "editar-usuario": {
         const corpo = { nome: dados.get("nome"), email: dados.get("email") };
-        const arquivoFoto = form.querySelector('input[type="file"]').files[0];
-        if (arquivoFoto) {
-          corpo.foto_perfil = await lerArquivoComoBase64(arquivoFoto);
+        const ajustadorFoto = form._ajustadorFoto;
+        if (ajustadorFoto && ajustadorFoto.temImagem()) {
+          corpo.foto_perfil = ajustadorFoto.obterDataUrl();
         } else if (dados.get("remover_foto")) {
           corpo.foto_perfil = null;
         }
@@ -19763,6 +20115,34 @@
       case "definir-perfis-usuario": {
         const perfil_ids = dados.getAll("perfil_ids").map(Number);
         await chamarApi(`/usuarios/${form.dataset.id}/perfis`, { method: "PUT", body: { perfil_ids } });
+        if (form._ehEuMesmo) {
+          fecharModais();
+          definirFlash("ok", "Perfis atualizados.");
+          return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+        }
+        // Fase 184 — exceções individuais (ver modalPerfisUsuario): compara
+        // cada caixinha de "ajuste fino" contra o que os perfis recém-salvos
+        // JÁ dariam sozinhos — só vira exceção o que DIVERGE dessa base
+        // (senão toda permissão normal do perfil viraria uma exceção
+        // redundante). `data-excecao-permissao` repetido entre perfis que
+        // compartilham a mesma permissão soma naturalmente num Set (basta
+        // UM marcado pra contar como "quer acesso").
+        const permissaoParaPerfis = form._permissaoParaPerfis || new Map();
+        const idsPerfisFinais = new Set(perfil_ids);
+        const checkboxesAjusteFino = [...form.querySelectorAll("[data-excecao-permissao]")];
+        const marcados = new Set(
+          checkboxesAjusteFino.filter((cb) => cb.checked).map((cb) => Number(cb.dataset.excecaoPermissao))
+        );
+        const todosOsIds = new Set(checkboxesAjusteFino.map((cb) => Number(cb.dataset.excecaoPermissao)));
+        const excecoes = [];
+        todosOsIds.forEach((permissaoId) => {
+          const perfisQueConcedem = permissaoParaPerfis.get(permissaoId) || new Set();
+          const baseline = [...perfisQueConcedem].some((perfilId) => idsPerfisFinais.has(perfilId));
+          const querAcesso = marcados.has(permissaoId);
+          if (querAcesso && !baseline) excecoes.push({ permissao_id: permissaoId, tipo: "conceder" });
+          else if (!querAcesso && baseline) excecoes.push({ permissao_id: permissaoId, tipo: "negar" });
+        });
+        await chamarApi(`/usuarios/${form.dataset.id}/excecoes-permissao`, { method: "PUT", body: { excecoes } });
         fecharModais();
         definirFlash("ok", "Perfis atualizados.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
@@ -20068,9 +20448,9 @@
         return renderMinhaConta();
       }
       case "salvar-foto-perfil": {
-        const arquivo = form.querySelector('input[type="file"]').files[0];
-        if (!arquivo) throw new Error("Escolha uma foto primeiro.");
-        const conteudo = await lerArquivoComoBase64(arquivo);
+        const ajustadorFoto = form._ajustadorFoto;
+        if (!ajustadorFoto || !ajustadorFoto.temImagem()) throw new Error("Escolha uma foto primeiro.");
+        const conteudo = ajustadorFoto.obterDataUrl();
         await chamarApi("/auth/minha-foto", { method: "PUT", body: { foto_perfil: conteudo } });
         definirFlash("ok", "Foto de perfil atualizada.");
         return renderMinhaConta();

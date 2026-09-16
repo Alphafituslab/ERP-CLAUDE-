@@ -181,6 +181,7 @@ SCHEMA_FILES = [
     "schema_fase172.sql",  # Fase 172 — 2FA configurável (Administração > Segurança)
     "schema_fase176.sql",  # Fase 176 — painel ao vivo: tela atual de cada terminal
     "schema_fase177.sql",  # Fase 177 — confirmação por e-mail antes de instalar em modo SERVIDOR
+    "schema_fase184.sql",  # Fase 184 — exceções de permissão por usuário (conceder/negar por cima do perfil)
 ]
 
 

@@ -494,6 +494,46 @@ body::before {
 }
 .conta-foto-acoes { display: flex; flex-direction: column; gap: 8px; }
 .conta-foto-botoes { display: flex; gap: 8px; flex-wrap: wrap; }
+
+/* Fase 184 — pedido do usuário: foto ao lado do nome na lista de Usuários,
+   pra reconhecer o rosto na hora de mexer no cadastro (sem precisar abrir
+   Editar pra lembrar quem é quem). */
+.usuario-nome-com-foto { display: flex; align-items: center; gap: 10px; }
+.avatar-usuario-pequeno {
+  width: 32px; height: 32px; border-radius: 50%; object-fit: cover; flex-shrink: 0;
+}
+.avatar-usuario-pequeno-vazio {
+  display: flex; align-items: center; justify-content: center;
+  background: var(--fundo-suave, rgba(0,0,0,0.08));
+  color: var(--texto-suave, #666);
+  font-size: 12px; font-weight: 700;
+}
+
+/* Fase 184 — pedido do usuário: prévia real da foto antes de salvar, com
+   ajuste de enquadramento (arrastar ou usar as setas). O <canvas> guarda
+   a resolução real de saída (ver TAMANHO_SAIDA_FOTO no app.js); aqui só
+   controla o tamanho VISÍVEL — os dois batem (mesmo valor no HTML e na
+   constante JS) pra evitar contas de escala entre o mouse e o desenho. */
+.ajuste-foto { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 8px; }
+.ajuste-foto[hidden] { display: none; }
+.ajuste-foto canvas {
+  border-radius: 50%;
+  cursor: grab;
+  background: var(--fundo-suave, rgba(0,0,0,0.06));
+  touch-action: none;
+}
+.ajuste-foto canvas:active { cursor: grabbing; }
+.ajuste-foto-setas { display: grid; grid-template-columns: repeat(3, 32px); grid-template-rows: repeat(3, 32px); gap: 4px; justify-content: center; }
+.ajuste-foto-setas button {
+  border: 1px solid var(--borda, #ccc);
+  background: var(--fundo, #fff);
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.ajuste-foto-setas button:hover { background: var(--fundo-suave, rgba(0,0,0,0.06)); }
+.ajuste-foto-setas span { visibility: hidden; }
 .rodape-lateral-texto { flex: 1; min-width: 0; }
 .rodape-lateral-nome { display: block; font-size: 12.5px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rodape-lateral-cargo { display: block; font-size: 10.5px; color: rgba(255,255,255,0.6); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -942,6 +982,21 @@ tr.linha-selecionada td { background: #e6eef7; }
   font-size: 10px; text-transform: uppercase; letter-spacing: .03em; font-weight: 700;
   color: var(--texto-suave); margin: 14px 0 4px;
 }
+
+/* Fase 184 — pedido do usuário: clicar num perfil (ex.: Regulatório) dentro
+   do modal de perfis do usuário abre as permissões individuais daquele
+   perfil, pra liberar/bloquear uma permissão específica só pra aquela
+   pessoa. <details>/<summary> nativo — abre/fecha sem precisar de JS. */
+.perfis-ajuste-fino { margin-top: 14px; border-top: 1px solid var(--borda); padding-top: 10px; }
+.perfil-ajuste-fino-item { border: 1px solid var(--borda); border-radius: 8px; padding: 2px 10px; margin-bottom: 6px; }
+.perfil-ajuste-fino-item summary {
+  cursor: pointer; padding: 8px 2px; font-weight: 600; font-size: 13px;
+  list-style: none;
+}
+.perfil-ajuste-fino-item summary::-webkit-details-marker { display: none; }
+.perfil-ajuste-fino-item summary::before { content: "▸ "; color: var(--texto-suave); }
+.perfil-ajuste-fino-item[open] summary::before { content: "▾ "; }
+.perfil-ajuste-fino-item .grade-checkbox { padding: 4px 2px 10px; }
 
 .rodape-tabela { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; font-size: 12px; color: var(--texto-suave); }
 

@@ -263,7 +263,7 @@ def login():
         login_ticket = security.emitir_login_ticket(usuario["id"])
         audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=usuario["id"],
                          acao="login_aguardando_troca_senha_obrigatoria", ip=ip, dispositivo=dispositivo)
-        return jsonify({"requires_password_change": True, "login_ticket": login_ticket})
+        return jsonify({"requires_password_change": True, "login_ticket": login_ticket, "email_atual": usuario["email"]})
 
     conn.execute(
         "UPDATE usuarios SET ultimo_login_em = ?, ultimo_login_ip = ? WHERE id = ?",
@@ -352,7 +352,7 @@ def verificar_2fa():
         login_ticket = security.emitir_login_ticket(usuario_id)
         audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
                          acao="login_2fa_ok_aguardando_troca_senha_obrigatoria", ip=ip, dispositivo=dispositivo)
-        return jsonify({"requires_password_change": True, "login_ticket": login_ticket})
+        return jsonify({"requires_password_change": True, "login_ticket": login_ticket, "email_atual": usuario["email"]})
 
     conn.execute(
         "UPDATE usuarios SET tentativas_login_falhas = 0, bloqueado_ate = NULL, "
@@ -381,6 +381,10 @@ def trocar_senha_obrigatoria():
     dados = request.get_json(silent=True) or {}
     login_ticket = dados.get("login_ticket")
     senha_nova = dados.get("senha_nova") or ""
+    # Pedido do usuário: nesta mesma tela obrigatória, quem quiser também
+    # pode trocar o e-mail (login) — sempre OPCIONAL; deixando em branco
+    # ou igual ao atual, nada muda nele.
+    email_novo = (dados.get("email_novo") or "").strip().lower()
     ip = client_ip()
     dispositivo = client_device()
     conn = get_db()
@@ -409,15 +413,28 @@ def trocar_senha_obrigatoria():
     if problemas:
         raise ApiError("Senha não atende à política de segurança: " + " ".join(problemas), status=400)
 
+    email_final = usuario["email"]
+    if email_novo and email_novo != usuario["email"]:
+        if not security.email_valido(email_novo):
+            raise ApiError("Informe um e-mail válido.", status=400)
+        existente = conn.execute(
+            "SELECT id FROM usuarios WHERE email = ? AND id != ?", (email_novo, usuario_id),
+        ).fetchone()
+        if existente:
+            raise ApiError("Já existe um usuário com este e-mail.", status=409)
+        email_final = email_novo
+
     novo_hash = security.hash_password(senha_nova)
     agora_iso = _iso(_now())
     conn.execute(
-        "UPDATE usuarios SET senha_hash = ?, senha_deve_trocar = 0, senha_trocada_em = ?, "
+        "UPDATE usuarios SET senha_hash = ?, email = ?, senha_deve_trocar = 0, senha_trocada_em = ?, "
         "ultimo_login_em = ?, ultimo_login_ip = ? WHERE id = ?",
-        (novo_hash, agora_iso, agora_iso, ip, usuario_id),
+        (novo_hash, email_final, agora_iso, agora_iso, ip, usuario_id),
     )
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
-                     acao="senha_obrigatoria_trocada", ip=ip, dispositivo=dispositivo)
+                     acao="senha_obrigatoria_trocada",
+                     valor_novo={"email_alterado": email_final != usuario["email"]},
+                     ip=ip, dispositivo=dispositivo)
 
     tokens = _emitir_tokens(conn, usuario_id, ip, dispositivo)
     return jsonify(tokens)

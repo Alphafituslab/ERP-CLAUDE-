@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "183.0"
+VERSAO_SISTEMA = "184.0"
 
 
 def create_app(test_config: dict = None) -> Flask:
@@ -169,9 +169,27 @@ def create_app(test_config: dict = None) -> Flask:
             "modo": "servidor", "nome_maquina": nome_maquina,
         })
 
+    # Achado real (usuário relatou 2026-09-16): depois de um deploy, quem
+    # já tinha o sistema aberto continuava vendo a versão antiga do
+    # `app.js`/`styles.css` até fazer um Ctrl+Shift+R manual — o
+    # navegador cacheava esses arquivos porque a URL nunca mudava entre
+    # deploys. Fix padrão da indústria: cada arquivo estático crítico
+    # (`index.html` referencia com `?v=__VERSAO_SISTEMA__`) ganha a
+    # versão atual como query string — o PRÓPRIO `index.html` nunca é
+    # cacheado (por isso o `Cache-Control: no-store` abaixo), então toda
+    # vez que a página carrega ela pega a URL versionada mais recente; o
+    # arquivo versionado em si pode ser cacheado pra sempre pelo
+    # navegador sem risco, porque uma versão nova sempre vem com uma URL
+    # nova (não é a mesma URL mudando de conteúdo por baixo).
     @app.get("/")
     def frontend_index():
-        return send_from_directory(FRONTEND_DIR, "index.html")
+        caminho = os.path.join(FRONTEND_DIR, "index.html")
+        with open(caminho, "r", encoding="utf-8") as f:
+            html = f.read()
+        html = html.replace("__VERSAO_SISTEMA__", VERSAO_SISTEMA)
+        resposta = app.response_class(html, mimetype="text/html")
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
 
     # Fase 38 — manifest.json e o service worker precisam ser servidos a
     # partir da RAIZ do site (não de /static/), senão o navegador não os
@@ -190,7 +208,13 @@ def create_app(test_config: dict = None) -> Flask:
     # "Alphafitus OS", só o app instalado em campo vira "Alpha Connect".
     @app.get("/vendas")
     def frontend_vendas_index():
-        return send_from_directory(FRONTEND_DIR, "vendas.html")
+        caminho = os.path.join(FRONTEND_DIR, "vendas.html")
+        with open(caminho, "r", encoding="utf-8") as f:
+            html = f.read()
+        html = html.replace("__VERSAO_SISTEMA__", VERSAO_SISTEMA)
+        resposta = app.response_class(html, mimetype="text/html")
+        resposta.headers["Cache-Control"] = "no-store"
+        return resposta
 
     @app.get("/manifest_vendas.json")
     def frontend_manifest_vendas():

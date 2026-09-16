@@ -14,33 +14,83 @@ from .context import ForbiddenError, get_current_user, get_db
 
 
 def usuario_tem_permissao(conn, usuario_id: int, modulo: str, acao: str) -> bool:
+    # Fase 184 — por cima do que os perfis da pessoa dão, uma exceção
+    # individual pode CONCEDER uma permissão a mais (ela não muda o perfil,
+    # só essa pessoa) ou NEGAR uma que o perfil daria (negar sempre vence —
+    # é um bloqueio deliberado, feito depois e por cima da regra geral).
+    # Continua sendo uma única ida ao banco (3 EXISTS na mesma query), já
+    # que esta função roda em TODA requisição autenticada.
     row = conn.execute(
         """
-        SELECT 1
-        FROM usuario_perfil up
-        JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
-        JOIN permissoes p ON p.id = pp.permissao_id
-        WHERE up.usuario_id = ? AND p.modulo = ? AND p.acao = ?
-        LIMIT 1
+        SELECT
+          (
+            EXISTS (
+              SELECT 1 FROM usuario_perfil up
+              JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
+              JOIN permissoes p ON p.id = pp.permissao_id
+              WHERE up.usuario_id = ? AND p.modulo = ? AND p.acao = ?
+            )
+            OR EXISTS (
+              SELECT 1 FROM usuario_permissao_excecao pe
+              JOIN permissoes p ON p.id = pe.permissao_id
+              WHERE pe.usuario_id = ? AND pe.tipo = 'conceder' AND p.modulo = ? AND p.acao = ?
+            )
+          ) AS concedida,
+          EXISTS (
+            SELECT 1 FROM usuario_permissao_excecao pe
+            JOIN permissoes p ON p.id = pe.permissao_id
+            WHERE pe.usuario_id = ? AND pe.tipo = 'negar' AND p.modulo = ? AND p.acao = ?
+          ) AS negada
         """,
-        (usuario_id, modulo, acao),
+        (usuario_id, modulo, acao, usuario_id, modulo, acao, usuario_id, modulo, acao),
     ).fetchone()
-    return row is not None
+    return bool(row["concedida"]) and not bool(row["negada"])
 
 
 def permissoes_do_usuario(conn, usuario_id: int):
     rows = conn.execute(
         """
-        SELECT DISTINCT p.modulo, p.acao, p.exige_dupla_aprovacao
-        FROM usuario_perfil up
-        JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
-        JOIN permissoes p ON p.id = pp.permissao_id
-        WHERE up.usuario_id = ?
+        SELECT p.id, p.modulo, p.acao, p.exige_dupla_aprovacao
+        FROM permissoes p
+        WHERE p.id IN (
+            SELECT pp.permissao_id FROM usuario_perfil up
+            JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
+            WHERE up.usuario_id = ?
+            UNION
+            SELECT permissao_id FROM usuario_permissao_excecao WHERE usuario_id = ? AND tipo = 'conceder'
+        )
+        AND p.id NOT IN (
+            SELECT permissao_id FROM usuario_permissao_excecao WHERE usuario_id = ? AND tipo = 'negar'
+        )
         ORDER BY p.modulo, p.acao
         """,
-        (usuario_id,),
+        (usuario_id, usuario_id, usuario_id),
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def _ids_permissoes_efetivas_do_usuario(conn, usuario_id: int):
+    """Igual a `permissoes_do_usuario`, mas só os ids — usado pela guarda de
+    segregação de função abaixo (comparar CONJUNTOS de permissões, não
+    percorrer modulo/acao um a um)."""
+    rows = conn.execute(
+        """
+        SELECT p.id
+        FROM permissoes p
+        WHERE p.id IN (
+            SELECT pp.permissao_id FROM usuario_perfil up
+            JOIN perfil_permissao pp ON pp.perfil_id = up.perfil_id
+            WHERE up.usuario_id = ?
+            UNION
+            SELECT permissao_id FROM usuario_permissao_excecao WHERE usuario_id = ? AND tipo = 'conceder'
+        )
+        AND p.id NOT IN (
+            SELECT permissao_id FROM usuario_permissao_excecao WHERE usuario_id = ? AND tipo = 'negar'
+        )
+        """,
+        (usuario_id, usuario_id, usuario_id),
+    ).fetchall()
+    return {r["id"] for r in rows}
 
 
 def requires_permission(modulo: str, acao: str):
@@ -124,6 +174,26 @@ def bloquear_atribuicao_alem_das_proprias_permissoes(conn, usuario_solicitante_i
         raise ForbiddenError(
             "Você não pode atribuir um perfil com permissões que você mesmo não possui "
             "(regra de segregação de função). Peça a um administrador para fazer essa atribuição."
+        )
+
+
+def bloquear_excecao_alem_das_proprias_permissoes(conn, usuario_solicitante_id: int, excecoes):
+    """Mesma regra de segregação de função de
+    `bloquear_atribuicao_alem_das_proprias_permissoes`, aplicada ao novo
+    mecanismo de exceções por usuário (Fase 184): ninguém pode CONCEDER —
+    pra si mesmo ou pra outra pessoa — uma permissão individual que o
+    próprio solicitante não possui neste exato momento (perfis + suas
+    próprias exceções). NEGAR nunca precisa dessa checagem: tirar acesso de
+    alguém não é elevação de privilégio, então essa guarda ignora entradas
+    com tipo='negar' — só barra tipo='conceder'."""
+    ids_a_conceder = {e["permissao_id"] for e in excecoes if e.get("tipo") == "conceder"}
+    if not ids_a_conceder:
+        return
+    ids_permissoes_solicitante = _ids_permissoes_efetivas_do_usuario(conn, usuario_solicitante_id)
+    if ids_a_conceder - ids_permissoes_solicitante:
+        raise ForbiddenError(
+            "Você não pode conceder a alguém uma permissão que você mesmo não possui "
+            "(regra de segregação de função). Peça a um administrador para fazer essa alteração."
         )
 
 
