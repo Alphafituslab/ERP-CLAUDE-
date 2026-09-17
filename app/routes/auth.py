@@ -409,6 +409,20 @@ def trocar_senha_obrigatoria():
     if usuario["status"] != "ativo":
         raise AuthError("Usuário inativo ou bloqueado. Fale com um administrador.")
 
+    # Achado de auditoria de segurança: `login_ticket` é um JWT sem `jti`/
+    # rastreio de uso único — continua válido pelos 5 minutos inteiros do
+    # `LOGIN_TICKET_TTL_SECONDS`, e nada aqui impedia reenviá-lo depois de
+    # já ter sido usado com sucesso uma vez. Quem tivesse esse ticket (ex.:
+    # capturado num proxy/log, ou visto no dev tools de um computador
+    # compartilhado dentro da janela de 5 min) podia trocar senha/e-mail de
+    # NOVO, mesmo depois da pessoa já ter completado a troca — um segundo
+    # reset silencioso da conta. `senha_deve_trocar` já vira 0 no sucesso;
+    # checar aqui fecha o replay sem quebrar o caso legítimo de tentar de
+    # novo com o MESMO ticket após um erro de validação (senha fraca,
+    # e-mail já em uso) — só um USO COM SUCESSO invalida o ticket.
+    if not usuario["senha_deve_trocar"]:
+        raise AuthError("Este link já foi usado. Faça login novamente com a nova senha.")
+
     problemas = security.validar_politica_senha(senha_nova)
     if problemas:
         raise ApiError("Senha não atende à política de segurança: " + " ".join(problemas), status=400)
