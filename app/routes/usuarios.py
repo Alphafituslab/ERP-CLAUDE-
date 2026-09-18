@@ -138,6 +138,16 @@ def criar():
                      acao="usuario_criado", valor_novo={"nome": nome, "email": email, "perfil_ids": perfil_ids},
                      ip=client_ip(), dispositivo=client_device())
 
+    # Fase 188b — pedido do usuário: todo Usuário (login) criado no ERP já
+    # deve aparecer automaticamente em Funcionários, vinculado e marcado
+    # como "usuário do sistema" — sem precisar cadastrar a mesma pessoa duas
+    # vezes à mão. Função/setor/salário ficam em branco pra completar
+    # depois em Funcionários; nome/email/celular vêm de graça daqui.
+    conn.execute(
+        "INSERT INTO funcionarios (nome, email, telefone, usuario_id, criado_por) VALUES (?, ?, ?, ?, ?)",
+        (nome, email, celular, novo_id, usuario_atual["id"]),
+    )
+
     row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (novo_id,)).fetchone()
     u = _publico(row)
     u["perfis"] = _perfis_do_usuario(conn, novo_id)

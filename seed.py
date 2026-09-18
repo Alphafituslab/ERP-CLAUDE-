@@ -1022,6 +1022,21 @@ def rodar_seed(conn=None, admin_email=None, admin_senha=None, imprimir=True):
         audit.registrar(conn, tabela="usuarios", registro_id=admin_id, usuario_id=None,
                          acao="usuario_admin_inicial_criado_pelo_seed", motivo="seed.py")
 
+    # Fase 188b — pedido do usuário: todo Usuário (login) já cadastrado
+    # antes de existir o módulo Funcionários precisa aparecer lá também,
+    # vinculado e marcado como "usuário do sistema" — sem duplicar quem já
+    # tiver sido trazido manualmente. Idempotente: só cria o que falta, roda
+    # em todo re-seed sem risco de duplicar (checa por `usuario_id`, não por
+    # nome/email).
+    sem_funcionario = conn.execute(
+        "SELECT id, nome, email, celular FROM usuarios WHERE id NOT IN (SELECT usuario_id FROM funcionarios WHERE usuario_id IS NOT NULL)"
+    ).fetchall()
+    for u in sem_funcionario:
+        conn.execute(
+            "INSERT INTO funcionarios (nome, email, telefone, usuario_id) VALUES (?, ?, ?, ?)",
+            (u["nome"], u["email"], u["celular"], u["id"]),
+        )
+
     conn.commit()
     if proprio_conn:
         conn.close()

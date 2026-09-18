@@ -1959,11 +1959,15 @@
     const linhas = funcionarios
       .map((f) => {
         const selo = f.status === "ativo" ? "ativo" : "inativo";
+        const seloSistema = f.usuario_id
+          ? `<span class="selo ativo" title="${escapeHtml(f.usuario_email || "")}">Sim</span>`
+          : `<span class="selo inativo">Não</span>`;
         return `<tr>
           <td>${escapeHtml(f.nome)}</td>
           <td>${escapeHtml(f.setor || "—")}</td>
           <td>${escapeHtml(f.funcao || "—")}</td>
           <td>${escapeHtml(f.telefone || "—")}</td>
+          <td>${seloSistema}</td>
           ${veSalario ? `<td>${fmtSalario(f.salario)}</td>` : ""}
           <td><span class="selo ${selo}">${escapeHtml(f.status)}</span></td>
           <td>
@@ -1975,7 +1979,7 @@
       })
       .join("");
 
-    const colunas = veSalario ? 7 : 6;
+    const colunas = veSalario ? 8 : 7;
     renderShell(
       `<h2>Funcionários</h2>
        <p class="dica">Cadastro dos funcionários da empresa (produção, laboratório, vendas etc.) — função, cargo${veSalario ? ", salário" : ""} e contato.
@@ -1986,7 +1990,7 @@
            ${podeCadastrar ? `<button class="botao" data-acao="novo-funcionario">+ Novo funcionário</button>` : ""}
          </div>
          <table>
-           <thead><tr><th>Nome</th><th>Setor</th><th>Função</th><th>Telefone</th>${veSalario ? "<th>Salário</th>" : ""}<th>Status</th><th>Ações</th></tr></thead>
+           <thead><tr><th>Nome</th><th>Setor</th><th>Função</th><th>Telefone</th><th>Usuário do sistema</th>${veSalario ? "<th>Salário</th>" : ""}<th>Status</th><th>Ações</th></tr></thead>
            <tbody>${linhas || `<tr><td colspan="${colunas}" class="texto-suave">Nenhum funcionário cadastrado.</td></tr>`}</tbody>
          </table>
        </div>`,

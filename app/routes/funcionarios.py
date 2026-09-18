@@ -47,8 +47,17 @@ def listar():
     conn = get_db()
     ve_salario = usuario_tem_permissao(conn, g.usuario_atual["id"], "funcionarios", "ver_salario")
     incluir_inativos = request.args.get("incluir_inativos") == "1"
-    where = "" if incluir_inativos else "WHERE status = 'ativo'"
-    rows = conn.execute(f"SELECT * FROM funcionarios {where} ORDER BY nome").fetchall()
+    where = "" if incluir_inativos else "WHERE f.status = 'ativo'"
+    # LEFT JOIN só pra mostrar o e-mail de login de quem já é usuário do
+    # sistema (marcado via `usuario_id`) — a lista inteira já deixa claro
+    # quem tem/não tem acesso ao ERP, sem precisar abrir cada cadastro.
+    rows = conn.execute(
+        f"""
+        SELECT f.*, u.email AS usuario_email
+        FROM funcionarios f LEFT JOIN usuarios u ON u.id = f.usuario_id
+        {where} ORDER BY f.nome
+        """
+    ).fetchall()
     return jsonify([_publico(r, ve_salario) for r in rows])
 
 
