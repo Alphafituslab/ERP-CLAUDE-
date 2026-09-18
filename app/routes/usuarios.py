@@ -26,6 +26,10 @@ def _now_iso():
     return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _limite_online():
+    return (datetime.datetime.utcnow() - datetime.timedelta(minutes=ONLINE_JANELA_MINUTOS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
 def _publico(usuario_row):
     d = dict(usuario_row)
     d.pop("senha_hash", None)
@@ -44,12 +48,17 @@ def _perfis_do_usuario(conn, usuario_id):
 @bp.get("")
 @requires_permission("usuarios", "visualizar")
 def listar():
+    # Fase 187 — pedido do usuário: ver direto na lista de Usuários (não só
+    # na tela separada "Usuários Online") quem está online agora e há
+    # quanto tempo — mesma janela de 5 min já usada em `usuarios_online()`.
     conn = get_db()
+    limite = _limite_online()
     rows = conn.execute("SELECT * FROM usuarios ORDER BY nome").fetchall()
     resultado = []
     for r in rows:
         u = _publico(r)
         u["perfis"] = _perfis_do_usuario(conn, u["id"])
+        u["online"] = bool(u["ultimo_acesso_em"]) and u["ultimo_acesso_em"] >= limite
         resultado.append(u)
     return jsonify(resultado)
 
@@ -449,7 +458,7 @@ def usuarios_online():
     como destacar/ordenar; banco vazio ou sem ninguém navegando agora
     simplesmente devolve todo mundo com `online: false`, sem quebrar."""
     conn = get_db()
-    limite = (datetime.datetime.utcnow() - datetime.timedelta(minutes=ONLINE_JANELA_MINUTOS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    limite = _limite_online()
     rows = conn.execute("SELECT * FROM usuarios WHERE status = 'ativo' ORDER BY nome").fetchall()
     resultado = []
     for r in rows:

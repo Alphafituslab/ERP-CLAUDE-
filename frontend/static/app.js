@@ -1842,6 +1842,28 @@
     return location.hash === "#/memorial/administracao/usuarios";
   }
 
+  // Fase 187 — "há quanto tempo" alguém está logado, para o selo Online da
+  // tabela de Usuários. Calculado no FRONTEND a partir de `ultimo_login_em`
+  // (já devolvido pela API) — nenhuma conta nova no backend, mesmo espírito
+  // de `agingSeloPainel` acima.
+  function fmtTempoLogado(timestampIso) {
+    if (!timestampIso) return "";
+    const minutos = Math.max(0, Math.floor((Date.now() - new Date(timestampIso).getTime()) / 60000));
+    if (minutos < 1) return "há poucos segundos";
+    if (minutos < 60) return `há ${minutos} min`;
+    const horas = Math.floor(minutos / 60);
+    const min = minutos % 60;
+    if (horas < 24) return min > 0 ? `há ${horas}h ${min}min` : `há ${horas}h`;
+    return `há ${Math.floor(horas / 24)}d`;
+  }
+
+  function seloOnline(u) {
+    if (u.online) {
+      return `<span class="selo ativo">● Online</span><br><span class="texto-suave" style="font-size:11px;">${fmtTempoLogado(u.ultimo_login_em)}</span>`;
+    }
+    return `<span class="selo inativo">Offline</span>`;
+  }
+
   async function renderUsuarios(dentroDoMemorial) {
     app.innerHTML = '<div class="carregando">Carregando usuários…</div>';
     const [usuarios, perfis] = await Promise.all([chamarApi("/usuarios"), chamarApi("/perfis")]);
@@ -1867,6 +1889,7 @@
           <td>${u.perfis.map((p) => escapeHtml(p.nome)).join(", ") || "—"}</td>
           <td><span class="selo ${selo}">${escapeHtml(u.status)}</span></td>
           <td>${u.dois_fatores_ativo ? "Sim" : "Não"}</td>
+          <td>${seloOnline(u)}</td>
           <td>${fmtData(u.ultimo_login_em)}</td>
           <td>
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-usuario" data-id="${u.id}">Editar</button>` : ""}
@@ -1887,8 +1910,8 @@
            ${podeCadastrar ? `<button class="botao" data-acao="novo-usuario">+ Novo usuário</button>` : ""}
          </div>
          <table>
-           <thead><tr><th>Nome</th><th>Email</th><th>Perfis</th><th>Status</th><th>2FA</th><th>Último login</th><th>Ações</th></tr></thead>
-           <tbody>${linhas || '<tr><td colspan="7" class="texto-suave">Nenhum usuário cadastrado.</td></tr>'}</tbody>
+           <thead><tr><th>Nome</th><th>Email</th><th>Perfis</th><th>Status</th><th>2FA</th><th>Online</th><th>Último login</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="8" class="texto-suave">Nenhum usuário cadastrado.</td></tr>'}</tbody>
          </table>
        </div>`;
 
