@@ -748,6 +748,7 @@
         switch (pagina) {
           case "dashboard": return renderDashboard();
           case "usuarios": return renderUsuarios();
+          case "funcionarios": return renderFuncionarios();
           case "perfis": return renderPerfis();
           case "permissoes": return renderPermissoes();
           case "empresas": return renderEmpresas();
@@ -928,30 +929,23 @@
         },
       ],
     },
-    {
-      tipo: "grupo", chave: "grupo-producao", nome: "Produção & PCP",
-      itens: [
-        { rota: "#/formulas", chave: "formulas", label: "Fórmulas (BOM)", permissao: ["formulas", "visualizar"] },
-        { rota: "#/producao", chave: "producao", label: "Ordens de Produção", permissao: ["producao", "visualizar"] },
-        { rota: "#/tipos-etapa-producao", chave: "tipos-etapa-producao", label: "Tipos de Etapa (Pesagem, Mistura...)", permissao: ["producao", "visualizar"] },
-        { rota: "#/catalogo-fluxo", chave: "catalogo-fluxo", label: "Catálogo de Fluxo", permissao: ["fluxo", "apontar"] },
-        { rota: "#/compras-pedidos", chave: "compras-pedidos", label: "Pedidos de Compra", permissao: ["compras", "visualizar"] },
-        { rota: "#/compras-cotacoes", chave: "compras-cotacoes", label: "Cotações de Fornecedores (RFQ)", permissao: ["compras", "visualizar"] },
-        // Fase 123 — Recebimento e Importação de NF-e: fecha o ciclo
-        // Cotação -> Pedido de Compra -> chegada da nota de verdade.
-        { rota: "#/nfe-entrada", chave: "nfe-entrada", label: "NF-e Recebidas", permissao: ["nfe_entrada", "visualizar"] },
-      ],
-    },
     // Fase 105 — pedido do usuário: "tudo que for relacionado ao APS
     // dentro do mesmo local", com acesso que pode ficar limitado só a ele
     // (e vice-versa). Até aqui essas 4 telas viviam misturadas dentro de
     // "Produção & PCP" e reaproveitavam "producao.visualizar" — quem tinha
     // Produção via APS de graça, e não dava pra conceder só APS sem
-    // Produção. Agora é um grupo de menu próprio, e cada item usa o módulo
+    // Produção. Virou um grupo de menu próprio, e cada item usa o módulo
     // de permissão "aps"/"centros_trabalho" (nenhum deles depende mais de
-    // "producao.*"): um perfil com só essas permissões vê SÓ este grupo;
+    // "producao.*"): um perfil com só essas permissões vê SÓ estes itens;
     // um perfil com "producao.*" mas sem "aps.*"/"centros_trabalho.*" não
-    // vê nada aqui.
+    // vê eles.
+    //
+    // Fase 188 (pedido do usuário) — "Produção & PCP" passou a viver como
+    // SUBGRUPO aqui dentro de APS (Sequenciamento), em vez de grupo
+    // irmão — clicar em APS já mostra Produção/PCP junto. Isso é só
+    // reorganização de MENU: as permissões de cada item continuam as
+    // mesmas de antes (a separação de acesso da Fase 105, acima,
+    // continua valendo do mesmo jeito).
     {
       tipo: "grupo", chave: "grupo-aps", nome: "APS (Sequenciamento)",
       itens: [
@@ -959,6 +953,20 @@
         { rota: "#/aps-agenda", chave: "aps-agenda", label: "Agenda", permissao: ["aps", "visualizar"] },
         { rota: "#/aps-mrp", chave: "aps-mrp", label: "MRP (Necessidade de Materiais)", permissao: ["aps", "visualizar"] },
         { rota: "#/aps-sugestoes-compra", chave: "aps-sugestoes-compra", label: "Sugestões de Compra (MRP)", permissao: ["aps", "visualizar"] },
+        {
+          tipo: "subgrupo", chave: "subgrupo-producao-pcp", nome: "Produção & PCP",
+          itens: [
+            { rota: "#/formulas", chave: "formulas", label: "Fórmulas (BOM)", permissao: ["formulas", "visualizar"] },
+            { rota: "#/producao", chave: "producao", label: "Ordens de Produção", permissao: ["producao", "visualizar"] },
+            { rota: "#/tipos-etapa-producao", chave: "tipos-etapa-producao", label: "Tipos de Etapa (Pesagem, Mistura...)", permissao: ["producao", "visualizar"] },
+            { rota: "#/catalogo-fluxo", chave: "catalogo-fluxo", label: "Catálogo de Fluxo", permissao: ["fluxo", "apontar"] },
+            { rota: "#/compras-pedidos", chave: "compras-pedidos", label: "Pedidos de Compra", permissao: ["compras", "visualizar"] },
+            { rota: "#/compras-cotacoes", chave: "compras-cotacoes", label: "Cotações de Fornecedores (RFQ)", permissao: ["compras", "visualizar"] },
+            // Fase 123 — Recebimento e Importação de NF-e: fecha o ciclo
+            // Cotação -> Pedido de Compra -> chegada da nota de verdade.
+            { rota: "#/nfe-entrada", chave: "nfe-entrada", label: "NF-e Recebidas", permissao: ["nfe_entrada", "visualizar"] },
+          ],
+        },
       ],
     },
     {
@@ -1042,6 +1050,11 @@
       tipo: "grupo", chave: "grupo-administracao", nome: "Administração",
       itens: [
         { rota: "#/usuarios", chave: "usuarios", label: "Usuários", permissao: ["usuarios", "visualizar"] },
+        // Fase 188 (pedido do usuário) — cadastro dos FUNCIONÁRIOS da
+        // empresa (produção, laboratório, vendas...), separado de
+        // "Usuários" (login no sistema) — nem todo funcionário precisa de
+        // acesso ao ERP.
+        { rota: "#/funcionarios", chave: "funcionarios", label: "Funcionários", permissao: ["funcionarios", "visualizar"], apelidos: ["funcionario", "colaborador", "colaboradores", "rh", "cargo", "salario", "salário"] },
         { rota: "#/perfis", chave: "perfis", label: "Perfis", permissao: ["perfis", "visualizar"] },
         { rota: "#/permissoes", chave: "permissoes", label: "Permissões", permissao: ["permissoes", "visualizar"] },
         { rota: "#/empresas", chave: "empresas", label: "Empresas", permissao: ["empresas", "visualizar"] },
@@ -1926,6 +1939,111 @@
     } else {
       renderShell(conteudo, "usuarios");
     }
+  }
+
+  // Fase 188 — cadastro de FUNCIONÁRIOS (produção, laboratório, vendas...),
+  // separado do cadastro de Usuários (login) — ver app/routes/funcionarios.py.
+  function fmtSalario(valor) {
+    if (valor === null || valor === undefined) return "—";
+    return valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  }
+
+  async function renderFuncionarios() {
+    app.innerHTML = '<div class="carregando">Carregando funcionários…</div>';
+    const funcionarios = await chamarApi("/funcionarios");
+    const veSalario = temPermissao("funcionarios", "ver_salario");
+    const podeCadastrar = temPermissao("funcionarios", "cadastrar");
+    const podeEditar = temPermissao("funcionarios", "editar");
+    const podeInativar = temPermissao("funcionarios", "inativar");
+
+    const linhas = funcionarios
+      .map((f) => {
+        const selo = f.status === "ativo" ? "ativo" : "inativo";
+        return `<tr>
+          <td>${escapeHtml(f.nome)}</td>
+          <td>${escapeHtml(f.setor || "—")}</td>
+          <td>${escapeHtml(f.funcao || "—")}</td>
+          <td>${escapeHtml(f.telefone || "—")}</td>
+          ${veSalario ? `<td>${fmtSalario(f.salario)}</td>` : ""}
+          <td><span class="selo ${selo}">${escapeHtml(f.status)}</span></td>
+          <td>
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-funcionario" data-id="${f.id}">Editar</button>` : ""}
+            ${podeInativar && f.status === "ativo" ? `<button class="botao perigo pequeno" data-acao="inativar-funcionario" data-id="${f.id}">Inativar</button>` : ""}
+            ${podeInativar && f.status !== "ativo" ? `<button class="botao pequeno" data-acao="reativar-funcionario" data-id="${f.id}">Reativar</button>` : ""}
+          </td>
+        </tr>`;
+      })
+      .join("");
+
+    const colunas = veSalario ? 7 : 6;
+    renderShell(
+      `<h2>Funcionários</h2>
+       <p class="dica">Cadastro dos funcionários da empresa (produção, laboratório, vendas etc.) — função, cargo${veSalario ? ", salário" : ""} e contato.
+       Separado do cadastro de Usuários: nem todo funcionário precisa de login no sistema.</p>
+       <div class="cartao">
+         <div class="barra-acoes">
+           <span class="texto-suave">${funcionarios.length} funcionário(s)</span>
+           ${podeCadastrar ? `<button class="botao" data-acao="novo-funcionario">+ Novo funcionário</button>` : ""}
+         </div>
+         <table>
+           <thead><tr><th>Nome</th><th>Setor</th><th>Função</th><th>Telefone</th>${veSalario ? "<th>Salário</th>" : ""}<th>Status</th><th>Ações</th></tr></thead>
+           <tbody>${linhas || `<tr><td colspan="${colunas}" class="texto-suave">Nenhum funcionário cadastrado.</td></tr>`}</tbody>
+         </table>
+       </div>`,
+      "funcionarios"
+    );
+  }
+
+  function htmlCampoFuncionario(f, usuarios, veSalario) {
+    const optsUsuario = (usuarios || [])
+      .map((u) => `<option value="${u.id}" ${f && f.usuario_id === u.id ? "selected" : ""}>${escapeHtml(u.nome)} (${escapeHtml(u.email)})</option>`)
+      .join("");
+    return `
+      <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(f?.nome || "")}" required></div>
+      <div class="campo"><label>Setor</label><input name="setor" value="${escapeHtml(f?.setor || "")}" placeholder="ex.: Produção, Laboratório, Vendas"></div>
+      <div class="campo"><label>Função / Cargo</label><input name="funcao" value="${escapeHtml(f?.funcao || "")}" placeholder="ex.: Responsável Técnico, Auxiliar de Produção"></div>
+      <div class="campo"><label>Registro profissional (opcional)</label><input name="registro_profissional" value="${escapeHtml(f?.registro_profissional || "")}" placeholder="ex.: CRF 18580, CRQ 7698"></div>
+      <div class="campo"><label>CPF (opcional)</label><input name="cpf" value="${escapeHtml(f?.cpf || "")}" placeholder="000.000.000-00"></div>
+      <div class="campo"><label>Telefone</label><input name="telefone" value="${escapeHtml(f?.telefone || "")}" placeholder="48999998888"></div>
+      <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(f?.email || "")}" required>
+        <div class="texto-suave" style="margin-top:4px;font-size:12px;">Obrigatório — usado pra casar com o WhatsApp/chat interno na hora de enviar login e senha nova.</div>
+      </div>
+      <div class="campo"><label>Endereço</label><input name="endereco" value="${escapeHtml(f?.endereco || "")}"></div>
+      <div class="campo"><label>Data de admissão</label><input name="data_admissao" type="date" value="${escapeHtml(f?.data_admissao || "")}"></div>
+      ${veSalario ? `<div class="campo"><label>Salário</label><input name="salario" type="number" step="0.01" min="0" value="${f?.salario ?? ""}"></div>` : ""}
+      <div class="campo"><label>Vincular a um usuário do sistema (opcional)</label>
+        <select name="usuario_id"><option value="">— Nenhum —</option>${optsUsuario}</select>
+        <div class="texto-suave" style="margin-top:4px;font-size:12px;">Só se essa pessoa também tiver login no ERP.</div>
+      </div>
+      <div class="campo"><label>Observações</label><textarea name="observacoes" rows="2">${escapeHtml(f?.observacoes || "")}</textarea></div>`;
+  }
+
+  async function modalNovoFuncionario() {
+    const veSalario = temPermissao("funcionarios", "ver_salario");
+    const usuarios = await chamarApi("/usuarios");
+    abrirModal(`
+      <h3>Novo funcionário</h3>
+      <form data-form="criar-funcionario">
+        ${htmlCampoFuncionario(null, usuarios, veSalario)}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar</button>
+        </div>
+      </form>`);
+  }
+
+  async function modalEditarFuncionario(funcionario) {
+    const veSalario = temPermissao("funcionarios", "ver_salario");
+    const usuarios = await chamarApi("/usuarios");
+    abrirModal(`
+      <h3>Editar funcionário</h3>
+      <form data-form="editar-funcionario" data-id="${funcionario.id}">
+        ${htmlCampoFuncionario(funcionario, usuarios, veSalario)}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
   }
 
   function modalNovoUsuario() {
@@ -18465,6 +18583,23 @@
         await chamarApi(`/usuarios/${alvo.dataset.id}/reativar`, { method: "POST" });
         definirFlash("ok", "Usuário reativado.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      case "novo-funcionario":
+        await modalNovoFuncionario();
+        return;
+      case "editar-funcionario": {
+        const funcionario = await chamarApi(`/funcionarios/${alvo.dataset.id}`);
+        await modalEditarFuncionario(funcionario);
+        return;
+      }
+      case "inativar-funcionario":
+        if (!confirm("Inativar este funcionário?")) return;
+        await chamarApi(`/funcionarios/${alvo.dataset.id}/inativar`, { method: "POST" });
+        definirFlash("ok", "Funcionário inativado.");
+        return renderFuncionarios();
+      case "reativar-funcionario":
+        await chamarApi(`/funcionarios/${alvo.dataset.id}/reativar`, { method: "POST" });
+        definirFlash("ok", "Funcionário reativado.");
+        return renderFuncionarios();
       case "renomear-terminal":
         modalRenomearTerminal(Number(alvo.dataset.id), alvo.dataset.nome || "");
         return;
@@ -20191,6 +20326,38 @@
         fecharModais();
         definirFlash("ok", "Usuário atualizado.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      }
+      case "criar-funcionario": {
+        const corpo = {
+          nome: dados.get("nome"), setor: dados.get("setor") || null, funcao: dados.get("funcao") || null,
+          registro_profissional: dados.get("registro_profissional") || null, cpf: dados.get("cpf") || null, telefone: dados.get("telefone") || null,
+          email: dados.get("email") || null, endereco: dados.get("endereco") || null,
+          data_admissao: dados.get("data_admissao") || null, observacoes: dados.get("observacoes") || null,
+          usuario_id: dados.get("usuario_id") ? Number(dados.get("usuario_id")) : null,
+        };
+        // `salario` só entra no corpo se o campo existir no formulário — quem
+        // não tem `funcionarios.ver_salario` nem vê o campo (ver
+        // htmlCampoFuncionario), então nunca manda um "" que seria
+        // interpretado como tentativa de apagar o salário de quem já tinha.
+        if (dados.has("salario")) corpo.salario = dados.get("salario") || null;
+        await chamarApi("/funcionarios", { method: "POST", body: corpo });
+        fecharModais();
+        definirFlash("ok", "Funcionário cadastrado.");
+        return renderFuncionarios();
+      }
+      case "editar-funcionario": {
+        const corpo = {
+          nome: dados.get("nome"), setor: dados.get("setor") || null, funcao: dados.get("funcao") || null,
+          registro_profissional: dados.get("registro_profissional") || null, cpf: dados.get("cpf") || null, telefone: dados.get("telefone") || null,
+          email: dados.get("email") || null, endereco: dados.get("endereco") || null,
+          data_admissao: dados.get("data_admissao") || null, observacoes: dados.get("observacoes") || null,
+          usuario_id: dados.get("usuario_id") ? Number(dados.get("usuario_id")) : null,
+        };
+        if (dados.has("salario")) corpo.salario = dados.get("salario") || null;
+        await chamarApi(`/funcionarios/${form.dataset.id}`, { method: "PUT", body: corpo });
+        fecharModais();
+        definirFlash("ok", "Funcionário atualizado.");
+        return renderFuncionarios();
       }
       case "definir-perfis-usuario": {
         const perfil_ids = dados.getAll("perfil_ids").map(Number);

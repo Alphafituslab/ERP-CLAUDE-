@@ -586,6 +586,19 @@ PERMISSOES_PADRAO = [
     # configurável (Administração > Segurança) em vez de regra fixa.
     ("seguranca", "visualizar", "Ver a configuração de segurança do login (exigência de 2FA)", 0),
     ("seguranca", "configurar", "Ligar ou desligar a exigência de código do autenticador (2FA) no login", 0),
+
+    # Fase 188 — pedido do usuário: cadastro de funcionários (produção,
+    # laboratório, vendas etc.), separado do cadastro de Usuários (login).
+    # Salário fica de propósito numa permissão PRÓPRIA, separada de só ver/
+    # editar o funcionário — só o Administrador tem as duas por padrão (ver
+    # PERFIS_PADRAO abaixo); dá pra conceder "visualizar"/"editar" sem
+    # salário pra um perfil de RH/Produção, e "ver_salario" só pra quem
+    # realmente precisa (ex.: Financeiro).
+    ("funcionarios", "visualizar", "Ver a lista e o cadastro de funcionários (sem o salário)", 0),
+    ("funcionarios", "ver_salario", "Ver o salário cadastrado de um funcionário", 0),
+    ("funcionarios", "cadastrar", "Cadastrar novos funcionários", 0),
+    ("funcionarios", "editar", "Editar o cadastro de um funcionário", 0),
+    ("funcionarios", "inativar", "Inativar ou reativar um funcionário", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
