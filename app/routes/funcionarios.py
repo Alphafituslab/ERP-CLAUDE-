@@ -17,10 +17,63 @@ import datetime
 from flask import Blueprint, g, jsonify, request
 
 from .. import audit, security
-from ..context import ApiError, client_device, client_ip, get_db
-from ..permissions import requires_permission, usuario_tem_permissao
+from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
+from ..permissions import requires_auth, requires_permission, usuario_tem_permissao
 
 bp = Blueprint("funcionarios", __name__, url_prefix="/api/v1/funcionarios")
+
+
+def _exige_cadastrar_ou_editar(conn):
+    usuario_id = g.usuario_atual["id"]
+    if not (usuario_tem_permissao(conn, usuario_id, "funcionarios", "cadastrar")
+            or usuario_tem_permissao(conn, usuario_id, "funcionarios", "editar")):
+        raise ForbiddenError("Permissão necessária: funcionarios.cadastrar ou funcionarios.editar.")
+
+
+def _catalogo_listar(conn, tabela):
+    return jsonify([dict(r) for r in conn.execute(f"SELECT id, nome FROM {tabela} ORDER BY nome").fetchall()])
+
+
+def _catalogo_criar(conn, tabela):
+    _exige_cadastrar_ou_editar(conn)
+    nome = ((request.get_json(silent=True) or {}).get("nome") or "").strip()
+    if not nome:
+        raise ApiError("Informe o nome.", status=400)
+    existente = conn.execute(f"SELECT id, nome FROM {tabela} WHERE nome = ?", (nome,)).fetchone()
+    if existente:
+        return jsonify(dict(existente))
+    cur = conn.execute(f"INSERT INTO {tabela} (nome, criado_por) VALUES (?, ?)", (nome, g.usuario_atual["id"]))
+    return jsonify({"id": cur.lastrowid, "nome": nome}), 201
+
+
+# Fase 189 — pedido do usuário: "deixar eu cadastrar os setores, funções" —
+# catálogos simples (só nome), pra virar seletor no formulário de
+# Funcionários em vez de digitar toda vez. Mesma permissão de sempre
+# (cadastrar OU editar funcionário já cobre "consigo adicionar um setor
+# novo na hora"), sem tela de administração própria — cadastra direto de
+# dentro do formulário.
+@bp.get("/setores")
+@requires_permission("funcionarios", "visualizar")
+def listar_setores():
+    return _catalogo_listar(get_db(), "catalogo_setores")
+
+
+@bp.post("/setores")
+@requires_auth
+def criar_setor():
+    return _catalogo_criar(get_db(), "catalogo_setores")
+
+
+@bp.get("/funcoes")
+@requires_permission("funcionarios", "visualizar")
+def listar_funcoes():
+    return _catalogo_listar(get_db(), "catalogo_funcoes")
+
+
+@bp.post("/funcoes")
+@requires_auth
+def criar_funcao():
+    return _catalogo_criar(get_db(), "catalogo_funcoes")
 
 
 def _now_iso():
@@ -35,7 +88,14 @@ def _publico(row, ve_salario):
 
 
 def _funcionario_ou_404(conn, funcionario_id):
-    row = conn.execute("SELECT * FROM funcionarios WHERE id = ?", (funcionario_id,)).fetchone()
+    row = conn.execute(
+        """
+        SELECT f.*, u.email AS usuario_email
+        FROM funcionarios f LEFT JOIN usuarios u ON u.id = f.usuario_id
+        WHERE f.id = ?
+        """,
+        (funcionario_id,),
+    ).fetchone()
     if row is None:
         raise ApiError("Funcionário não encontrado.", status=404)
     return row

@@ -143,14 +143,25 @@ def criar():
     # como "usuário do sistema" — sem precisar cadastrar a mesma pessoa duas
     # vezes à mão. Função/setor/salário ficam em branco pra completar
     # depois em Funcionários; nome/email/celular vêm de graça daqui.
-    conn.execute(
-        "INSERT INTO funcionarios (nome, email, telefone, usuario_id, criado_por) VALUES (?, ?, ?, ?, ?)",
-        (nome, email, celular, novo_id, usuario_atual["id"]),
-    )
+    #
+    # Fase 188c — quando quem está chamando é o PRÓPRIO formulário de
+    # Funcionários marcando "é usuário do sistema" num funcionário que já
+    # existe (editar), esse funcionário já vai ser atualizado com o
+    # `usuario_id` novo logo em seguida (ver PUT /funcionarios/<id>) — criar
+    # um funcionário automático aqui duplicaria a pessoa. `pular_criacao_
+    # funcionario` deixa esse caso pular a criação automática.
+    funcionario_id = None
+    if not dados.get("pular_criacao_funcionario"):
+        cur_f = conn.execute(
+            "INSERT INTO funcionarios (nome, email, telefone, usuario_id, criado_por) VALUES (?, ?, ?, ?, ?)",
+            (nome, email, celular, novo_id, usuario_atual["id"]),
+        )
+        funcionario_id = cur_f.lastrowid
 
     row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (novo_id,)).fetchone()
     u = _publico(row)
     u["perfis"] = _perfis_do_usuario(conn, novo_id)
+    u["funcionario_id"] = funcionario_id
     return jsonify(u), 201
 
 

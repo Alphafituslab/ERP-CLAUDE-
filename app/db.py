@@ -182,7 +182,8 @@ SCHEMA_FILES = [
     "schema_fase176.sql",  # Fase 176 — painel ao vivo: tela atual de cada terminal
     "schema_fase177.sql",  # Fase 177 — confirmação por e-mail antes de instalar em modo SERVIDOR
     "schema_fase184.sql",  # Fase 184 — exceções de permissão por usuário (conceder/negar por cima do perfil)
-    "schema_fase188.sql",  # Fase 188 — cadastro de usuário: função/cargo, endereço, registro profissional
+    "schema_fase188.sql",  # Fase 188 — cadastro de Funcionários (separado de Usuários)
+    "schema_fase189.sql",  # Fase 189 — catálogos de Setores e Funções (usados no cadastro de Funcionários)
 ]
 
 

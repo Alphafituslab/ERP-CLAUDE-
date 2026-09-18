@@ -1966,7 +1966,9 @@
           <td>${escapeHtml(f.nome)}</td>
           <td>${escapeHtml(f.setor || "—")}</td>
           <td>${escapeHtml(f.funcao || "—")}</td>
-          <td>${escapeHtml(f.telefone || "—")}</td>
+          <td>${f.telefone
+            ? `${escapeHtml(f.telefone)} <a href="${linkWhatsApp(f.telefone)}" target="_blank" rel="noopener" title="Abrir no WhatsApp">💬</a>`
+            : "—"}</td>
           <td>${seloSistema}</td>
           ${veSalario ? `<td>${fmtSalario(f.salario)}</td>` : ""}
           <td><span class="selo ${selo}">${escapeHtml(f.status)}</span></td>
@@ -1998,56 +2000,202 @@
     );
   }
 
-  function htmlCampoFuncionario(f, usuarios, veSalario) {
-    const optsUsuario = (usuarios || [])
-      .map((u) => `<option value="${u.id}" ${f && f.usuario_id === u.id ? "selected" : ""}>${escapeHtml(u.nome)} (${escapeHtml(u.email)})</option>`)
+  // Fase 188c — pedido do usuário: NÃO é "vincular a um usuário que já
+  // existe" — é marcar ali mesmo, no cadastro do funcionário, se ele É ou
+  // NÃO um usuário do sistema; marcando, o próprio formulário já cria o
+  // login com senha provisória (troca obrigatória no 1º acesso, igual ao
+  // fluxo de sempre em Usuários). Um funcionário que já tem `usuario_id`
+  // (já é usuário) mostra isso como informação, não como algo pra marcar
+  // de novo — gerenciar perfis/senha continua em Usuários.
+  // Fase 189 — pedido do usuário: "deixar eu cadastrar os setores, funções"
+  // — em vez de digitar toda vez, escolhe de uma lista; se não existir
+  // ainda, cadastra ali mesmo sem sair do formulário (POST
+  // /funcionarios/setores|funcoes, ver app/routes/funcionarios.py). O
+  // valor salvo em `funcionarios.setor`/`funcao` continua sendo o TEXTO
+  // (não um id) — o catálogo é só a fonte da lista, não uma chave
+  // estrangeira, então nada muda no que já estava cadastrado antes.
+  function htmlSeletorCatalogo(nome, valorAtual, catalogo, rotulo, placeholderNovo) {
+    const opcoes = (catalogo || [])
+      .map((c) => `<option value="${escapeHtml(c.nome)}" ${c.nome === valorAtual ? "selected" : ""}>${escapeHtml(c.nome)}</option>`)
       .join("");
+    // Se o valor atual não estiver no catálogo (cadastro antigo, texto
+    // livre de antes desta fase), mantém ele como opção pra não perder o
+    // que já estava salvo.
+    const opcaoAtualForaDoCatalogo = valorAtual && !(catalogo || []).some((c) => c.nome === valorAtual)
+      ? `<option value="${escapeHtml(valorAtual)}" selected>${escapeHtml(valorAtual)}</option>` : "";
+    return `
+      <div class="campo">
+        <label>${rotulo}</label>
+        <select name="${nome}" data-seletor-catalogo="${nome}">
+          <option value="">— Nenhum —</option>
+          ${opcaoAtualForaDoCatalogo}
+          ${opcoes}
+          <option value="__novo__">+ Cadastrar novo…</option>
+        </select>
+        <div data-novo-catalogo="${nome}" style="margin-top:6px;display:none;gap:6px;">
+          <input type="text" placeholder="${placeholderNovo}" style="flex:1;">
+          <button type="button" class="botao secundario pequeno" data-acao-local="adicionar-catalogo" data-campo="${nome}">Adicionar</button>
+        </div>
+      </div>`;
+  }
+
+  function ligarSeletorCatalogo(form, nome, endpoint) {
+    const select = form.querySelector(`[data-seletor-catalogo="${nome}"]`);
+    const bloco = form.querySelector(`[data-novo-catalogo="${nome}"]`);
+    if (!select || !bloco) return;
+    const input = bloco.querySelector("input");
+    const botao = bloco.querySelector("button");
+    select.addEventListener("change", () => {
+      if (select.value === "__novo__") { bloco.style.display = "flex"; input.focus(); }
+      else { bloco.style.display = "none"; }
+    });
+    botao.addEventListener("click", async () => {
+      const nomeNovo = input.value.trim();
+      if (!nomeNovo) return;
+      const criado = await chamarApi(endpoint, { method: "POST", body: { nome: nomeNovo } });
+      const opt = document.createElement("option");
+      opt.value = criado.nome;
+      opt.textContent = criado.nome;
+      select.insertBefore(opt, select.querySelector('option[value="__novo__"]'));
+      select.value = criado.nome;
+      bloco.style.display = "none";
+      input.value = "";
+    });
+  }
+
+  // Fase 189 — pedido do usuário: "a partir do telefone, já ter a opção de
+  // clicar e abrir o WhatsApp pra falar com ele". Link direto pro
+  // WhatsApp Web/app com o número já preenchido — não depende de nenhuma
+  // conversa já existir no Whatts Inbox, funciona pra qualquer número.
+  function linkWhatsApp(telefone) {
+    const digitos = (telefone || "").replace(/\D/g, "");
+    if (!digitos) return "";
+    const comDDI = digitos.length <= 11 ? `55${digitos}` : digitos;
+    return `https://wa.me/${comDDI}`;
+  }
+
+  // Fase 189 — pedido do usuário: senha provisória "gerada por você mesmo"
+  // — mesma política do backend (6 a 12 caracteres, 1 maiúscula + 1
+  // caractere especial, ver `security.validar_politica_senha`), gerada no
+  // navegador só pra preencher o campo (a validação de verdade continua no
+  // servidor, isso aqui é só conveniência).
+  function gerarSenhaProvisoria() {
+    const minusculas = "abcdefghjkmnpqrstuvwxyz";
+    const maiusculas = "ABCDEFGHJKMNPQRSTUVWXYZ";
+    const numeros = "23456789";
+    const especiais = "!@#$%*";
+    const todos = minusculas + maiusculas + numeros;
+    let senha = maiusculas[Math.floor(Math.random() * maiusculas.length)]
+      + especiais[Math.floor(Math.random() * especiais.length)];
+    for (let i = 0; i < 7; i++) senha += todos[Math.floor(Math.random() * todos.length)];
+    return senha.split("").sort(() => Math.random() - 0.5).join("");
+  }
+
+  function htmlCampoFuncionario(f, perfis, setores, funcoes, veSalario) {
+    const jaEhUsuario = !!(f && f.usuario_id);
+    const opcoesPerfis = (perfis || [])
+      .map((p) => `<label><input type="checkbox" name="perfil_ids" value="${p.id}"> ${escapeHtml(p.nome)}</label>`)
+      .join("");
+    const blocoUsuarioSistema = jaEhUsuario
+      ? `<div class="campo">
+           <label>Usuário do sistema</label>
+           <div><span class="selo ativo">Sim</span></div>
+           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Login: ${escapeHtml(f.usuario_email || "")} — perfis, senha e bloqueio de acesso continuam em Usuários.</div>
+         </div>`
+      : `<div class="campo">
+           <label><input type="checkbox" name="eh_usuario_sistema" data-toggle-usuario-sistema> É usuário do sistema (tem login no ERP)</label>
+           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Deixe desmarcado se a pessoa só trabalha na fábrica/laboratório e não precisa acessar o sistema.
+           Se marcar, um login provisório já é criado com o e-mail acima — a senha é trocada no primeiro acesso, igual já acontece hoje.</div>
+           <div data-bloco-usuario-sistema style="margin-top:10px;display:none;flex-direction:column;gap:10px;">
+             <div class="campo"><label>Senha temporária</label>
+               <div style="display:flex;gap:6px;">
+                 <input name="senha" type="text" minlength="6" maxlength="12" style="flex:1;font-family:ui-monospace,monospace;" data-campo-senha-gerada>
+                 <button type="button" class="botao secundario pequeno" data-acao-local="gerar-senha">🎲 Gerar</button>
+               </div>
+               <div class="texto-suave" style="margin-top:4px;font-size:12px;">Já vem preenchida — pode trocar se quiser. 6 a 12 caracteres, 1 letra maiúscula e 1 caractere especial.</div>
+             </div>
+             <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoesPerfis || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div></div>
+           </div>
+         </div>`;
     return `
       <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(f?.nome || "")}" required></div>
-      <div class="campo"><label>Setor</label><input name="setor" value="${escapeHtml(f?.setor || "")}" placeholder="ex.: Produção, Laboratório, Vendas"></div>
-      <div class="campo"><label>Função / Cargo</label><input name="funcao" value="${escapeHtml(f?.funcao || "")}" placeholder="ex.: Responsável Técnico, Auxiliar de Produção"></div>
+      ${htmlSeletorCatalogo("setor", f?.setor || "", setores, "Setor", "ex.: Produção")}
+      ${htmlSeletorCatalogo("funcao", f?.funcao || "", funcoes, "Função / Cargo", "ex.: Auxiliar de Produção")}
       <div class="campo"><label>Registro profissional (opcional)</label><input name="registro_profissional" value="${escapeHtml(f?.registro_profissional || "")}" placeholder="ex.: CRF 18580, CRQ 7698"></div>
       <div class="campo"><label>CPF (opcional)</label><input name="cpf" value="${escapeHtml(f?.cpf || "")}" placeholder="000.000.000-00"></div>
-      <div class="campo"><label>Telefone</label><input name="telefone" value="${escapeHtml(f?.telefone || "")}" placeholder="48999998888"></div>
+      <div class="campo"><label>Telefone</label>
+        <div style="display:flex;gap:6px;">
+          <input name="telefone" value="${escapeHtml(f?.telefone || "")}" placeholder="48999998888" style="flex:1;" data-campo-telefone>
+          ${f?.telefone ? `<a class="botao secundario pequeno" href="${linkWhatsApp(f.telefone)}" target="_blank" rel="noopener">💬 WhatsApp</a>` : ""}
+        </div>
+      </div>
       <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(f?.email || "")}" required>
-        <div class="texto-suave" style="margin-top:4px;font-size:12px;">Obrigatório — usado pra casar com o WhatsApp/chat interno na hora de enviar login e senha nova.</div>
+        <div class="texto-suave" style="margin-top:4px;font-size:12px;">Obrigatório — usado pra casar com o WhatsApp/chat interno na hora de enviar login e senha nova${jaEhUsuario ? "" : ", e como login se marcar \"é usuário do sistema\" abaixo"}.</div>
       </div>
       <div class="campo"><label>Endereço</label><input name="endereco" value="${escapeHtml(f?.endereco || "")}"></div>
       <div class="campo"><label>Data de admissão</label><input name="data_admissao" type="date" value="${escapeHtml(f?.data_admissao || "")}"></div>
       ${veSalario ? `<div class="campo"><label>Salário</label><input name="salario" type="number" step="0.01" min="0" value="${f?.salario ?? ""}"></div>` : ""}
-      <div class="campo"><label>Vincular a um usuário do sistema (opcional)</label>
-        <select name="usuario_id"><option value="">— Nenhum —</option>${optsUsuario}</select>
-        <div class="texto-suave" style="margin-top:4px;font-size:12px;">Só se essa pessoa também tiver login no ERP.</div>
-      </div>
+      ${blocoUsuarioSistema}
       <div class="campo"><label>Observações</label><textarea name="observacoes" rows="2">${escapeHtml(f?.observacoes || "")}</textarea></div>`;
+  }
+
+  function ligarToggleUsuarioSistema(form) {
+    const check = form.querySelector("[data-toggle-usuario-sistema]");
+    const bloco = form.querySelector("[data-bloco-usuario-sistema]");
+    if (!check || !bloco) return;
+    const campoSenha = form.querySelector("[data-campo-senha-gerada]");
+    check.addEventListener("change", () => {
+      bloco.style.display = check.checked ? "flex" : "none";
+      // Pedido do usuário: a senha provisória já vem "gerada por você
+      // mesmo" ao marcar a caixa — só na primeira vez que marca, pra não
+      // sobrescrever se a pessoa já tiver editado/gerado outra e desmarcado
+      // sem querer.
+      if (check.checked && campoSenha && !campoSenha.value) campoSenha.value = gerarSenhaProvisoria();
+    });
+    const botaoGerar = form.querySelector('[data-acao-local="gerar-senha"]');
+    if (botaoGerar && campoSenha) {
+      botaoGerar.addEventListener("click", () => { campoSenha.value = gerarSenhaProvisoria(); });
+    }
   }
 
   async function modalNovoFuncionario() {
     const veSalario = temPermissao("funcionarios", "ver_salario");
-    const usuarios = await chamarApi("/usuarios");
-    abrirModal(`
+    const [perfis, setores, funcoes] = await Promise.all([
+      chamarApi("/perfis"), chamarApi("/funcionarios/setores"), chamarApi("/funcionarios/funcoes"),
+    ]);
+    const modal = abrirModal(`
       <h3>Novo funcionário</h3>
       <form data-form="criar-funcionario">
-        ${htmlCampoFuncionario(null, usuarios, veSalario)}
+        ${htmlCampoFuncionario(null, perfis, setores, funcoes, veSalario)}
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Criar</button>
         </div>
       </form>`);
+    const form = modal.querySelector("form[data-form='criar-funcionario']");
+    ligarToggleUsuarioSistema(form);
+    ligarSeletorCatalogo(form, "setor", "/funcionarios/setores");
+    ligarSeletorCatalogo(form, "funcao", "/funcionarios/funcoes");
   }
 
   async function modalEditarFuncionario(funcionario) {
     const veSalario = temPermissao("funcionarios", "ver_salario");
-    const usuarios = await chamarApi("/usuarios");
-    abrirModal(`
+    const [perfis, setores, funcoes] = await Promise.all([
+      chamarApi("/perfis"), chamarApi("/funcionarios/setores"), chamarApi("/funcionarios/funcoes"),
+    ]);
+    const modal = abrirModal(`
       <h3>Editar funcionário</h3>
       <form data-form="editar-funcionario" data-id="${funcionario.id}">
-        ${htmlCampoFuncionario(funcionario, usuarios, veSalario)}
+        ${htmlCampoFuncionario(funcionario, perfis, setores, funcoes, veSalario)}
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Salvar</button>
         </div>
       </form>`);
+    const formEdicao = modal.querySelector("form[data-form='editar-funcionario']");
+    ligarToggleUsuarioSistema(formEdicao);
+    ligarSeletorCatalogo(formEdicao, "setor", "/funcionarios/setores");
+    ligarSeletorCatalogo(formEdicao, "funcao", "/funcionarios/funcoes");
   }
 
   function modalNovoUsuario() {
@@ -20337,17 +20485,46 @@
           registro_profissional: dados.get("registro_profissional") || null, cpf: dados.get("cpf") || null, telefone: dados.get("telefone") || null,
           email: dados.get("email") || null, endereco: dados.get("endereco") || null,
           data_admissao: dados.get("data_admissao") || null, observacoes: dados.get("observacoes") || null,
-          usuario_id: dados.get("usuario_id") ? Number(dados.get("usuario_id")) : null,
         };
         // `salario` só entra no corpo se o campo existir no formulário — quem
         // não tem `funcionarios.ver_salario` nem vê o campo (ver
         // htmlCampoFuncionario), então nunca manda um "" que seria
         // interpretado como tentativa de apagar o salário de quem já tinha.
         if (dados.has("salario")) corpo.salario = dados.get("salario") || null;
-        await chamarApi("/funcionarios", { method: "POST", body: corpo });
+
+        if (dados.get("eh_usuario_sistema") !== "on") {
+          await chamarApi("/funcionarios", { method: "POST", body: corpo });
+          fecharModais();
+          definirFlash("ok", "Funcionário cadastrado.");
+          return renderFuncionarios();
+        }
+
+        // Marcou "é usuário do sistema": cria o LOGIN primeiro — isso já
+        // cria sozinho um funcionário vinculado (Fase 188b) — e completa
+        // esse mesmo funcionário com o resto dos campos deste formulário.
+        const senhaCriada = dados.get("senha");
+        const perfil_ids = dados.getAll("perfil_ids").map(Number);
+        const nomeCriado = corpo.nome, emailCriado = corpo.email;
+        const usuarioCriado = await chamarApi("/usuarios", {
+          method: "POST",
+          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, celular: corpo.telefone, perfil_ids },
+        });
+        await chamarApi(`/funcionarios/${usuarioCriado.funcionario_id}`, { method: "PUT", body: corpo });
         fecharModais();
-        definirFlash("ok", "Funcionário cadastrado.");
-        return renderFuncionarios();
+        await renderFuncionarios();
+        // Mesmo aviso "anote login e senha" de sempre (ver "criar-usuario")
+        // — essa tela também não abre de novo depois de fechada.
+        abrirModal(`
+          <h3>Funcionário cadastrado — login criado</h3>
+          <p class="texto-suave">
+            <strong>Anote o login e a senha</strong> agora, pra repassar com segurança pra
+            <strong>${escapeHtml(nomeCriado)}</strong> — essa tela não abre de novo depois de fechada.
+            No primeiro login, será obrigada a trocar por uma senha escolhida por ela mesma.
+          </p>
+          <div class="campo"><label>E-mail (login)</label><input type="text" value="${escapeHtml(emailCriado)}" readonly onclick="this.select()"></div>
+          <div class="campo"><label>Senha temporária</label><input type="text" value="${escapeHtml(senhaCriada)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;"></div>
+          <div class="rodape-modal"><button type="button" class="botao" data-acao="fechar-modal">Fechar</button></div>`);
+        return;
       }
       case "editar-funcionario": {
         const corpo = {
@@ -20355,13 +20532,44 @@
           registro_profissional: dados.get("registro_profissional") || null, cpf: dados.get("cpf") || null, telefone: dados.get("telefone") || null,
           email: dados.get("email") || null, endereco: dados.get("endereco") || null,
           data_admissao: dados.get("data_admissao") || null, observacoes: dados.get("observacoes") || null,
-          usuario_id: dados.get("usuario_id") ? Number(dados.get("usuario_id")) : null,
         };
         if (dados.has("salario")) corpo.salario = dados.get("salario") || null;
+
+        if (dados.get("eh_usuario_sistema") !== "on") {
+          // Ou já é usuário (checkbox nem existe no form, ver
+          // htmlCampoFuncionario) ou continua não sendo — `usuario_id` fica
+          // de fora do corpo pra não mexer no que já está lá.
+          await chamarApi(`/funcionarios/${form.dataset.id}`, { method: "PUT", body: corpo });
+          fecharModais();
+          definirFlash("ok", "Funcionário atualizado.");
+          return renderFuncionarios();
+        }
+
+        // Editando um funcionário que AINDA não era usuário do sistema e
+        // marcou agora: cria o login (pulando a criação automática de
+        // funcionário, pra não duplicar este que já existe) e vincula.
+        const senhaCriada = dados.get("senha");
+        const perfil_ids = dados.getAll("perfil_ids").map(Number);
+        const nomeCriado = corpo.nome, emailCriado = corpo.email;
+        const usuarioCriado = await chamarApi("/usuarios", {
+          method: "POST",
+          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, celular: corpo.telefone, perfil_ids, pular_criacao_funcionario: true },
+        });
+        corpo.usuario_id = usuarioCriado.id;
         await chamarApi(`/funcionarios/${form.dataset.id}`, { method: "PUT", body: corpo });
         fecharModais();
-        definirFlash("ok", "Funcionário atualizado.");
-        return renderFuncionarios();
+        await renderFuncionarios();
+        abrirModal(`
+          <h3>Funcionário atualizado — login criado</h3>
+          <p class="texto-suave">
+            <strong>Anote o login e a senha</strong> agora, pra repassar com segurança pra
+            <strong>${escapeHtml(nomeCriado)}</strong> — essa tela não abre de novo depois de fechada.
+            No primeiro login, será obrigada a trocar por uma senha escolhida por ela mesma.
+          </p>
+          <div class="campo"><label>E-mail (login)</label><input type="text" value="${escapeHtml(emailCriado)}" readonly onclick="this.select()"></div>
+          <div class="campo"><label>Senha temporária</label><input type="text" value="${escapeHtml(senhaCriada)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;"></div>
+          <div class="rodape-modal"><button type="button" class="botao" data-acao="fechar-modal">Fechar</button></div>`);
+        return;
       }
       case "definir-perfis-usuario": {
         const perfil_ids = dados.getAll("perfil_ids").map(Number);
