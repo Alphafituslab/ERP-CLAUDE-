@@ -2231,11 +2231,24 @@
   }
 
   function modalEditarUsuario(usuario) {
+    // Pedido do usuário: poder trocar o Perfil aqui mesmo, sem abrir o
+    // modal "Perfis" separado, pra ser mais rápido no dia a dia. É só a
+    // troca simples de perfil (mesmos checkboxes de "Novo usuário") — o
+    // ajuste fino por permissão individual (Fase 184) continua no botão
+    // "Perfis" à parte, que é uma tela bem maior pra caber aqui dentro.
+    const perfis = state.cache.perfis || [];
+    const perfilIdsAtuais = new Set((usuario.perfis || []).map((p) => p.id));
+    const opcoesPerfis = perfis
+      .map((p) => `<label><input type="checkbox" name="perfil_ids" value="${p.id}" ${perfilIdsAtuais.has(p.id) ? "checked" : ""}> ${escapeHtml(p.nome)}</label>`)
+      .join("");
     const modal = abrirModal(`
       <h3>Editar usuário</h3>
       <form data-form="editar-usuario" data-id="${usuario.id}">
         <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(usuario.nome)}" required></div>
         <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(usuario.email)}" required></div>
+        <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoesPerfis || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div>
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Pra liberar/bloquear uma permissão específica só pra este usuário (ajuste fino), use o botão "Perfis" na lista.</div>
+        </div>
         <div class="campo">
           <label>Foto</label>
           <div class="conta-foto-linha" data-conta-foto-linha>
@@ -20475,6 +20488,14 @@
           corpo.foto_perfil = null;
         }
         await chamarApi(`/usuarios/${form.dataset.id}`, { method: "PUT", body: corpo });
+        // Pedido do usuário: trocar o Perfil direto aqui, sem abrir o modal
+        // "Perfis" à parte — mesma chamada que aquele modal já usa; a
+        // segregação de função (ninguém concede um perfil além do que já
+        // tem) já é garantida pelo backend dessa rota.
+        if (form.querySelector('[name="perfil_ids"]')) {
+          const perfil_ids = dados.getAll("perfil_ids").map(Number);
+          await chamarApi(`/usuarios/${form.dataset.id}/perfis`, { method: "PUT", body: { perfil_ids } });
+        }
         fecharModais();
         definirFlash("ok", "Usuário atualizado.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
