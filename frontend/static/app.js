@@ -232,7 +232,16 @@
       }
     }
     if (!handle) {
-      handle = await window.showDirectoryPicker({ mode: "readwrite" });
+      // Pedido do usuário: reduzir o passo manual (inevitável — nenhum
+      // site consegue abrir/gravar numa pasta do computador sem a pessoa
+      // confirmar isso pelo menos uma vez, é bloqueio de segurança do
+      // próprio navegador, não desta tela). `startIn: "desktop"` não
+      // consegue abrir DIRETO em C:\Alphafitus\Backups (a API não aceita
+      // caminho arbitrário, só um handle anterior ou um destes nomes fixos
+      // do sistema) — mas já abre na Área de Trabalho, onde o instalador
+      // do Terminal cria o atalho "Backups do Alphafitus": só dar dois
+      // cliques nele dentro do próprio seletor.
+      handle = await window.showDirectoryPicker({ mode: "readwrite", startIn: "desktop" });
       await salvarHandlePastaBackupLocal(handle);
     }
     return handle;
