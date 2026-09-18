@@ -671,3 +671,19 @@ tbody tr { transition: background 0.12s ease; }
 [data-tema="claro"] .rodape-lateral-avatar,
 [data-tema="claro"] .rodape-lateral-avatar-foto { background: color-mix(in srgb, var(--texto) 10%, transparent); }
 [data-tema="claro"] .versao-sistema-rodape { color: color-mix(in srgb, var(--texto) 40%, transparent); }
+
+/* Fase 185.4 — achado real: o "Verde escuro" só tinha o FUNDO do conteúdo
+   ajustado pra combinar com o meio do gradiente do menu — o menu em si
+   continuava sendo um GRADIENTE (varia de tom do topo até embaixo,
+   nunca uma cor só), então sempre sobrava uma diferença visível entre um
+   (gradiente) e o outro (cor sólida). Pedido do usuário: "tudo deve ser
+   igual... o menu deve ser verde da mesma cor" — mesma solução já usada
+   no "Claro" acima, agora pro lado escuro: menu também vira cor sólida
+   (`--fundo`, igual ao conteúdo), sem gradiente/blobs. */
+[data-tema="verde-escuro"] .barra-lateral {
+  background: var(--fundo);
+  box-shadow: none;
+  border-right: 1px solid var(--borda);
+}
+[data-tema="verde-escuro"] .barra-lateral-blob { display: none; }
+[data-tema="verde-escuro"] .barra-lateral::after { display: none; }
