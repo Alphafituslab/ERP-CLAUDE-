@@ -925,7 +925,12 @@ def listar_pedidos():
         f"""
         SELECT pv.*, c.razao_social AS cliente_razao_social, v.nome AS vendedor_nome,
                (SELECT COALESCE(SUM(quantidade * preco_unitario), 0) FROM pedido_venda_itens WHERE pedido_id = pv.id) AS valor_total,
-               EXISTS (SELECT 1 FROM notas_fiscais nf WHERE nf.pedido_id = pv.id AND nf.status = 'autorizada') AS faturado
+               EXISTS (SELECT 1 FROM notas_fiscais nf WHERE nf.pedido_id = pv.id AND nf.status = 'autorizada') AS faturado,
+               EXISTS (
+                   SELECT 1 FROM pedido_venda_reservas pvr
+                   JOIN pedido_venda_itens pvi ON pvi.id = pvr.pedido_item_id
+                   WHERE pvi.pedido_id = pv.id
+               ) AS teve_movimentacao_estoque
         FROM pedidos_venda pv
         JOIN clientes c ON c.id = pv.cliente_id
         LEFT JOIN usuarios v ON v.id = pv.vendedor_id
@@ -1832,6 +1837,27 @@ def excluir_pedido(pedido_id):
         ).fetchone()
         if ja_faturado:
             raise ApiError("Este pedido já tem nota fiscal autorizada — não pode ser excluído.", status=400)
+
+        # Pedido do usuário (2026-09-21) — só pode excluir um cancelado que
+        # NUNCA chegou a reservar estoque de verdade (ou seja, foi cancelado
+        # ainda em rascunho, antes de confirmar). Um pedido que passou por
+        # 'confirmado' já tem linha em pedido_venda_reservas — a tabela é
+        # append-only por trigger (ver schema_fase5.sql) mesmo depois de
+        # cancelado, então essa linha é o registro permanente de que houve
+        # movimentação real; apagar o pedido apagaria esse rastro.
+        teve_movimentacao = conn.execute(
+            """
+            SELECT 1 FROM pedido_venda_reservas pvr
+            JOIN pedido_venda_itens pvi ON pvi.id = pvr.pedido_item_id
+            WHERE pvi.pedido_id = ? LIMIT 1
+            """,
+            (pedido_id,),
+        ).fetchone()
+        if teve_movimentacao:
+            raise ApiError(
+                "Este pedido chegou a reservar estoque (teve movimentação) antes de ser cancelado — não pode ser excluído.",
+                status=400,
+            )
 
         numero = pedido["numero"]
         agora = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")

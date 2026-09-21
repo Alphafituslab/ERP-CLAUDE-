@@ -11701,7 +11701,7 @@
       .map((v) => `<option value="${v.id}" ${String(filtros.vendedor_id) === String(v.id) ? "selected" : ""}>${escapeHtml(v.nome)}</option>`)
       .join("");
 
-    const linhas = pedidos.map((p) => `<tr>
+    const linhas = pedidos.map((p) => `<tr data-linha-pedido-venda="${p.id}" oncontextmenu="return false;">
       <td class="mono"><a href="#/pedido/${p.id}">${escapeHtml(p.numero)}</a></td>
       <td>${escapeHtml(p.cliente_razao_social)}</td>
       <td class="texto-suave">${escapeHtml(rotuloCanalOrigem(p.canal_origem))}</td>
@@ -11713,7 +11713,7 @@
       <td class="texto-suave">${fmtData(p.criado_em)}</td>
       <td>
         <button class="botao secundario pequeno" data-acao="ver-pedido" data-id="${p.id}">Abrir</button>
-        ${p.status === "cancelado" && !p.faturado
+        ${p.status === "cancelado" && !p.faturado && !p.teve_movimentacao_estoque
           ? `<button class="botao perigo pequeno" data-acao="abrir-excluir-pedido-venda" data-id="${p.id}" data-numero="${escapeHtml(p.numero)}">Excluir</button>`
           : ""}
       </td>
@@ -11794,6 +11794,25 @@
       };
       renderPedidosVenda();
     });
+
+    // Pedido do usuário (2026-09-21) — botão direito na linha, mesmo padrão
+    // já usado na lista de Clientes (abrirMenuContexto): atalho pra abrir ou
+    // excluir sem precisar mirar no botão pequeno da última coluna.
+    const tabelaPedidosVendaBody = app.querySelector("table tbody");
+    if (tabelaPedidosVendaBody) {
+      tabelaPedidosVendaBody.addEventListener("contextmenu", (e) => {
+        const linha = e.target.closest("[data-linha-pedido-venda]");
+        if (!linha) return;
+        e.preventDefault();
+        const pedido = pedidos.find((p) => p.id === Number(linha.dataset.linhaPedidoVenda));
+        if (!pedido) return;
+        const itens = [{ rotulo: "📄 Abrir pedido", acao: () => navegarPara(`#/pedido/${pedido.id}`) }];
+        if (pedido.status === "cancelado" && !pedido.faturado && !pedido.teve_movimentacao_estoque) {
+          itens.push({ rotulo: "🗑️ Excluir pedido", acao: () => modalExcluirPedidoVenda(pedido.id, pedido.numero) });
+        }
+        abrirMenuContexto(e.clientX, e.clientY, itens);
+      });
+    }
   }
   function rotuloFormaPagamento(valor) {
     return ROTULOS_FORMA_PAGAMENTO[valor] || valor;
