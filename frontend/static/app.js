@@ -11711,7 +11711,12 @@
       <td>${p.faturado ? '<span class="selo ativo">Faturado</span>' : '<span class="selo inativo">Não faturado</span>'}</td>
       <td>R$ ${Number(p.valor_total || 0).toFixed(2)}</td>
       <td class="texto-suave">${fmtData(p.criado_em)}</td>
-      <td><button class="botao secundario pequeno" data-acao="ver-pedido" data-id="${p.id}">Abrir</button></td>
+      <td>
+        <button class="botao secundario pequeno" data-acao="ver-pedido" data-id="${p.id}">Abrir</button>
+        ${p.status === "cancelado" && !p.faturado
+          ? `<button class="botao perigo pequeno" data-acao="abrir-excluir-pedido-venda" data-id="${p.id}" data-numero="${escapeHtml(p.numero)}">Excluir</button>`
+          : ""}
+      </td>
     </tr>`).join("");
 
     renderShell(
@@ -14046,6 +14051,25 @@
        </div>`,
       "lancar-faturar"
     );
+  }
+
+  // Fase 190 — mesmo backend/mesma exigência de senha de
+  // `modalExcluirPedidoLf` (Fase 97), só que a partir da tela "Pedidos de
+  // Venda" (não "Lançar & Faturar") e pra pedido já CANCELADO (soft-delete
+  // no servidor) em vez de rascunho (esse sim apagado de vez) — por isso
+  // um `data-form` próprio, pra voltar pra tela certa depois de excluir.
+  function modalExcluirPedidoVenda(pedidoId, numero) {
+    abrirModal(`
+      <h3>Excluir pedido ${escapeHtml(numero)}</h3>
+      <p class="mensagem-erro">Este pedido está cancelado e sem nota fiscal — excluir só tira ele da lista
+      (nada mais é afetado). Confirme sua senha para continuar.</p>
+      <form data-form="excluir-pedido-venda" data-id="${pedidoId}">
+        <div class="campo"><label>Senha atual</label><input name="senha_atual" type="password" required autofocus></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao perigo">Excluir</button>
+        </div>
+      </form>`);
   }
 
   function modalExcluirPedidoLf(pedidoId, numero) {
@@ -19825,6 +19849,13 @@
       }
       case "ver-pedido":
         return navegarPara(`#/pedido/${alvo.dataset.id}`);
+      case "abrir-excluir-pedido-venda":
+        // Fase 190 — só aparece pra pedido cancelado e não faturado (ver
+        // renderPedidosVenda); mesma rota/senha do "excluir" de rascunho
+        // (Fase 97), só que soft-delete pro caso cancelado — nunca some
+        // de verdade do banco, só da listagem.
+        modalExcluirPedidoVenda(Number(alvo.dataset.id), alvo.dataset.numero);
+        return;
       case "adicionar-item-pedido": {
         const pedidoParaAdicionarItem = await chamarApi(`/comercial/pedidos/${alvo.dataset.id}`);
         const tabelaPrecoParaAdicionar = temPermissao("comercial", "visualizar")
@@ -22242,6 +22273,18 @@
         fecharModais();
         definirFlash("ok", "Pedido excluído definitivamente.");
         return renderLancarFaturarPedidos();
+      }
+      case "excluir-pedido-venda": {
+        // Fase 190 — mesma rota de "excluir-pedido-lf" acima (o backend já
+        // trata rascunho vs. cancelado sozinho); só o re-render no final
+        // muda, pra voltar pra tela "Pedidos de Venda" de onde veio.
+        const pedidoIdExcluirVenda = Number(form.dataset.id);
+        await chamarApi(`/comercial/pedidos/${pedidoIdExcluirVenda}/excluir`, {
+          method: "POST", body: { senha_atual: dados.get("senha_atual") },
+        });
+        fecharModais();
+        definirFlash("ok", "Pedido excluído.");
+        return renderPedidosVenda();
       }
 
       // ---- Fase 99: Tabelas de Preço ----

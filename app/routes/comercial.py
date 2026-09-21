@@ -892,6 +892,10 @@ def listar_pedidos():
     canal_origem = request.args.get("canal_origem")
     vendedor_id = request.args.get("vendedor_id", type=int)
     clausulas, params = [], []
+    # Fase 190 — pedido excluído (soft-delete, sempre cancelado e não
+    # faturado antes de chegar aqui) nunca aparece por padrão.
+    if request.args.get("incluir_excluidos") != "1":
+        clausulas.append("pv.excluido_em IS NULL")
     if status:
         clausulas.append("pv.status = ?")
         params.append(status)
@@ -1795,21 +1799,50 @@ def excluir_pedido(pedido_id):
     trigger (UPDATE e DELETE bloqueados no próprio banco, de propósito —
     ver schema_fase36.sql) — apagar o pedido violaria a referência
     (FOREIGN KEY) sem nenhuma forma legal de limpar antes. Nesse caso,
-    cancelar continua sendo o caminho certo."""
+    cancelar continua sendo o caminho certo.
+
+    Fase 190 — pedido do usuário: pedido CANCELADO e NÃO faturado também
+    precisa sumir da lista ("pra nem aparecer"), não só o rascunho. Esse
+    segundo caso usa SOFT-DELETE (marca `excluido_em`, nunca DELETE de
+    verdade — ver migrations/schema_fase190.sql), diferente do rascunho
+    acima: um pedido cancelado já pode ter reserva de estoque histórica,
+    fluxo de aprovação, comissão etc. vinculados — apagar a linha de
+    verdade arrastaria uma limpeza em cascata arriscada sem necessidade
+    nenhuma, já que o objetivo é só "sumir da lista". Mesma exigência de
+    senha atual das duas formas, mesmo espírito de "excluir sempre
+    reautentica"."""
     usuario_atual = g.usuario_atual
     dados = request.get_json(silent=True) or {}
     senha_atual = (dados.get("senha_atual") or "").strip()
     conn = get_db()
     pedido = _pedido_ou_404(conn, pedido_id)
 
-    if pedido["status"] != "rascunho":
+    if pedido["status"] not in ("rascunho", "cancelado"):
         raise ApiError(
-            f"Só é possível excluir definitivamente um pedido ainda em 'rascunho' (status atual: '{pedido['status']}') "
-            "— um pedido já confirmado ou expedido precisa ser cancelado, nunca excluído.",
+            f"Só é possível excluir um pedido em 'rascunho' ou já 'cancelado' (status atual: '{pedido['status']}') "
+            "— um pedido confirmado ou expedido precisa ser cancelado primeiro.",
             status=400,
         )
     if not security.verify_password(senha_atual, usuario_atual["senha_hash"]):
         raise ApiError("Senha atual incorreta.", status=400)
+
+    if pedido["status"] == "cancelado":
+        ja_faturado = conn.execute(
+            "SELECT 1 FROM notas_fiscais WHERE pedido_id = ? AND status = 'autorizada'", (pedido_id,)
+        ).fetchone()
+        if ja_faturado:
+            raise ApiError("Este pedido já tem nota fiscal autorizada — não pode ser excluído.", status=400)
+
+        numero = pedido["numero"]
+        agora = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        conn.execute(
+            "UPDATE pedidos_venda SET excluido_em = ?, excluido_por = ? WHERE id = ?",
+            (agora, usuario_atual["id"], pedido_id),
+        )
+        audit.registrar(conn, tabela="pedidos_venda", registro_id=pedido_id, usuario_id=usuario_atual["id"],
+                         acao="pedido_excluido", valor_anterior={"status": "cancelado"},
+                         ip=client_ip(), dispositivo=client_device())
+        return jsonify({"ok": True, "numero": numero})
 
     tem_verba_vinculada = conn.execute(
         "SELECT 1 FROM verbas_comerciais_lancamentos WHERE pedido_venda_id = ? LIMIT 1", (pedido_id,)
