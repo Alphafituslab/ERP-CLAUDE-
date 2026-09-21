@@ -1923,7 +1923,7 @@
           <td>
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-usuario" data-id="${u.id}">Editar</button>` : ""}
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="perfis-usuario" data-id="${u.id}">Perfis</button>` : ""}
-            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="resetar-senha-usuario" data-id="${u.id}" data-nome="${escapeHtml(u.nome)}" data-celular="${escapeHtml(u.celular || "")}">Resetar senha</button>` : ""}
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="abrir-resetar-senha-usuario" data-id="${u.id}" data-nome="${escapeHtml(u.nome)}" data-celular="${escapeHtml(u.celular || "")}">Resetar senha</button>` : ""}
             ${podeInativar && u.status === "ativo" ? `<button class="botao perigo pequeno" data-acao="inativar-usuario" data-id="${u.id}">Inativar</button>` : ""}
             ${podeInativar && u.status !== "ativo" ? `<button class="botao pequeno" data-acao="reativar-usuario" data-id="${u.id}">Reativar</button>` : ""}
           </td>
@@ -18749,12 +18749,30 @@
         await modalPerfisUsuario(usuario);
         return;
       }
+      case "abrir-resetar-senha-usuario": {
+        // Pedido do usuário (2026-09-21) — resetou a própria senha sem
+        // querer, duas vezes seguidas, num intervalo de segundos: o
+        // `confirm()` nativo do navegador tem um "OK" pré-focado, fácil
+        // de disparar sem querer com Enter/clique reflexo. Trocado por um
+        // modal de verdade, que exige clicar num botão específico (sem
+        // atalho de teclado óbvio) — mesma régua de "irreversível exige
+        // fricção real" já usada em excluir pedido/inativar com senha.
+        abrirModal(`
+          <h3>Resetar senha de ${escapeHtml(alvo.dataset.nome)}?</h3>
+          <p class="mensagem-erro">
+            A senha atual desta pessoa deixa de funcionar NA HORA e todas as sessões abertas dela são
+            encerradas. Uma senha provisória nova será gerada — você vai precisar repassar pra ela.
+            Isso não pode ser desfeito (a senha antiga não pode ser recuperada depois).
+          </p>
+          <div class="rodape-modal">
+            <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+            <button type="button" class="botao perigo" data-acao="resetar-senha-usuario" data-id="${alvo.dataset.id}" data-nome="${escapeHtml(alvo.dataset.nome)}" data-celular="${escapeHtml(alvo.dataset.celular || "")}">Sim, resetar a senha</button>
+          </div>`);
+        return;
+      }
       case "resetar-senha-usuario": {
-        if (!confirm(
-          `Resetar a senha de "${alvo.dataset.nome}"? A senha atual dela deixa de funcionar na hora, ` +
-          `e as sessões abertas são encerradas. Uma senha provisória nova será gerada — você vai precisar repassar pra ela.`
-        )) return;
         const resp = await chamarApi(`/usuarios/${alvo.dataset.id}/resetar-senha`, { method: "POST" });
+        fecharModais();
         abrirModal(`
           <h3>Senha provisória gerada</h3>
           <p class="texto-suave">
