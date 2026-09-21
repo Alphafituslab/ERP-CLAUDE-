@@ -96,16 +96,26 @@ def _chamar_endpoint_sincronizacao(url_base, caminho, payload):
     resp = requests.post(f"{url_base.rstrip('/')}{caminho}", json=payload, timeout=TIMEOUT_SEGUNDOS)
     if resp.status_code == 200:
         return True, None
+    if resp.status_code == 404:
+        # Fase 188d — pedido do usuário: sincronizar senha pra QUALQUER
+        # usuário (antes só rodava pra conta administrativa vinculada), não
+        # só pro admin. Um usuário comum pode simplesmente não ter conta
+        # ainda neste sistema (nunca abriu via SSO) — isso NÃO é falha de
+        # sincronização, é esperado ("respeitando as limitações de acesso"
+        # de cada um). Tratado como "não aplicável" (None), igual a "não
+        # configurado nesta instalação", pra não mostrar um ✗ assustador
+        # pra quem troca a própria senha e nem usa aquele sistema.
+        return None, None
     try:
         return False, resp.json().get("error", f"HTTP {resp.status_code}")
     except Exception:
         return False, f"HTTP {resp.status_code}"
 
 
-def _sincronizar_protocolo(nova_senha):
+def _sincronizar_protocolo(nova_senha, usuario_login=None):
     url = os.environ.get("ALPHAFITUS_SYNC_PROTOCOLO_URL")
     senha_mestra = os.environ.get("ALPHAFITUS_SYNC_PROTOCOLO_MASTER")
-    usuario = os.environ.get("ALPHAFITUS_SYNC_PROTOCOLO_USUARIO", "admin")
+    usuario = usuario_login or os.environ.get("ALPHAFITUS_SYNC_PROTOCOLO_USUARIO", "admin")
     if not url or not senha_mestra:
         return None, "Sincronização com o Protocolo de Estabilidade não configurada nesta instalação."
     try:
@@ -118,7 +128,7 @@ def _sincronizar_protocolo(nova_senha):
         return False, str(erro)
 
 
-def _sincronizar_hplc(nova_senha):
+def _sincronizar_hplc(nova_senha, usuario_login=None):
     # Fase 164 (pedido do usuário 2026-09-08) — Treinador de HPLC roda a
     # MESMA imagem de backend do Protocolo de Estabilidade (só banco de
     # dados diferente), então tem o MESMO endpoint `POST
@@ -126,7 +136,7 @@ def _sincronizar_hplc(nova_senha):
     # tal e qual, exatamente como `_sincronizar_protocolo` acima.
     url = os.environ.get("ALPHAFITUS_SYNC_HPLC_URL")
     senha_mestra = os.environ.get("ALPHAFITUS_SYNC_HPLC_MASTER")
-    usuario = os.environ.get("ALPHAFITUS_SYNC_HPLC_USUARIO", "admin")
+    usuario = usuario_login or os.environ.get("ALPHAFITUS_SYNC_HPLC_USUARIO", "admin")
     if not url or not senha_mestra:
         return None, "Sincronização com o Treinador de HPLC não configurada nesta instalação."
     try:
@@ -139,10 +149,10 @@ def _sincronizar_hplc(nova_senha):
         return False, str(erro)
 
 
-def _sincronizar_memorial(nova_senha):
+def _sincronizar_memorial(nova_senha, usuario_login=None):
     url = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_URL")
     segredo = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_SECRET")
-    usuario = os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_USUARIO", "Clayton")
+    usuario = usuario_login or os.environ.get("ALPHAFITUS_SYNC_MEMORIAL_USUARIO", "Clayton")
     if not url or not segredo:
         return None, "Sincronização com o Memorial Técnico não configurada nesta instalação."
     try:
@@ -324,26 +334,42 @@ def sincronizar_email_em_todos_sistemas(usuario_id, email_atual, email_novo):
 
 
 def sincronizar_senha_em_todos_sistemas(usuario_id, email_usuario, nova_senha):
-    """Devolve None se o usuário não é a identidade administrativa
-    vinculada (nada a sincronizar). Senão, devolve um dict
-    {"whatts"/"protocolo"/"memorial": (True|False|None, mensagem)} —
-    True=sincronizado, False=tentou e falhou, None=não configurado
-    nesta instalação. Nunca levanta exceção.
+    """Fase 188d — pedido do usuário: "a senha que ele faz login no ERP
+    deve ser para todo o sistema — memorial, protocolo, hplc e tudo que
+    pedir senha, pra qualquer usuário, respeitando suas limitações de
+    acesso". Antes disto, só a conta administrativa vinculada era
+    sincronizada; agora roda pra QUALQUER usuário, usando o próprio
+    e-mail dele como login em cada destino — exatamente o mesmo e-mail
+    que o SSO (Fase 171) já usa pra criar a conta em Protocolo/HPLC/
+    Memorial na primeira vez que a pessoa abre um desses pelo menu do
+    ERP. "Respeitar as limitações de acesso" acontece sozinho: quem
+    nunca abriu um desses sistemas (nunca teve permissão pra isso) não
+    tem conta lá ainda, e a chamada correspondente devolve
+    "não encontrado" (tratado como None, não como falha — ver
+    `_chamar_endpoint_sincronizacao`) — nenhuma conta nova é criada
+    aqui, só a senha de uma que já existir é atualizada.
 
-    Checa pelo ID (âncora estável, id=1 é sempre o primeiro
-    administrador criado — ver seed.py) em vez de só pelo e-mail: o
-    usuário pode trocar o próprio e-mail (ver rota trocar-email) sem
-    perder a sincronização de senha."""
+    Devolve um dict {"whatts"/"protocolo"/"memorial"/"hplc": (True|False|
+    None, mensagem)} — True=sincronizado, False=tentou e falhou de
+    verdade, None=não aplicável (não configurado nesta instalação OU o
+    usuário não tem conta naquele sistema). Nunca levanta exceção.
+
+    O Whatts "bundled" local (arquivo `data/whatts.db` desta própria
+    instalação) continua exclusivo da conta administrativa vinculada —
+    é um conceito de "usuário único local", não faz sentido pra vários
+    usuários — verificado por ID (âncora estável, id=1 é sempre o
+    primeiro administrador — ver seed.py) em vez de só pelo e-mail: o
+    admin pode trocar o próprio e-mail (rota trocar-email) sem perder
+    essa sincronização."""
+    resultado = {
+        "protocolo": _sincronizar_protocolo(nova_senha, email_usuario),
+        "memorial": _sincronizar_memorial(nova_senha, email_usuario),
+        "hplc": _sincronizar_hplc(nova_senha, email_usuario),
+    }
     e_admin_vinculado = (
         usuario_id == ID_USUARIO_ADMIN_SINCRONIZADO
         or (email_usuario or "").strip().lower() == EMAIL_ADMIN_SINCRONIZADO.lower()
     )
-    if not e_admin_vinculado:
-        return None
-
-    return {
-        "whatts": _sincronizar_whatts_local(nova_senha),
-        "protocolo": _sincronizar_protocolo(nova_senha),
-        "memorial": _sincronizar_memorial(nova_senha),
-        "hplc": _sincronizar_hplc(nova_senha),
-    }
+    if e_admin_vinculado:
+        resultado["whatts"] = _sincronizar_whatts_local(nova_senha)
+    return resultado

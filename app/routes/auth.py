@@ -450,7 +450,26 @@ def trocar_senha_obrigatoria():
                      valor_novo={"email_alterado": email_final != usuario["email"]},
                      ip=ip, dispositivo=dispositivo)
 
+    # Fase 188d — pedido do usuário: "a senha que ele faz login no ERP
+    # deve ser pra todo o sistema" — este é o momento em que a PESSOA
+    # escolhe a senha de verdade dela (a provisória só serve pra chegar
+    # até aqui), então é aqui que a sincronização importa de verdade, não
+    # só no /auth/trocar-senha autosserviço (que já tinha isso desde a
+    # Fase 123, só que restrito ao admin). Best effort, nunca bloqueia a
+    # troca local nem a emissão dos tokens abaixo.
+    resultado_sincronizacao = senha_sync_service.sincronizar_senha_em_todos_sistemas(
+        usuario_id, email_final, senha_nova,
+    )
+    if resultado_sincronizacao:
+        audit.registrar(
+            conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
+            acao="senha_sincronizada_outros_sistemas",
+            valor_novo={destino: bool(ok) for destino, (ok, _msg) in resultado_sincronizacao.items() if ok is not None},
+            ip=ip, dispositivo=dispositivo,
+        )
+
     tokens = _emitir_tokens(conn, usuario_id, ip, dispositivo)
+    tokens["sincronizacao"] = _sincronizacao_publica(resultado_sincronizacao)
     return jsonify(tokens)
 
 
@@ -744,7 +763,22 @@ def redefinir_senha():
 
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
                      acao="senha_redefinida_via_recuperacao", ip=ip, dispositivo=dispositivo)
-    return jsonify({"ok": True})
+
+    # Fase 188d — mesma sincronização de sempre (ver trocar_senha_obrigatoria
+    # acima) — "esqueci minha senha" também é um lugar onde a pessoa
+    # escolhe a senha de verdade dela.
+    email_usuario = conn.execute("SELECT email FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()["email"]
+    resultado_sincronizacao = senha_sync_service.sincronizar_senha_em_todos_sistemas(
+        usuario_id, email_usuario, senha_nova,
+    )
+    if resultado_sincronizacao:
+        audit.registrar(
+            conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_id,
+            acao="senha_sincronizada_outros_sistemas",
+            valor_novo={destino: bool(ok) for destino, (ok, _msg) in resultado_sincronizacao.items() if ok is not None},
+            ip=ip, dispositivo=dispositivo,
+        )
+    return jsonify({"ok": True, "sincronizacao": _sincronizacao_publica(resultado_sincronizacao)})
 
 
 @bp.get("/sessoes")

@@ -2,7 +2,7 @@ import datetime
 
 from flask import Blueprint, g, jsonify, request
 
-from .. import audit, backup_service, security
+from .. import audit, backup_service, security, senha_sync_service
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..imagens import validar_imagem_base64
 from ..permissions import (
@@ -247,6 +247,13 @@ def resetar_senha(usuario_id):
     )
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_atual["id"],
                      acao="senha_resetada_por_administrador", ip=client_ip(), dispositivo=client_device())
+
+    # Fase 188d — pedido do usuário: a senha provisória gerada aqui também
+    # já sincroniza com Protocolo/Memorial/HPLC (best effort — quem não tem
+    # conta lá simplesmente não recebe nada, ver senha_sync_service), pra
+    # já dar acesso imediato caso a pessoa precise entrar direto num
+    # desses sistemas antes mesmo de completar a troca obrigatória no ERP.
+    senha_sync_service.sincronizar_senha_em_todos_sistemas(usuario_id, row["email"], senha_provisoria)
     return jsonify({"ok": True, "senha_provisoria": senha_provisoria, "email": row["email"]})
 
 
