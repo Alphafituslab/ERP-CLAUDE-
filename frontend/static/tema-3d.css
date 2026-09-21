@@ -422,9 +422,14 @@ body {
    grupo (ex.: "Shelf Life" dentro de "Qualidade"). Mesmo `<details>` de
    sempre, só que mais recolhido/indentado — reaproveita quase tudo de
    `.barra-lateral-grupo`, sem duplicar a base. */
-.barra-lateral-subgrupo { margin: 2px 0; }
+.barra-lateral-subgrupo { margin: 3px 0; }
+/* Pedido do usuário: "Shelf Life" (o rótulo do subgrupo) ficava um texto
+   solto sem caixinha, destoando dos irmãos ao redor ("Configuração de
+   Qualidade" acima, "Memorial Técnico" dentro dele) que são pílulas
+   `.link-nav` de verdade — mesmo fundo/sombra/hover de `.link-nav` aqui,
+   só que aplicado ao <summary>, que não é um link (não tem `.link-nav`). */
 .barra-lateral-subgrupo summary {
-  border-radius: 0;
+  border-radius: 999px;
   margin: 0;
   padding: 8px 12px 8px 28px;
   font-family: "Outfit", -apple-system, "Segoe UI", sans-serif;
@@ -433,7 +438,13 @@ body {
   letter-spacing: 0.9px;
   text-transform: uppercase;
   color: rgba(255, 255, 255, 0.5);
-  transition: color 0.15s ease;
+  background: rgba(255, 255, 255, 0.045);
+  box-shadow: var(--brilho-topo-fraco);
+  transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+.barra-lateral-subgrupo summary:hover {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: var(--elev-1), var(--brilho-topo-fraco);
 }
 .barra-lateral-subgrupo[open] summary,
 .barra-lateral-subgrupo summary:hover { color: rgba(255, 255, 255, 0.8); }
@@ -654,6 +665,8 @@ tbody tr { transition: background 0.12s ease; }
 [data-tema="claro"] .barra-lateral-subgrupo[open] summary,
 [data-tema="claro"] .barra-lateral-subgrupo summary:hover { color: var(--texto); }
 [data-tema="claro"] .barra-lateral-subgrupo summary { color: color-mix(in srgb, var(--texto) 55%, transparent); }
+[data-tema="claro"] .barra-lateral-subgrupo summary { background: color-mix(in srgb, var(--texto) 4%, transparent); }
+[data-tema="claro"] .barra-lateral-subgrupo summary:hover { background: color-mix(in srgb, var(--texto) 8%, transparent); }
 [data-tema="claro"] .rodape-lateral-backup-botao,
 [data-tema="claro"] .rodape-lateral-backup-engrenagem,
 [data-tema="claro"] .rodape-lateral-sair {
