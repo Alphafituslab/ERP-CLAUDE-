@@ -32,7 +32,14 @@
     accessToken: null,
     refreshToken: localStorage.getItem("alphafitus_refresh_token") || null,
     usuarioAtual: null,
-    tema: localStorage.getItem("alphafitus_tema") || "claro",
+    // Pedido do usuário: "sempre iniciar o layout verde escuro, pra
+    // todos" — novo nome de chave de propósito (era "alphafitus_tema"):
+    // qualquer preferência antiga já salva no navegador de alguém fica
+    // "órfã" (nunca mais lida), então TODO MUNDO cai no valor padrão novo
+    // na próxima vez que abrir o sistema, não só quem nunca escolheu tema
+    // nenhum ainda. Continua sendo por navegador — quem quiser, ainda pode
+    // trocar depois pelo seletor de tema, e a escolha continua guardada.
+    tema: localStorage.getItem("alphafitus_tema_v2") || "verde-escuro",
     flash: null,
     cache: {}, // caches leves usados entre páginas (ex.: catálogo de permissões)
     notificacoesNaoLidas: 0, // Fase 37 — mostrado no sino da barra superior
@@ -18600,7 +18607,7 @@
             rotulo: (op.valor === state.tema ? "✓ " : "　 ") + op.rotulo,
             acao: () => {
               state.tema = op.valor;
-              localStorage.setItem("alphafitus_tema", state.tema);
+              localStorage.setItem("alphafitus_tema_v2", state.tema);
               document.documentElement.setAttribute("data-tema", state.tema);
             },
           }))
