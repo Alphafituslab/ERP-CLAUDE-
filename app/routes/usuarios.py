@@ -2,7 +2,7 @@ import datetime
 
 from flask import Blueprint, g, jsonify, request
 
-from .. import audit, backup_service, security, senha_sync_service
+from .. import audit, backup_service, chat_interno_service, security, senha_sync_service
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..imagens import validar_imagem_base64
 from ..permissions import (
@@ -319,6 +319,40 @@ def enviar_credenciais_whatsapp(usuario_id):
 
     audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_atual["id"],
                      acao="credenciais_enviadas_por_whatsapp", ip=client_ip(), dispositivo=client_device())
+    return jsonify({"ok": True})
+
+
+@bp.post("/<int:usuario_id>/enviar-credenciais-chat-interno")
+@requires_permission("usuarios", "editar")
+def enviar_credenciais_chat_interno(usuario_id):
+    """Fase 191d — pedido do usuário: mesma ideia do WhatsApp acima, mas
+    pelo chat interno do Whatts Inbox (não depende de nenhum número de
+    telefone conectado à Evolution API — só do e-mail, que já é o mesmo
+    usado pra entrar no ERP). Ver app/chat_interno_service.py pro porquê
+    de escrever direto no banco do Whatts em vez de chamar uma API dele."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    senha_provisoria = dados.get("senha_provisoria") or ""
+    if not senha_provisoria:
+        raise ApiError("Informe a senha provisória a enviar.", status=400)
+    conn = get_db()
+    row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    if row is None:
+        raise ApiError("Usuário não encontrado.", status=404)
+    row = dict(row)
+
+    texto = (
+        "🔒 Alphafitus OS — acesso ao sistema\n\n"
+        f"Login: {row['email']}\n"
+        f"Senha provisória: {senha_provisoria}\n\n"
+        "Use essa senha só na primeira vez — o sistema vai pedir pra você escolher a senha definitiva."
+    )
+    sucesso, motivo = chat_interno_service.enviar_mensagem_chat_interno(row["email"], texto)
+    if not sucesso:
+        raise ApiError(motivo or "Falha ao enviar pelo chat interno.", status=502)
+
+    audit.registrar(conn, tabela="usuarios", registro_id=usuario_id, usuario_id=usuario_atual["id"],
+                     acao="credenciais_enviadas_por_chat_interno", ip=client_ip(), dispositivo=client_device())
     return jsonify({"ok": True})
 
 

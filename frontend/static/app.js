@@ -2149,6 +2149,7 @@
         <input type="text" value="${escapeHtml(resp.senha_provisoria)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;">
       </div>
       <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="enviar-credenciais-chat-interno" data-id="${usuarioId}" data-senha="${escapeHtml(resp.senha_provisoria)}">💬 Enviar pelo chat interno</button>
         ${celular ? `<button type="button" class="botao secundario" data-acao="enviar-credenciais-whatsapp" data-id="${usuarioId}" data-senha="${escapeHtml(resp.senha_provisoria)}">📲 Enviar por WhatsApp</button>` : ""}
         <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
       </div>`);
@@ -18921,6 +18922,27 @@
           alvo.disabled = false;
           alvo.textContent = rotuloOriginal;
           alert(erro.message || "Não foi possível enviar por WhatsApp.");
+        }
+        return;
+      }
+      case "enviar-credenciais-chat-interno": {
+        // Fase 191d — pedido do usuário: alternativa ao WhatsApp (que
+        // depende do número estar conectado à Evolution API) — manda pelo
+        // chat interno do próprio Whatts Inbox, casando só pelo e-mail
+        // (o mesmo login do ERP).
+        alvo.disabled = true;
+        const rotuloOriginal = alvo.textContent;
+        alvo.textContent = "Enviando…";
+        try {
+          await chamarApi(`/usuarios/${alvo.dataset.id}/enviar-credenciais-chat-interno`, {
+            method: "POST",
+            body: { senha_provisoria: alvo.dataset.senha },
+          });
+          alvo.textContent = "✓ Enviado";
+        } catch (erro) {
+          alvo.disabled = false;
+          alvo.textContent = rotuloOriginal;
+          alert(erro.message || "Não foi possível enviar pelo chat interno.");
         }
         return;
       }
