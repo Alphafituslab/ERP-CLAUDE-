@@ -1747,11 +1747,17 @@
           <form data-form="redefinir-senha" data-token="${escapeHtml(token)}">
             <div class="campo">
               <label for="redefinir-senha-nova">Nova senha</label>
-              <input id="redefinir-senha-nova" name="senha_nova" type="password" autocomplete="new-password" required minlength="6" maxlength="12" autofocus>
+              <div class="campo-senha">
+                <input id="redefinir-senha-nova" name="senha_nova" type="password" autocomplete="new-password" required minlength="6" maxlength="12" autofocus>
+                <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha" data-alvo="redefinir-senha-nova" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+              </div>
             </div>
             <div class="campo">
               <label for="redefinir-senha-confirmar">Confirmar nova senha</label>
-              <input id="redefinir-senha-confirmar" name="senha_confirmar" type="password" autocomplete="new-password" required minlength="6" maxlength="12">
+              <div class="campo-senha">
+                <input id="redefinir-senha-confirmar" name="senha_confirmar" type="password" autocomplete="new-password" required minlength="6" maxlength="12">
+                <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha" data-alvo="redefinir-senha-confirmar" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+              </div>
             </div>
             <div class="dica">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial.</div>
             <button class="botao largura-total" type="submit">Redefinir senha</button>
@@ -1797,12 +1803,18 @@
           <form data-form="login-trocar-senha-obrigatoria">
             <div class="campo">
               <label for="nova-senha-obrigatoria">Nova senha</label>
-              <input id="nova-senha-obrigatoria" name="senha_nova" type="password" required minlength="6" maxlength="12" autofocus>
+              <div class="campo-senha">
+                <input id="nova-senha-obrigatoria" name="senha_nova" type="password" required minlength="6" maxlength="12" autofocus>
+                <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha" data-alvo="nova-senha-obrigatoria" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+              </div>
               <div class="texto-suave" style="margin-top:4px;font-size:12px;">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial.</div>
             </div>
             <div class="campo">
               <label for="confirmar-senha-obrigatoria">Confirmar nova senha</label>
-              <input id="confirmar-senha-obrigatoria" name="senha_confirmar" type="password" required minlength="6" maxlength="12">
+              <div class="campo-senha">
+                <input id="confirmar-senha-obrigatoria" name="senha_confirmar" type="password" required minlength="6" maxlength="12">
+                <button type="button" class="alternar-senha" data-acao="alternar-visibilidade-senha" data-alvo="confirmar-senha-obrigatoria" aria-label="Mostrar senha" title="Mostrar/ocultar senha">👁️</button>
+              </div>
             </div>
             <div class="campo">
               <label for="email-login-obrigatoria">E-mail de login</label>
@@ -2199,14 +2211,18 @@
       .join("");
     const modal = abrirModal(`
       <h3>Novo usuário</h3>
-      <form data-form="criar-usuario">
-        <div class="campo"><label>Nome</label><input name="nome" required></div>
-        <div class="campo"><label>Email</label><input name="email" type="email" required></div>
-        <div class="campo"><label>Celular (WhatsApp, opcional)</label><input name="celular" placeholder="48999998888">
+      <form data-form="criar-usuario" autocomplete="off">
+        <div class="campo"><label>Nome</label><input name="nome" autocomplete="off" required></div>
+        <div class="campo"><label>Email</label><input name="email" type="email" autocomplete="off" required></div>
+        <div class="campo"><label>Celular (WhatsApp, opcional)</label><input name="celular" autocomplete="off" placeholder="48999998888">
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Se preenchido, dá pra mandar o login e a senha provisória direto por WhatsApp ao criar.</div>
         </div>
-        <div class="campo"><label>Senha temporária</label><input name="senha" type="password" required minlength="6" maxlength="12">
-          <div class="texto-suave" style="margin-top:4px;font-size:12px;">De 6 a 12 caracteres, com pelo menos 1 letra maiúscula e 1 caractere especial. O usuário será obrigado a trocá-la no primeiro login.</div>
+        <div class="campo"><label>Senha temporária</label>
+          <div style="display:flex;gap:8px;">
+            <input name="senha" type="text" readonly autocomplete="off" style="flex:1;font-family:ui-monospace,monospace;" data-campo-senha-gerada>
+            <button type="button" class="botao secundario" data-acao-local="gerar-senha" style="flex-shrink:0;">🎲 Gerar</button>
+          </div>
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Gerada automaticamente pelo sistema — nunca digitada à mão, pra nunca sair parecida com a senha de quem está criando. O usuário será obrigado a trocá-la no primeiro login.</div>
         </div>
         <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoes || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div></div>
         <div class="campo">
@@ -2222,6 +2238,17 @@
       </form>`, { travado: true });
     const formulario = modal.querySelector("form[data-form='criar-usuario']");
     formulario._ajustadorFoto = ligarAjustadorFoto(formulario, "novo-usuario");
+    // Pedido do usuário (2026-09-22, achado real): esse campo antes era
+    // digitado à mão pelo administrador, sem `autocomplete="new-password"`
+    // — o navegador ofereceu (e o campo aceitou) a PRÓPRIA senha salva de
+    // quem estava criando o usuário, vazando ela pro cadastro de outra
+    // pessoa. Agora o campo é sempre gerado pelo sistema (somente leitura,
+    // nunca digitável), igual ao de Funcionários — impossível repetir.
+    const campoSenha = formulario.querySelector("[data-campo-senha-gerada]");
+    campoSenha.value = gerarSenhaProvisoria();
+    formulario.querySelector('[data-acao-local="gerar-senha"]').addEventListener("click", () => {
+      campoSenha.value = gerarSenhaProvisoria();
+    });
   }
 
   function modalEditarUsuario(usuario) {
