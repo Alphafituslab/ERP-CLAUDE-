@@ -18918,6 +18918,7 @@
             body: { senha_provisoria: alvo.dataset.senha },
           });
           alvo.textContent = "✓ Enviado";
+          setTimeout(() => fecharModais(), 900);
         } catch (erro) {
           alvo.disabled = false;
           alvo.textContent = rotuloOriginal;
@@ -18939,6 +18940,7 @@
             body: { senha_provisoria: alvo.dataset.senha },
           });
           alvo.textContent = "✓ Enviado";
+          setTimeout(() => fecharModais(), 900);
         } catch (erro) {
           alvo.disabled = false;
           alvo.textContent = rotuloOriginal;

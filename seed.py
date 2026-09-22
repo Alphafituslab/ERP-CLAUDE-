@@ -1037,19 +1037,46 @@ def rodar_seed(conn=None, admin_email=None, admin_senha=None, imprimir=True):
             (u["nome"], u["email"], u["celular"], u["id"]),
         )
 
-    # Fase 191 — pedido do usuário: função "Televendas" já aplica os
-    # mesmos Perfis configurados manualmente pra Adrian/Andreia/Tabata
-    # (Vendedor + Memorial Técnico visualização restrita), sem precisar
-    # marcar um por um da próxima vez que contratar alguém pra essa
-    # função. Só semeia se os dois perfis existirem (nome pode ter sido
-    # renomeado) e nunca duplica (idempotente via UNIQUE(funcao, perfil_id)).
-    for nome_perfil in ("Vendedor", "Memorial Tecnico (visualizacao restrita)", "Memorial Técnico (visualização restrita)"):
-        perfil = conn.execute("SELECT id FROM perfis WHERE nome = ?", (nome_perfil,)).fetchone()
-        if perfil:
-            conn.execute(
-                "INSERT OR IGNORE INTO funcao_perfis_padrao (funcao, perfil_id) VALUES (?, ?)",
-                ("Televendas", perfil["id"]),
+    # Fase 191b — pedido do usuário: "criar o perfil Televendas também" —
+    # em vez de marcar Vendedor + Memorial Técnico (visualização
+    # restrita) como dois perfis separados (jeito inicial da Fase 191),
+    # existe um único perfil "Televendas" com a soma das duas permissões,
+    # pra quem administra só precisar marcar UMA caixa. Monta a partir do
+    # que "Vendedor" já tem (dinâmico, não hardcoded) + memoriais.visualizar
+    # — assim não quebra se algum dia mudarem as permissões do Vendedor.
+    # Idempotente: só cria o perfil se ele ainda não existir; se a pessoa
+    # renomear ou apagar depois, o seed não recria por conta própria.
+    perfil_televendas = conn.execute("SELECT id FROM perfis WHERE nome = 'Televendas'").fetchone()
+    if not perfil_televendas:
+        perfil_vendedor = conn.execute("SELECT id FROM perfis WHERE nome = 'Vendedor'").fetchone()
+        permissao_memorial = conn.execute(
+            "SELECT id FROM permissoes WHERE modulo = 'memoriais' AND acao = 'visualizar'"
+        ).fetchone()
+        if perfil_vendedor and permissao_memorial:
+            cur_tv = conn.execute(
+                "INSERT INTO perfis (nome, descricao) VALUES (?, ?)",
+                ("Televendas", "Vendedor + visualização restrita do Memorial Técnico (só aprovados, Padronização e Portfólio)."),
             )
+            perfil_televendas_id = cur_tv.lastrowid
+            permissoes_vendedor = conn.execute(
+                "SELECT permissao_id FROM perfil_permissao WHERE perfil_id = ?", (perfil_vendedor["id"],)
+            ).fetchall()
+            for p in permissoes_vendedor:
+                conn.execute(
+                    "INSERT INTO perfil_permissao (perfil_id, permissao_id) VALUES (?, ?)",
+                    (perfil_televendas_id, p["permissao_id"]),
+                )
+            conn.execute(
+                "INSERT INTO perfil_permissao (perfil_id, permissao_id) VALUES (?, ?)",
+                (perfil_televendas_id, permissao_memorial["id"]),
+            )
+            perfil_televendas = {"id": perfil_televendas_id}
+
+    if perfil_televendas:
+        conn.execute(
+            "INSERT OR IGNORE INTO funcao_perfis_padrao (funcao, perfil_id) VALUES (?, ?)",
+            ("Televendas", perfil_televendas["id"]),
+        )
 
     conn.commit()
     if proprio_conn:
