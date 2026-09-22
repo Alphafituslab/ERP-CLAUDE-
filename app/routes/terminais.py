@@ -21,6 +21,7 @@ from flask import Blueprint, g, jsonify, request
 from .. import audit
 from ..context import ApiError, client_device, client_ip, get_db
 from ..permissions import requires_auth, requires_permission
+from .. import VERSAO_SISTEMA
 
 bp = Blueprint("terminais", __name__, url_prefix="/api/v1/terminais")
 
@@ -109,7 +110,16 @@ def heartbeat():
     # número/nome do PRÓPRIO terminal aqui pra o front mostrar "Terminal Nº
     # XXX" (pra quem pode administrar terminais) em vez do texto genérico.
     nome_atual = existente["nome"] if existente else nome_sugerido
-    return jsonify({"ok": True, "terminal_id": terminal_id, "nome": nome_atual})
+    # Pedido do usuário (2026-09-22): o Terminal fica com uma aba de
+    # navegador aberta por dias, rodando o `app.js` que estava em memória
+    # desde a última vez que a página carregou de verdade — mesmo com o
+    # servidor já atualizado, ninguém percebe até apertar Ctrl+Shift+R por
+    # conta própria. Devolvendo a versão ATUAL do servidor a cada pulsação
+    # (60 em 60s), o front compara com a que já tem carregada e avisa.
+    return jsonify({
+        "ok": True, "terminal_id": terminal_id, "nome": nome_atual,
+        "versao_atual_servidor": VERSAO_SISTEMA,
+    })
 
 
 @bp.get("")

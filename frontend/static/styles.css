@@ -594,6 +594,40 @@ body::before {
   text-align: center;
 }
 
+/* Pedido do usuário (2026-09-22) — avisa quando o servidor já está numa
+   versão mais nova do que a carregada nesta aba (ver htmlAvisoVersaoNova
+   em app.js), com um botão que só recarrega a página. */
+.aviso-versao-nova {
+  margin: 0 12px 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(94, 234, 212, 0.12);
+  border: 1px solid rgba(94, 234, 212, 0.35);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-align: center;
+  color: rgba(255,255,255,0.85);
+}
+.aviso-versao-nova button {
+  border: none;
+  border-radius: 999px;
+  padding: 5px 14px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  background: #5eead4;
+  color: #06302a;
+}
+.aviso-versao-nova button:hover { background: #7ff3e0; }
+[data-tema="claro"] .aviso-versao-nova {
+  color: var(--texto);
+  background: color-mix(in srgb, var(--marca-verde) 12%, var(--superficie));
+  border-color: color-mix(in srgb, var(--marca-verde) 30%, transparent);
+}
+
 .link-nav {
   display: flex;
   align-items: center;

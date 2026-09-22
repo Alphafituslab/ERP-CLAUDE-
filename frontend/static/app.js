@@ -54,6 +54,10 @@
     // buscado uma única vez (rota sem autenticação) e reaproveitado em
     // toda renderShell daqui pra frente.
     versaoSistema: null,
+    // Pedido do usuário (2026-09-22) — versão do servidor quando ela já
+    // está mais nova que a carregada nesta aba (ver enviarHeartbeatTerminal
+    // / htmlAvisoVersaoNova); null enquanto não houver diferença.
+    versaoNovaDisponivel: null,
     // Fase 111 — status da pulsação com o servidor (ver iniciarHeartbeatTerminal),
     // usado pela pílula "Servidor conectado/desconectado" na barra superior e pelo
     // popover de detalhes (endereço, latência, última sincronização).
@@ -611,6 +615,27 @@
     }
   }
 
+  // Pedido do usuário (2026-09-22) — um Terminal fica com a aba aberta por
+  // dias; o `app.js` rodando é o de quando a página carregou de verdade
+  // pela última vez, mesmo que o servidor já tenha sido atualizado várias
+  // vezes desde então. A cada pulsação (60 em 60s) o servidor devolve a
+  // PRÓPRIA versão atual — se for diferente da que já está carregada em
+  // memória, mostra o aviso; "Atualizar" é só um reload de verdade (o
+  // `index.html` nunca é cacheado, então ele já vem apontando pro `app.js`
+  // novo — não precisa reinstalar nada, muito menos no Terminal).
+  function htmlAvisoVersaoNova() {
+    if (!state.versaoNovaDisponivel) return "";
+    return `<div class="aviso-versao-nova">
+      <span>🔔 Versão nova disponível (v${escapeHtml(state.versaoNovaDisponivel)})</span>
+      <button type="button" data-acao="atualizar-versao-terminal">Atualizar</button>
+    </div>`;
+  }
+
+  function atualizarAvisoVersaoNovaNoDom() {
+    const alvo = document.querySelector("[data-aviso-versao-nova]");
+    if (alvo) alvo.innerHTML = htmlAvisoVersaoNova();
+  }
+
   async function enviarHeartbeatTerminal() {
     const inicio = performance.now();
     try {
@@ -629,6 +654,11 @@
         terminalId: resp.terminal_id ?? null,
         terminalNome: resp.nome ?? null,
       };
+      const versaoServidor = resp.versao_atual_servidor;
+      state.versaoNovaDisponivel =
+        (versaoServidor && state.versaoSistema && versaoServidor !== state.versaoSistema)
+          ? versaoServidor : null;
+      atualizarAvisoVersaoNovaNoDom();
     } catch (erro) {
       state.statusServidor = {
         ...state.statusServidor,
@@ -1296,6 +1326,7 @@
             <button class="pilula-status-servidor" data-pilula-status-servidor data-acao="mostrar-status-servidor" title="Detalhes da conexão">🟢 Servidor conectado</button>
           </div>
           <div class="versao-sistema-rodape">${state.versaoSistema ? `v${escapeHtml(state.versaoSistema)}` : ""}</div>
+          <div data-aviso-versao-nova>${htmlAvisoVersaoNova()}</div>
         </aside>
         <div class="conteudo-principal">
           <div class="barra-superior">
@@ -18683,6 +18714,12 @@
         navegarPara("#/login");
         return;
       }
+      case "atualizar-versao-terminal":
+        // `index.html` nunca é cacheado (Cache-Control: no-store), então
+        // um reload de verdade já busca a versão nova sozinho — não existe
+        // "instalar" aqui, é só parar de rodar o app.js antigo em memória.
+        location.reload();
+        return;
       case "mostrar-status-servidor": {
         const s = state.statusServidor;
         const situacao = s.bloqueado
