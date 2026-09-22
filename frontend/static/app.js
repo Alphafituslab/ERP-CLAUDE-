@@ -43,26 +43,11 @@
     flash: null,
     cache: {}, // caches leves usados entre páginas (ex.: catálogo de permissões)
     notificacoesNaoLidas: 0, // Fase 37 — mostrado no sino da barra superior
-    // Fase 51 — grupos do menu lateral que o próprio usuário já abriu ou
-    // fechou manualmente pelo menos uma vez (clicando no <summary>).
-    // Chave = chave do grupo, valor = true (aberto)/false (fechado). Um
-    // grupo que nunca foi tocado simplesmente não aparece aqui — nesse
-    // caso o padrão é "só abre se a página atual estiver dentro dele" (ver
-    // `grupoMenuAberto()`). Guardado no navegador (mesmo padrão já usado
-    // para tema/refresh_token acima), não no servidor: é preferência de
-    // navegação de tela, não dado de negócio.
-    gruposMenuAbertos: (() => {
-      try {
-        return JSON.parse(localStorage.getItem("alphafitus_grupos_menu")) || {};
-      } catch (e) {
-        return {};
-      }
-    })(),
     // Preferência de "menu lateral inteiro oculto" (tela larga — em
     // celular/tablet a barra já vira gaveta por conta própria, ver Fase
     // 38 em styles.css; isto aqui é um recolhimento à parte, para quem
     // quer mais espaço de tela mesmo com o computador). Persistido do
-    // mesmo jeito que tema/grupos acima.
+    // mesmo jeito que o tema acima.
     menuLateralOculto: localStorage.getItem("alphafitus_menu_oculto") === "1",
     // Pedido do usuário: mostrar a versão instalada no rodapé do menu,
     // pra saber na hora se uma atualização já "pegou" numa máquina —
@@ -1169,24 +1154,21 @@
   }
 
   // Fase 51 — decide se um GRUPO do menu deve renderizar aberto: a página
-  // atual estar dentro dele SEMPRE força aberto (nunca esconde o grupo em
-  // que o usuário está navegando agora, mesmo que ele tenha fechado esse
-  // grupo manualmente numa visita anterior); fora disso, respeita a última
-  // escolha manual do usuário guardada em `state.gruposMenuAbertos`; um
-  // grupo que o usuário nunca tocou fica fechado por padrão (só abre
-  // sozinho quando é o grupo da página atual).
+  // atual estar dentro dele SEMPRE força aberto; fora disso, fica fechado.
   // Fase 79 — menu em modo "sanfona": nunca mais de um grupo aberto ao
   // mesmo tempo (evita a barra lateral virar uma lista comprida e
-  // misturada depois de navegar por vários módulos ao longo do tempo,
-  // já que antes cada grupo guardava seu próprio aberto/fechado
-  // independente dos outros). O grupo da página atual sempre vence; sem
-  // isso, olha o que sobrou marcado como aberto da última vez.
+  // misturada depois de navegar por vários módulos ao longo do tempo).
   function calcularGrupoAbertoUnico(paginaAtiva) {
     const grupoDaPagina = ITENS_MENU.find(
       (it) => it.tipo === "grupo" && it.itens.some((sub) => sub.chave === paginaAtiva)
     );
-    if (grupoDaPagina) return grupoDaPagina.chave;
-    return Object.keys(state.gruposMenuAbertos).find((chave) => state.gruposMenuAbertos[chave] === true) || null;
+    // Pedido do usuário (2026-09-22): navegar pra QUALQUER outra tela (de
+    // dentro do grupo ou não) já fecha o grupo — só continua aberto se a
+    // página em que a pessoa está agora for mesmo uma das dele. Antes
+    // ficava "grudado" no último grupo aberto manualmente até a pessoa
+    // fechar de novo à mão, mesmo depois de navegar pra bem longe dele
+    // (ex.: abria Qualidade, ia pro Painel, e Qualidade continuava aberto).
+    return grupoDaPagina ? grupoDaPagina.chave : null;
   }
 
   // Fase 107 — iniciais para o avatar do rodapé do menu lateral (ver
@@ -1252,7 +1234,10 @@
           .map((sub) => {
             if (sub.tipo === "subgrupo") {
               const netosVisiveis = sub.itens.filter((neto) => !neto.permissao || temPermissao(neto.permissao[0], neto.permissao[1]));
-              const subAberto = state.gruposMenuAbertos[sub.chave] === true;
+              // Mesma regra do grupo de 1º nível acima: só continua aberto
+              // se a página atual for de fato um dos netos dele — senão
+              // começa fechado, e só abre nesta navegação se for clicado.
+              const subAberto = netosVisiveis.some((neto) => neto.chave === paginaAtiva);
               const netosHtml = netosVisiveis
                 .map((neto) => neto.ssoNovaAba
                   ? `<a class="link-nav barra-lateral-subitem barra-lateral-subitem-nivel2 ${neto.chave === paginaAtiva ? "ativo" : ""}" href="#" data-acao="abrir-sso" data-sistema="${neto.ssoSistema}">${neto.label}</a>`
@@ -1340,28 +1325,14 @@
     // então cada `<details>` precisa do próprio listener.
     app.querySelectorAll(".barra-lateral-grupo").forEach((el) => {
       el.addEventListener("toggle", () => {
-        state.gruposMenuAbertos[el.dataset.grupo] = el.open;
-        // Sanfona: abrir um grupo fecha todos os outros — cada `.open =
-        // false` dispara o "toggle" do PRÓPRIO elemento fechado, que já
-        // atualiza `gruposMenuAbertos` e o localStorage sozinho. Os
-        // OUTROS módulos somem por completo enquanto um estiver aberto —
-        // isso já é feito em CSS puro (`:has()`, ver tema-3d.css), não
-        // precisa de nada aqui.
+        // Sanfona: abrir um grupo fecha todos os outros. Os OUTROS módulos
+        // somem por completo enquanto um estiver aberto — isso já é feito
+        // em CSS puro (`:has()`, ver tema-3d.css), não precisa de nada aqui.
         if (el.open) {
           app.querySelectorAll(".barra-lateral-grupo").forEach((outro) => {
             if (outro !== el && outro.open) outro.open = false;
           });
         }
-        localStorage.setItem("alphafitus_grupos_menu", JSON.stringify(state.gruposMenuAbertos));
-      });
-    });
-    // Subgrupo (2º nível, ex.: "Shelf Life" dentro de "Qualidade") — só
-    // precisa lembrar se está aberto; não faz sanfona/foco (por ora só
-    // existe um por grupo, sem irmãos pra esconder).
-    app.querySelectorAll(".barra-lateral-subgrupo").forEach((el) => {
-      el.addEventListener("toggle", () => {
-        state.gruposMenuAbertos[el.dataset.subgrupo] = el.open;
-        localStorage.setItem("alphafitus_grupos_menu", JSON.stringify(state.gruposMenuAbertos));
       });
     });
 
