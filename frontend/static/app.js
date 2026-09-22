@@ -1513,9 +1513,16 @@
     const wrap = document.createElement("div");
     wrap.className = "fundo-modal";
     wrap.innerHTML = `<div class="modal${opcoes.largo ? " modal-largo" : ""}">${html}</div>`;
-    wrap.addEventListener("click", (e) => {
-      if (e.target === wrap) wrap.remove();
-    });
+    // Pedido do usuário (2026-09-22, modal de "Novo usuário"): clicar fora
+    // não pode fechar um formulário onde já se digitou nome/senha/etc —
+    // perde tudo sem querer. `travado: true` desliga esse fechamento por
+    // clique fora; o modal só fecha por uma ação explícita dentro dele
+    // (botão "Cancelar"/"Fechar", ou submeter o formulário).
+    if (!opcoes.travado) {
+      wrap.addEventListener("click", (e) => {
+        if (e.target === wrap) wrap.remove();
+      });
+    }
     document.body.appendChild(wrap);
     envolverTabelasComRolagem(wrap);
     return wrap;
@@ -2212,7 +2219,7 @@
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Criar</button>
         </div>
-      </form>`);
+      </form>`, { travado: true });
     const formulario = modal.querySelector("form[data-form='criar-usuario']");
     formulario._ajustadorFoto = ligarAjustadorFoto(formulario, "novo-usuario");
   }
