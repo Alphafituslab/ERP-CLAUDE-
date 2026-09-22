@@ -2128,6 +2128,32 @@
     return senha.split("").sort(() => Math.random() - 0.5).join("");
   }
 
+  // Fase 191c — pedido do usuário: mesmo modal de "senha provisória
+  // gerada" usado tanto por "Resetar senha" quanto por "Editar usuário"
+  // quando a pessoa também marca pra trocar a senha ali — extraído pra
+  // não duplicar o HTML nos dois lugares.
+  function mostrarModalSenhaProvisoriaGerada(resp, nome, celular, usuarioId) {
+    abrirModal(`
+      <h3>Senha provisória gerada</h3>
+      <p class="texto-suave">
+        Essa senha só aparece <strong>agora</strong> — não fica salva em nenhum lugar recuperável depois.
+        Copie e repasse com segurança pra <strong>${escapeHtml(nome)}</strong>.
+        No próximo login, ela será obrigada a trocar por uma senha escolhida por ela mesma.
+      </p>
+      <div class="campo">
+        <label>E-mail (login)</label>
+        <input type="text" value="${escapeHtml(resp.email)}" readonly onclick="this.select()">
+      </div>
+      <div class="campo">
+        <label>Senha provisória</label>
+        <input type="text" value="${escapeHtml(resp.senha_provisoria)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;">
+      </div>
+      <div class="rodape-modal">
+        ${celular ? `<button type="button" class="botao secundario" data-acao="enviar-credenciais-whatsapp" data-id="${usuarioId}" data-senha="${escapeHtml(resp.senha_provisoria)}">📲 Enviar por WhatsApp</button>` : ""}
+        <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
+      </div>`);
+  }
+
   function htmlCampoFuncionario(f, perfis, setores, funcoes, veSalario) {
     const jaEhUsuario = !!(f && f.usuario_id);
     const opcoesPerfis = (perfis || [])
@@ -2321,7 +2347,7 @@
     });
   }
 
-  function modalEditarUsuario(usuario) {
+  async function modalEditarUsuario(usuario) {
     // Pedido do usuário: poder trocar o Perfil aqui mesmo, sem abrir o
     // modal "Perfis" separado, pra ser mais rápido no dia a dia. É só a
     // troca simples de perfil (mesmos checkboxes de "Novo usuário") — o
@@ -2332,11 +2358,17 @@
     const opcoesPerfis = perfis
       .map((p) => `<label><input type="checkbox" name="perfil_ids" value="${p.id}" ${perfilIdsAtuais.has(p.id) ? "checked" : ""}> ${escapeHtml(p.nome)}</label>`)
       .join("");
+    // Fase 191c — pedido do usuário: "editar" tinha menos campos do que
+    // "criar" (faltava Celular e Função, que só dava pra completar depois
+    // em Funcionários) — agora tem os mesmos.
+    const funcoes = await chamarApi("/funcionarios/funcoes");
     const modal = abrirModal(`
       <h3>Editar usuário</h3>
       <form data-form="editar-usuario" data-id="${usuario.id}">
         <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(usuario.nome)}" required></div>
         <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(usuario.email)}" required></div>
+        <div class="campo"><label>Celular (WhatsApp, opcional)</label><input name="celular" value="${escapeHtml(usuario.celular || "")}" placeholder="48999998888"></div>
+        ${htmlSeletorCatalogo("funcao", usuario.funcao || "", funcoes, "Função", "ex.: Televendas")}
         <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoesPerfis || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div>
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Pra liberar/bloquear uma permissão específica só pra este usuário (ajuste fino), use o botão "Perfis" na lista.</div>
         </div>
@@ -2353,6 +2385,13 @@
           </div>
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">JPEG, PNG ou WEBP, até 2 MB. Deixe em branco pra manter a foto atual.</div>
           ${htmlAjustadorFoto("editar-usuario")}
+        </div>
+        <div class="campo">
+          <label><input type="checkbox" data-toggle-trocar-senha> Também gerar uma nova senha provisória pra esta pessoa</label>
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Deixe desmarcado se é só uma atualização de função/perfil — a senha atual continua valendo.</div>
+          <div data-bloco-trocar-senha style="display:none;margin-top:8px;">
+            <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Ao salvar, uma senha provisória nova será gerada e mostrada uma vez — a atual deixa de funcionar na hora.</div>
+          </div>
         </div>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
@@ -2376,6 +2415,12 @@
         if (inputArquivo.files && inputArquivo.files[0]) previaAntiga.style.display = "none";
       });
     }
+    ligarSeletorCatalogo(formulario, "funcao", "/funcionarios/funcoes");
+    const toggleTrocarSenha = formulario.querySelector("[data-toggle-trocar-senha]");
+    const blocoTrocarSenha = formulario.querySelector("[data-bloco-trocar-senha]");
+    toggleTrocarSenha.addEventListener("change", () => {
+      blocoTrocarSenha.style.display = toggleTrocarSenha.checked ? "block" : "none";
+    });
   }
 
   // Fase 184 — pedido do usuário: "dentro de um único, como exemplo
@@ -18854,25 +18899,7 @@
       case "resetar-senha-usuario": {
         const resp = await chamarApi(`/usuarios/${alvo.dataset.id}/resetar-senha`, { method: "POST" });
         fecharModais();
-        abrirModal(`
-          <h3>Senha provisória gerada</h3>
-          <p class="texto-suave">
-            Essa senha só aparece <strong>agora</strong> — não fica salva em nenhum lugar recuperável depois.
-            Copie e repasse com segurança pra <strong>${escapeHtml(alvo.dataset.nome)}</strong>.
-            No próximo login, ela será obrigada a trocar por uma senha escolhida por ela mesma.
-          </p>
-          <div class="campo">
-            <label>E-mail (login)</label>
-            <input type="text" value="${escapeHtml(resp.email)}" readonly onclick="this.select()">
-          </div>
-          <div class="campo">
-            <label>Senha provisória</label>
-            <input type="text" value="${escapeHtml(resp.senha_provisoria)}" readonly onclick="this.select()" style="font-family:ui-monospace,monospace;">
-          </div>
-          <div class="rodape-modal">
-            ${alvo.dataset.celular ? `<button type="button" class="botao secundario" data-acao="enviar-credenciais-whatsapp" data-id="${alvo.dataset.id}" data-senha="${escapeHtml(resp.senha_provisoria)}">📲 Enviar por WhatsApp</button>` : ""}
-            <button type="button" class="botao" data-acao="fechar-modal">Fechar</button>
-          </div>`);
+        mostrarModalSenhaProvisoriaGerada(resp, alvo.dataset.nome, alvo.dataset.celular, alvo.dataset.id);
         return;
       }
       case "enviar-credenciais-whatsapp": {
@@ -20646,14 +20673,19 @@
         return;
       }
       case "editar-usuario": {
-        const corpo = { nome: dados.get("nome"), email: dados.get("email") };
+        const corpo = {
+          nome: dados.get("nome"), email: dados.get("email"),
+          celular: (dados.get("celular") || "").trim() || null,
+        };
+        const funcaoEditada = (dados.get("funcao") || "").trim();
+        if (funcaoEditada && funcaoEditada !== "__novo__") corpo.funcao = funcaoEditada;
         const ajustadorFoto = form._ajustadorFoto;
         if (ajustadorFoto && ajustadorFoto.temImagem()) {
           corpo.foto_perfil = ajustadorFoto.obterDataUrl();
         } else if (dados.get("remover_foto")) {
           corpo.foto_perfil = null;
         }
-        await chamarApi(`/usuarios/${form.dataset.id}`, { method: "PUT", body: corpo });
+        const usuarioAtualizado = await chamarApi(`/usuarios/${form.dataset.id}`, { method: "PUT", body: corpo });
         // Pedido do usuário: trocar o Perfil direto aqui, sem abrir o modal
         // "Perfis" à parte — mesma chamada que aquele modal já usa; a
         // segregação de função (ninguém concede um perfil além do que já
@@ -20661,6 +20693,17 @@
         if (form.querySelector('[name="perfil_ids"]')) {
           const perfil_ids = dados.getAll("perfil_ids").map(Number);
           await chamarApi(`/usuarios/${form.dataset.id}/perfis`, { method: "PUT", body: { perfil_ids } });
+        }
+        // Fase 191c — pedido do usuário: "às vezes é só uma atualização de
+        // função e não precisa mudar a senha" — trocar senha aqui é OPT-IN
+        // (a caixinha "também gerar uma nova senha"), nunca automático.
+        // Reaproveita a MESMA rota de "Resetar senha" (mesmo hash forte,
+        // mesma exigência de trocar no primeiro login).
+        if (form.querySelector("[data-toggle-trocar-senha]")?.checked) {
+          const respSenha = await chamarApi(`/usuarios/${form.dataset.id}/resetar-senha`, { method: "POST" });
+          fecharModais();
+          mostrarModalSenhaProvisoriaGerada(respSenha, usuarioAtualizado.nome, usuarioAtualizado.celular, form.dataset.id);
+          return renderUsuarios(estaNaTelaMemorialDeUsuarios());
         }
         fecharModais();
         definirFlash("ok", "Usuário atualizado.");

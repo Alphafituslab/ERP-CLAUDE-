@@ -72,6 +72,12 @@ def obter(usuario_id):
         raise ApiError("Usuário não encontrado.", status=404)
     u = _publico(row)
     u["perfis"] = _perfis_do_usuario(conn, usuario_id)
+    # Fase 191c — pedido do usuário: "Editar" precisa vir com a Função já
+    # preenchida (vive em funcionarios.funcao, não em usuarios).
+    funcionario_row = conn.execute(
+        "SELECT funcao FROM funcionarios WHERE usuario_id = ?", (usuario_id,)
+    ).fetchone()
+    u["funcao"] = funcionario_row["funcao"] if funcionario_row else None
     return jsonify(u)
 
 
@@ -196,10 +202,20 @@ def editar(usuario_id):
     else:
         foto_perfil = row["foto_perfil"]
 
+    # Fase 191c — pedido do usuário: "Editar" ganhou os mesmos campos de
+    # "Criar" (Celular, Função) — só toca no que veio na requisição, pra
+    # não apagar o que já estava lá num PUT que só mexe em outra coisa.
+    celular = dados.get("celular", row["celular"])
+
     conn.execute(
-        "UPDATE usuarios SET nome = ?, email = ?, foto_perfil = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
-        (nome, email, foto_perfil, _now_iso(), usuario_atual["id"], usuario_id),
+        "UPDATE usuarios SET nome = ?, email = ?, celular = ?, foto_perfil = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
+        (nome, email, celular, foto_perfil, _now_iso(), usuario_atual["id"], usuario_id),
     )
+    if "funcao" in dados:
+        conn.execute(
+            "UPDATE funcionarios SET funcao = ? WHERE usuario_id = ?",
+            (dados.get("funcao"), usuario_id),
+        )
 
     novo_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
     novo = _publico(novo_row)
