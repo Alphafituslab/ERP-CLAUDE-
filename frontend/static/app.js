@@ -570,6 +570,7 @@
   // aparecer como o MESMO terminal) e persistido em localStorage.
   // ---------------------------------------------------------------------
   let timerHeartbeatTerminal = null;
+  let timerLembreteBackup = null;
 
   function obterTerminalUid() {
     let uid = localStorage.getItem("alphafitus_terminal_uid");
@@ -679,6 +680,52 @@
     timerHeartbeatTerminal = setInterval(enviarHeartbeatTerminal, 60000);
   }
 
+  // Fase 192 — pedido do usuário: "alertar o usuário que ele deve fazer
+  // um backup às 8:00 e outro às 16:00, assim sempre teremos backups
+  // extras em todos os computadores". Roda só neste navegador/Terminal
+  // (cada computador lembra por si, via localStorage — não é um alarme
+  // central), e só pra quem já vê o próprio botão de backup local (mesma
+  // permissão, mesmo requisito de navegador com File System Access API).
+  const HORARIOS_LEMBRETE_BACKUP = [8, 16];
+
+  function chaveLembreteBackupHoje(hora) {
+    const d = new Date();
+    return `lembrete-backup-mostrado-${d.getFullYear()}-${d.getMonth()}-${d.getDate()}-${hora}h`;
+  }
+
+  function mostrarLembreteBackup() {
+    abrirModal(`
+      <h3>💾 Hora do backup extra</h3>
+      <p class="texto-suave">
+        É um bom momento pra salvar um backup extra deste computador — leva só alguns
+        segundos e vai direto pra pasta configurada.
+      </p>
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Agora não</button>
+        <button type="button" class="botao" data-acao="salvar-backup-local-terminal">💾 Fazer backup agora</button>
+      </div>`);
+  }
+
+  function verificarLembreteBackup() {
+    if (!window.showDirectoryPicker || !temPermissao("sistema", "backup_completo")) return;
+    const horaAtual = new Date().getHours();
+    for (const horaAlvo of HORARIOS_LEMBRETE_BACKUP) {
+      if (horaAtual !== horaAlvo) continue;
+      const chave = chaveLembreteBackupHoje(horaAlvo);
+      let jaMostrado = false;
+      try { jaMostrado = localStorage.getItem(chave) === "1"; } catch { /* segue sem lembrar entre sessões */ }
+      if (jaMostrado) continue;
+      try { localStorage.setItem(chave, "1"); } catch { /* não crítico */ }
+      mostrarLembreteBackup();
+    }
+  }
+
+  function iniciarLembreteBackup() {
+    if (timerLembreteBackup) return; // já rodando, não duplica
+    verificarLembreteBackup();
+    timerLembreteBackup = setInterval(verificarLembreteBackup, 60000);
+  }
+
   // ---------------------------------------------------------------------
   // Roteador (hash simples, sem dependências)
   // ---------------------------------------------------------------------
@@ -764,6 +811,9 @@
     // iniciarHeartbeatTerminal): também se protege sozinha contra criar
     // dois timers numa mesma sessão.
     iniciarHeartbeatTerminal();
+    // Fase 192 — lembrete de backup extra às 8h e 16h (mesma proteção
+    // contra duplicar timer de iniciarHeartbeatTerminal).
+    iniciarLembreteBackup();
     // Fase 176 — pedido do usuário: saber em tempo real o que cada terminal
     // está fazendo, não só a cada 60s. Manda a tela atual a cada navegação,
     // além do heartbeat periódico de sempre — chamada "fire and forget",
