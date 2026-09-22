@@ -185,6 +185,7 @@ SCHEMA_FILES = [
     "schema_fase188.sql",  # Fase 188 — cadastro de Funcionários (separado de Usuários)
     "schema_fase189.sql",  # Fase 189 — catálogos de Setores e Funções (usados no cadastro de Funcionários)
     "schema_fase190.sql",  # Fase 190 — excluir (soft-delete) pedido de venda cancelado e não faturado
+    "schema_fase191.sql",  # Fase 191 — Função aplica Perfis padrão automaticamente ao criar usuário
 ]
 
 

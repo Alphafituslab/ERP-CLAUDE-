@@ -94,6 +94,9 @@ def criar():
     # provisória mostrada logo em seguida — sem precisar esperar a pessoa
     # cadastrar o próprio celular depois em "Minha Conta" (Fase 158).
     celular = (dados.get("celular") or "").strip() or None
+    # Fase 191 — pedido do usuário: dar pra escolher a Função já na criação
+    # do usuário (antes só dava pra completar depois em Funcionários).
+    funcao = (dados.get("funcao") or "").strip() or None
     conn = get_db()
 
     if not nome or not email or not senha:
@@ -153,8 +156,8 @@ def criar():
     funcionario_id = None
     if not dados.get("pular_criacao_funcionario"):
         cur_f = conn.execute(
-            "INSERT INTO funcionarios (nome, email, telefone, usuario_id, criado_por) VALUES (?, ?, ?, ?, ?)",
-            (nome, email, celular, novo_id, usuario_atual["id"]),
+            "INSERT INTO funcionarios (nome, email, telefone, funcao, usuario_id, criado_por) VALUES (?, ?, ?, ?, ?, ?)",
+            (nome, email, celular, funcao, novo_id, usuario_atual["id"]),
         )
         funcionario_id = cur_f.lastrowid
 

@@ -2235,8 +2235,9 @@
     ligarSeletorCatalogo(formEdicao, "funcao", "/funcionarios/funcoes");
   }
 
-  function modalNovoUsuario() {
+  async function modalNovoUsuario() {
     const perfis = state.cache.perfis || [];
+    const funcoes = await chamarApi("/funcionarios/funcoes");
     const opcoes = perfis
       .map((p) => `<label><input type="checkbox" name="perfil_ids" value="${p.id}"> ${escapeHtml(p.nome)}</label>`)
       .join("");
@@ -2255,7 +2256,13 @@
           </div>
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Gerada automaticamente pelo sistema — nunca digitada à mão, pra nunca sair parecida com a senha de quem está criando. O usuário será obrigado a trocá-la no primeiro login.</div>
         </div>
-        <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoes || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div></div>
+        ${htmlSeletorCatalogo("funcao", "", funcoes, "Função", "ex.: Televendas")}
+        <div class="texto-suave" style="margin-top:-10px;margin-bottom:10px;font-size:12px;">Escolher uma função já marca os Perfis salvos como padrão dela (se houver) — pode ajustar antes de criar.</div>
+        <div class="campo">
+          <label>Perfis</label>
+          <div class="grade-checkbox" data-grade-perfis>${opcoes || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div>
+          <button type="button" class="botao secundario pequeno" data-acao-local="salvar-perfis-padrao-funcao" style="margin-top:8px;">💾 Salvar estes perfis como padrão desta função</button>
+        </div>
         <div class="campo">
           <label>Foto (opcional)</label>
           <input type="file" accept="image/png,image/jpeg,image/webp" name="foto">
@@ -2269,6 +2276,7 @@
       </form>`, { travado: true });
     const formulario = modal.querySelector("form[data-form='criar-usuario']");
     formulario._ajustadorFoto = ligarAjustadorFoto(formulario, "novo-usuario");
+    ligarSeletorCatalogo(formulario, "funcao", "/funcionarios/funcoes");
     // Pedido do usuário (2026-09-22, achado real): esse campo antes era
     // digitado à mão pelo administrador, sem `autocomplete="new-password"`
     // — o navegador ofereceu (e o campo aceitou) a PRÓPRIA senha salva de
@@ -2279,6 +2287,37 @@
     campoSenha.value = gerarSenhaProvisoria();
     formulario.querySelector('[data-acao-local="gerar-senha"]').addEventListener("click", () => {
       campoSenha.value = gerarSenhaProvisoria();
+    });
+
+    // Fase 191 — pedido do usuário: "toda vez que colocar a função já
+    // aplica as liberações sem precisar também configurar". Escolher uma
+    // função busca os Perfis salvos como padrão dela e MARCA (nunca
+    // desmarca o que já estava marcado à mão) — e o botão "Salvar como
+    // padrão" grava o conjunto atual de Perfis marcados pra essa função,
+    // pra da próxima vez já vir pronto sozinho.
+    const campoFuncao = formulario.querySelector('[data-seletor-catalogo="funcao"]');
+    const gradePerfis = formulario.querySelector("[data-grade-perfis]");
+    campoFuncao.addEventListener("change", async () => {
+      const funcaoEscolhida = campoFuncao.value;
+      if (!funcaoEscolhida || funcaoEscolhida === "__novo__") return;
+      const resp = await chamarApi(`/funcionarios/funcao-perfis-padrao?funcao=${encodeURIComponent(funcaoEscolhida)}`);
+      (resp.perfil_ids || []).forEach((id) => {
+        const caixa = gradePerfis.querySelector(`input[value="${id}"]`);
+        if (caixa) caixa.checked = true;
+      });
+    });
+    formulario.querySelector('[data-acao-local="salvar-perfis-padrao-funcao"]').addEventListener("click", async (e) => {
+      const funcaoEscolhida = campoFuncao.value;
+      if (!funcaoEscolhida || funcaoEscolhida === "__novo__") {
+        definirFlash("erro", "Escolha (ou cadastre) uma função antes de salvar os perfis padrão dela.");
+        return;
+      }
+      const perfilIdsMarcados = Array.from(gradePerfis.querySelectorAll('input[name="perfil_ids"]:checked')).map((c) => Number(c.value));
+      await chamarApi("/funcionarios/funcao-perfis-padrao", { method: "PUT", body: { funcao: funcaoEscolhida, perfil_ids: perfilIdsMarcados } });
+      const botao = e.currentTarget;
+      const original = botao.textContent;
+      botao.textContent = "✓ Salvo";
+      setTimeout(() => { botao.textContent = original; }, 1500);
     });
   }
 
@@ -20573,9 +20612,10 @@
         const emailCriado = dados.get("email");
         const senhaCriada = dados.get("senha");
         const celularCriado = (dados.get("celular") || "").trim();
+        const funcaoCriada = (dados.get("funcao") || "").trim();
         const usuarioCriado = await chamarApi("/usuarios", {
           method: "POST",
-          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, celular: celularCriado || null, perfil_ids, foto_perfil },
+          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, celular: celularCriado || null, funcao: funcaoCriada || null, perfil_ids, foto_perfil },
         });
         fecharModais();
         await renderUsuarios(estaNaTelaMemorialDeUsuarios());

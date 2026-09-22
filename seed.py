@@ -1037,6 +1037,20 @@ def rodar_seed(conn=None, admin_email=None, admin_senha=None, imprimir=True):
             (u["nome"], u["email"], u["celular"], u["id"]),
         )
 
+    # Fase 191 — pedido do usuário: função "Televendas" já aplica os
+    # mesmos Perfis configurados manualmente pra Adrian/Andreia/Tabata
+    # (Vendedor + Memorial Técnico visualização restrita), sem precisar
+    # marcar um por um da próxima vez que contratar alguém pra essa
+    # função. Só semeia se os dois perfis existirem (nome pode ter sido
+    # renomeado) e nunca duplica (idempotente via UNIQUE(funcao, perfil_id)).
+    for nome_perfil in ("Vendedor", "Memorial Tecnico (visualizacao restrita)", "Memorial Técnico (visualização restrita)"):
+        perfil = conn.execute("SELECT id FROM perfis WHERE nome = ?", (nome_perfil,)).fetchone()
+        if perfil:
+            conn.execute(
+                "INSERT OR IGNORE INTO funcao_perfis_padrao (funcao, perfil_id) VALUES (?, ?)",
+                ("Televendas", perfil["id"]),
+            )
+
     conn.commit()
     if proprio_conn:
         conn.close()

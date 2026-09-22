@@ -76,6 +76,45 @@ def criar_funcao():
     return _catalogo_criar(get_db(), "catalogo_funcoes")
 
 
+# Fase 191 — pedido do usuário: "toda vez que colocar a função já aplica
+# as liberações sem precisar também configurar". `funcao` bate por TEXTO
+# (mesmo espírito de `funcionarios.funcao` — sem FK), então funciona tanto
+# pra função já cadastrada no catálogo quanto pra uma digitada na hora.
+@bp.get("/funcao-perfis-padrao")
+@requires_permission("usuarios", "cadastrar")
+def obter_funcao_perfis_padrao():
+    funcao = (request.args.get("funcao") or "").strip()
+    if not funcao:
+        return jsonify({"perfil_ids": []})
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT perfil_id FROM funcao_perfis_padrao WHERE funcao = ?", (funcao,)
+    ).fetchall()
+    return jsonify({"perfil_ids": [r["perfil_id"] for r in rows]})
+
+
+@bp.put("/funcao-perfis-padrao")
+@requires_permission("perfis", "editar")
+def definir_funcao_perfis_padrao():
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    funcao = (dados.get("funcao") or "").strip()
+    perfil_ids = dados.get("perfil_ids") or []
+    if not funcao:
+        raise ApiError("Informe a função.", status=400)
+    conn = get_db()
+    # Substitui de vez (não soma) — "salvar como padrão desta função" no
+    # front sempre manda o conjunto completo que está marcado na hora,
+    # nunca só o que mudou.
+    conn.execute("DELETE FROM funcao_perfis_padrao WHERE funcao = ?", (funcao,))
+    for perfil_id in perfil_ids:
+        conn.execute(
+            "INSERT INTO funcao_perfis_padrao (funcao, perfil_id, criado_por) VALUES (?, ?, ?)",
+            (funcao, perfil_id, usuario_atual["id"]),
+        )
+    return jsonify({"ok": True, "funcao": funcao, "perfil_ids": perfil_ids})
+
+
 def _now_iso():
     return datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
