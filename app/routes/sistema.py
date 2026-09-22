@@ -86,6 +86,41 @@ def _gerar_backup_bytes(conn_origem: sqlite3.Connection) -> bytes:
         os.remove(caminho_tmp)
 
 
+def _verificar_backup_erp_bytes(dados_backup: bytes) -> None:
+    """Prova de verdade de que o backup do ERP restaura — abre uma cópia
+    TEMPORÁRIA e isolada (nunca o arquivo real em uso) com a chave de
+    criptografia de verdade e roda uma consulta real. `conn.backup()` só
+    prova que a API não levantou exceção; isto prova que o arquivo
+    resultante é um banco SQLCipher válido e legível com dado dentro."""
+    descritor, caminho_tmp = tempfile.mkstemp(suffix=".db", prefix="alphafitus_verif_")
+    os.close(descritor)
+    try:
+        with open(caminho_tmp, "wb") as arquivo:
+            arquivo.write(dados_backup)
+        conn_verif = sqlite3.connect(caminho_tmp)
+        try:
+            conn_verif.execute(f"PRAGMA key = '{db_module._obter_chave_criptografia()}'")
+            total = conn_verif.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+        finally:
+            conn_verif.close()
+        if not total or total < 1:
+            raise ApiError(
+                "O backup do ERP foi gerado mas não passou na verificação (tabela de usuários vazia). "
+                "Tente novamente.",
+                status=500,
+            )
+    except ApiError:
+        raise
+    except Exception as erro:
+        raise ApiError(
+            f"O backup do ERP foi gerado mas não passou na verificação de integridade ({erro}). "
+            "Tente novamente.",
+            status=500,
+        )
+    finally:
+        os.remove(caminho_tmp)
+
+
 # Fase 192 — pedido do usuário (2026-09-22): "não quero coisas separadas,
 # quero um backup só" — este botão baixava só o banco do ERP; agora baixa
 # UM ÚNICO arquivo .tar.gz com o ERP + Memorial + Protocolo + HPLC +
@@ -122,6 +157,15 @@ def baixar_backup_completo():
     # sai incluindo esse próprio acesso, não uma versão um instante atrasada.
     conn.commit()
     dados_backup_erp = _gerar_backup_bytes(conn)
+
+    # Pedido do usuário (2026-09-22): "os backups têm que ser impecáveis"
+    # — verificação REAL do pedaço do ERP também, não só confiar que
+    # `conn.backup()` não levantou exceção. Como é SQLCipher, o script
+    # bash do cron não consegue fazer isso (não tem a chave) — mas aqui,
+    # dentro do próprio processo do ERP, a chave já está disponível, então
+    # dá pra abrir a cópia de verdade e rodar uma consulta real antes de
+    # aceitar o arquivo.
+    _verificar_backup_erp_bytes(dados_backup_erp)
 
     os.makedirs(_PASTA_BACKUP_MANUAL, exist_ok=True)
     caminho_erp = os.path.join(_PASTA_BACKUP_MANUAL, "erp.db")
