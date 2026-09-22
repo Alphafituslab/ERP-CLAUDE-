@@ -226,6 +226,14 @@ end;
 function ShouldSkipPage(PageID: Integer): Boolean;
 begin
   Result := False;
+  // Pedido do usuário (2026-09-22): este instalador agora só faz Servidor
+  // — a página "Servidor ou Terminal?" nunca deve aparecer pra ninguém
+  // (Terminal virou um instalador PRÓPRIO, separado, no site de
+  // downloads). `ModoPage.SelectedValueIndex` já nasce em 0 (Servidor) e,
+  // como a página nunca é visitada, nunca muda — `EhServidor()`/
+  // `EhTerminal()` continuam funcionando exatamente como antes em todo o
+  // resto do script, sem precisar tocar em mais nada.
+  if PageID = ModoPage.ID then Result := True;
   if (PageID = AdminPage.ID) and EhTerminal() then Result := True;
   if (PageID = CodigoServidorPage.ID) and EhTerminal() then Result := True;
 end;
@@ -361,9 +369,11 @@ begin
   // incluído, e não depende de nada que aconteça aqui.
   if WizardSilent() then Exit;
 
-  // Fase 177 — ao SAIR da ModoPage com Servidor escolhido, pede o código
-  // por e-mail antes de deixar prosseguir pra tela de digitar o código.
-  if (CurPageID = ModoPage.ID) and EhServidor() then
+  // Fase 177 (ajustada 2026-09-22, ModoPage não é mais visitada) — pede
+  // o código por e-mail ao sair da tela de boas-vindas, já que agora é
+  // sempre Servidor (a página de escolha some via ShouldSkipPage, mas
+  // continua existindo como objeto — só nunca é mostrada nem clicada).
+  if (CurPageID = wpWelcome) and EhServidor() then
   begin
     Result := SolicitarCodigoInstalacaoServidor(MensagemErro);
     if not Result then
