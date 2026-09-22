@@ -272,7 +272,9 @@
   // pedido do usuário — qualquer backup baixado neste Terminal, por
   // qualquer botão, cai na mesma pasta fixa, com a mesma retenção de 3.
   async function gravarBlobNaPastaComRetencao(handle, blob) {
-    const nomeArquivo = `${PREFIXO_BACKUP_LOCAL_TERMINAL}${new Date().toISOString().replace(/[:.]/g, "-")}.db`;
+    // Fase 192 — pedido do usuário: virou um pacote único (.tar.gz) com
+    // ERP+Memorial+Protocolo+HPLC+Whatts Inbox, não mais só o .db do ERP.
+    const nomeArquivo = `${PREFIXO_BACKUP_LOCAL_TERMINAL}${new Date().toISOString().replace(/[:.]/g, "-")}.tar.gz`;
     const arquivoHandle = await handle.getFileHandle(nomeArquivo, { create: true });
     const writable = await arquivoHandle.createWritable();
     await writable.write(blob);
@@ -280,9 +282,11 @@
 
     // Nomes são timestamps ISO — ordenar o texto já ordena por data.
     // Mantém só os MAX_BACKUPS_LOCAIS_TERMINAL mais recentes, apaga o resto.
+    // Aceita tanto o formato novo (.tar.gz) quanto o antigo (.db) que
+    // possa já existir na pasta de quem usava o sistema antes desta troca.
     const nomesExistentes = [];
     for await (const nome of handle.keys()) {
-      if (nome.startsWith(PREFIXO_BACKUP_LOCAL_TERMINAL) && nome.endsWith(".db")) nomesExistentes.push(nome);
+      if (nome.startsWith(PREFIXO_BACKUP_LOCAL_TERMINAL) && (nome.endsWith(".tar.gz") || nome.endsWith(".db"))) nomesExistentes.push(nome);
     }
     nomesExistentes.sort();
     const excedentes = nomesExistentes.slice(0, Math.max(0, nomesExistentes.length - MAX_BACKUPS_LOCAIS_TERMINAL));
@@ -7828,7 +7832,7 @@
                — gerada sem precisar parar o servidor, e sem alterar nenhum dado.
              </p>
              <div style="display:flex;gap:8px;flex-wrap:wrap;">
-               <button class="botao secundario" data-acao="baixar-backup-sistema">Baixar Backup Completo (.db)</button>
+               <button class="botao secundario" data-acao="baixar-backup-sistema">Baixar Backup Completo (Memorial+Protocolo+HPLC+Whatts+ERP)</button>
                <button class="botao" data-acao="executar-backup-agora">Executar backup agora (nuvem + e-mail configurados)</button>
              </div>
            </div>
@@ -18626,7 +18630,7 @@
       case "baixar-backup-sistema": {
         const agora = new Date();
         const dois = (n) => String(n).padStart(2, "0");
-        const nomeArquivo = `Alphafitus-Backup-Completo-${agora.getFullYear()}-${dois(agora.getMonth() + 1)}-${dois(agora.getDate())}_${dois(agora.getHours())}h${dois(agora.getMinutes())}min.db`;
+        const nomeArquivo = `Alphafitus-Backup-Completo-${agora.getFullYear()}-${dois(agora.getMonth() + 1)}-${dois(agora.getDate())}_${dois(agora.getHours())}h${dois(agora.getMinutes())}min.tar.gz`;
         // Fase 180 — busca uma vez só (gerar o backup é uma operação real
         // no banco, não vale duplicar) e usa o MESMO blob tanto pro
         // download normal quanto pra também salvar na pasta fixa deste

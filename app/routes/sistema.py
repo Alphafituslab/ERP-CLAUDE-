@@ -37,6 +37,8 @@ de um clique dentro do sistema rodando.
 import datetime
 import io
 import os
+import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -84,12 +86,29 @@ def _gerar_backup_bytes(conn_origem: sqlite3.Connection) -> bytes:
         os.remove(caminho_tmp)
 
 
+# Fase 192 — pedido do usuário (2026-09-22): "não quero coisas separadas,
+# quero um backup só" — este botão baixava só o banco do ERP; agora baixa
+# UM ÚNICO arquivo .tar.gz com o ERP + Memorial + Protocolo + HPLC +
+# Whatts Inbox dentro, direto pro computador de quem clicou (mesmo
+# mecanismo de sempre: File System Access API no frontend, nada mudou lá).
+#
+# O ERP NÃO tem (e não deve ter) acesso ao Docker nem aos dados dos outros
+# sistemas por si só — rodar isso exigiria colocar o usuário do processo
+# no grupo `docker`, o que equivale a acesso root da VPS inteira. Em vez
+# disso, um script à parte (`backup_manual_outros_sistemas.sh`), dono
+# root, sem parâmetros, é chamado via UMA regra de sudo mínima
+# (/etc/sudoers.d/alphafitus-erp-backup-manual) que libera SÓ esse comando
+# exato — nenhum outro privilégio. O pedaço do ERP continua gerado aqui
+# mesmo, sem privilégio nenhum, como sempre foi.
+_PASTA_BACKUP_MANUAL = "/opt/alphafitus-erp/data/backup_manual"
+
+
 @bp.get("/backup")
 @requires_permission("sistema", "backup_completo")
 def baixar_backup_completo():
-    """Baixa uma cópia de backup do banco de dados INTEIRO (todos os
-    módulos) — nunca altera nenhum dado de negócio, é só uma leitura (a
-    API de backup do sqlite3 nunca escreve na conexão de origem)."""
+    """Baixa um pacote único (.tar.gz) com o backup do ERP + dos outros 4
+    sistemas (Memorial, Protocolo, HPLC, Whatts Inbox) — nunca altera
+    nenhum dado de negócio, só leitura em todos os bancos."""
     usuario_atual = g.usuario_atual
     conn = get_db()
     # `conn.backup()` trava indefinidamente (fica repetindo a tentativa
@@ -102,16 +121,54 @@ def baixar_backup_completo():
     # explícito aqui resolve isso — e como consequência boa, o backup já
     # sai incluindo esse próprio acesso, não uma versão um instante atrasada.
     conn.commit()
-    dados_backup = _gerar_backup_bytes(conn)
+    dados_backup_erp = _gerar_backup_bytes(conn)
+
+    os.makedirs(_PASTA_BACKUP_MANUAL, exist_ok=True)
+    caminho_erp = os.path.join(_PASTA_BACKUP_MANUAL, "erp.db")
+    with open(caminho_erp, "wb") as arquivo:
+        arquivo.write(dados_backup_erp)
+
+    resultado = subprocess.run(
+        ["sudo", "/opt/backup-scripts-comuns/backup_manual_outros_sistemas.sh"],
+        capture_output=True, text=True, timeout=180,
+    )
+    if resultado.returncode != 0:
+        try:
+            os.remove(caminho_erp)
+        except OSError:
+            pass
+        raise ApiError(
+            "Não foi possível reunir o backup dos outros sistemas (Memorial/Protocolo/HPLC/Whatts). "
+            "Tente novamente em alguns minutos.",
+            status=500,
+        )
+
+    agora = datetime.datetime.utcnow().strftime("%Y-%m-%d_%Hh%Mmin")
+    nome_arquivo = f"Alphafitus-Backup-Completo_{agora}.tar.gz"
+    nomes_internos = ("erp.db", "protocolo.dump", "memorial.dump", "hplc.dump", "whatts-inbox.db")
+    caminho_pacote = os.path.join(_PASTA_BACKUP_MANUAL, "pacote_final.tar.gz")
+    try:
+        with tarfile.open(caminho_pacote, "w:gz") as tar:
+            for nome_interno in nomes_internos:
+                caminho = os.path.join(_PASTA_BACKUP_MANUAL, nome_interno)
+                if os.path.exists(caminho):
+                    tar.add(caminho, arcname=nome_interno)
+        with open(caminho_pacote, "rb") as arquivo:
+            dados_backup = arquivo.read()
+    finally:
+        for nome_interno in nomes_internos + ("pacote_final.tar.gz",):
+            caminho = os.path.join(_PASTA_BACKUP_MANUAL, nome_interno)
+            try:
+                os.remove(caminho)
+            except OSError:
+                pass
 
     audit.registrar(
         conn, tabela="sistema_backup", registro_id=None, usuario_id=usuario_atual["id"],
-        acao="backup_sistema_exportado", valor_novo={"tamanho_bytes": len(dados_backup)},
+        acao="backup_sistema_exportado", valor_novo={"tamanho_bytes": len(dados_backup), "consolidado": True},
         ip=client_ip(), dispositivo=client_device(),
     )
 
-    agora = datetime.datetime.utcnow().strftime("%Y-%m-%d_%Hh%Mmin")
-    nome_arquivo = f"Alphafitus-Backup-Completo-{agora}.db"
     return Response(
         dados_backup,
         mimetype="application/octet-stream",
