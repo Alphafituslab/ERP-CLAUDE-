@@ -694,16 +694,47 @@
   }
 
   function mostrarLembreteBackup() {
-    abrirModal(`
+    // Pedido do usuário (2026-09-23): ao clicar em "Fazer backup agora"
+    // aqui dentro, mostrar que concluiu e fechar sozinho — em vez de
+    // reaproveitar a ação genérica da barra lateral (que mostra o
+    // progresso numa área do rodapé escondida atrás deste modal, e depois
+    // abre um SEGUNDO modal de sucesso por cima). Este modal cuida do
+    // próprio ciclo: Salvando… → ✅ Concluído → fecha sozinho.
+    const modal = abrirModal(`
       <h3>💾 Hora do backup extra</h3>
-      <p class="texto-suave">
-        É um bom momento pra salvar um backup extra deste computador — leva só alguns
-        segundos e vai direto pra pasta configurada.
-      </p>
-      <div class="rodape-modal">
-        <button type="button" class="botao secundario" data-acao="fechar-modal">Agora não</button>
-        <button type="button" class="botao" data-acao="salvar-backup-local-terminal">💾 Fazer backup agora</button>
+      <div data-conteudo-lembrete-backup>
+        <p class="texto-suave">
+          É um bom momento pra salvar um backup extra deste computador — leva só alguns
+          segundos e vai direto pra pasta configurada.
+        </p>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Agora não</button>
+          <button type="button" class="botao" data-acao-local="fazer-backup-lembrete">💾 Fazer backup agora</button>
+        </div>
       </div>`);
+    const conteudo = modal.querySelector("[data-conteudo-lembrete-backup]");
+    const botao = modal.querySelector('[data-acao-local="fazer-backup-lembrete"]');
+    botao.addEventListener("click", async () => {
+      botao.disabled = true;
+      botao.textContent = "Salvando…";
+      try {
+        const resultado = await salvarBackupLocalNesteTerminal(false, () => {});
+        const tamanhoLegivel = resultado.tamanhoBytes >= 1024 * 1024
+          ? `${(resultado.tamanhoBytes / (1024 * 1024)).toFixed(1)} MB`
+          : `${Math.max(1, Math.round(resultado.tamanhoBytes / 1024))} KB`;
+        conteudo.innerHTML = `
+          <p style="color:#00af6b;font-weight:600;">✅ Backup concluído com sucesso.</p>
+          <p class="texto-suave" style="font-size:12px;">${escapeHtml(resultado.arquivo)} (${tamanhoLegivel})</p>`;
+        setTimeout(() => fecharModais(), 1400);
+      } catch (erro) {
+        if (erro && erro.name === "AbortError") { fecharModais(); return; }
+        conteudo.innerHTML = `
+          <p class="mensagem-erro">${escapeHtml(erro.message || "Não foi possível salvar o backup.")}</p>
+          <div class="rodape-modal">
+            <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+          </div>`;
+      }
+    });
   }
 
   function verificarLembreteBackup() {
