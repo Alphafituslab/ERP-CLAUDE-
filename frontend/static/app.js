@@ -589,12 +589,18 @@
   }
 
   // Pedido do usuário (2026-09-14): "Servidor conectado" confundia com
-  // "este computador É o servidor" — quem pode administrar terminais
-  // (ver renderTerminais/temPermissao) passa a ver o número/nome do
-  // PRÓPRIO terminal e quem está logado nele; quem não tem essa
-  // permissão continua vendo só o texto genérico de sempre.
+  // "este computador É o servidor" — mostra o número/nome do PRÓPRIO
+  // terminal e quem está logado nele.
+  // Achado real (2026-09-23): isso só aparecia pra quem tinha permissão
+  // de ADMINISTRAR terminais (bloquear/desbloquear) — todo mundo mais
+  // (Adrian, Andreia, Tabata, Edson...) caía no texto genérico "Servidor
+  // conectado", mesmo com o terminal certinho registrado no banco central
+  // (só a ETIQUETA que não aparecia, o dado ia pro lugar certo sempre).
+  // Pedido do usuário: cada terminal instalado deve mostrar seu próprio
+  // número pra QUALQUER pessoa logada nele, não só pra admin — cada um só
+  // vê o PRÓPRIO terminal (vem do heartbeat da própria sessão), nunca o
+  // de outra pessoa, então não há nada de sensível em mostrar pra todos.
   function rotuloTerminalProprio() {
-    if (!temPermissao("terminais", "bloquear")) return null;
     const s = state.statusServidor;
     if (s.terminalId == null) return null;
     const numero = `Terminal Nº ${String(s.terminalId).padStart(3, "0")}`;
