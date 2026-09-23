@@ -18,6 +18,12 @@ PASTA="/opt/alphafitus-erp/data/backup_manual"
 MAX_TENTATIVAS=2
 TIMEOUT_COMANDO=120
 mkdir -p "$PASTA"
+# Achado numa auditoria de seguranca (2026-09-23): esta pasta guarda por
+# alguns segundos copias em TEXTO PURO dos bancos (antes do .tar.gz
+# final). Forca 700 sempre, independente de qual dos dois lados (este
+# script root, ou o processo Python do ERP) criou a pasta primeiro.
+chown alphafitus-erp:alphafitus-erp "$PASTA"
+chmod 700 "$PASTA"
 
 limpar_pasta() {
   rm -f "$PASTA"/protocolo.dump "$PASTA"/memorial.dump "$PASTA"/hplc.dump "$PASTA"/whatts-inbox.db

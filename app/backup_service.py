@@ -319,16 +319,28 @@ def executar_backup(conn, usuario_id, origem):
     backup uma vez só e dispara os dois destinos ATIVOS em paralelo (ver
     nota de escopo #2 em migrations/schema_fase67.sql) — um destino
     desligado nem entra na lista de threads, então nunca aparece como
-    "tentado" no histórico. Sempre grava uma linha em
-    `backups_executados`, mesmo se AMBOS os destinos falharem (a geração
-    do backup em si é sempre bem-sucedida se chegou até aqui — só o
-    ENVIO pode falhar)."""
+    "tentado" no histórico.
+
+    Pedido do usuário (2026-09-22/23): "os backups têm que ser
+    impecáveis" — antes de disparar qualquer destino (nuvem/e-mail/local/
+    Drive/WhatsApp), os bytes gerados passam por uma verificação REAL
+    (`_verificar_backup_erp_bytes`: abre a cópia com a chave de
+    criptografia de verdade e roda uma consulta) — não só confiar que
+    `conn.backup()` não levantou exceção. Isto é o ÚNICO lugar que
+    consegue verificar de verdade o pedaço do ERP: o script bash do
+    backup consolidado (Memorial+Protocolo+HPLC+Whatts+ERP) não tem a
+    chave SQLCipher, só reaproveita o arquivo que ESTA função já validou
+    e subiu pra nuvem. Se a verificação falhar, a exceção sobe pro
+    chamador (rota manual devolve erro claro; o agendador em segundo
+    plano já tem seu próprio try/except que não deixa a falha derrubar o
+    loop, e tenta de novo no próximo horário ativo)."""
     from . import notificacoes_service
-    from .routes.sistema import _gerar_backup_bytes
+    from .routes.sistema import _gerar_backup_bytes, _verificar_backup_erp_bytes
 
     config = obter_configuracao(conn)
     conn.commit()  # mesmo motivo do commit em baixar_backup_completo (app/routes/sistema.py)
     dados_backup = _gerar_backup_bytes(conn)
+    _verificar_backup_erp_bytes(dados_backup)
     agora = _now_iso()
     nome_arquivo = f"Alphafitus-Backup-Completo-{agora.replace(':', '-')}.db"
     # Lida com a conexão AQUI, na thread principal — as threads dos dois

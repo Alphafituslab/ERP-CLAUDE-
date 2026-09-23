@@ -167,7 +167,14 @@ def baixar_backup_completo():
     # aceitar o arquivo.
     _verificar_backup_erp_bytes(dados_backup_erp)
 
-    os.makedirs(_PASTA_BACKUP_MANUAL, exist_ok=True)
+    # Achado numa auditoria de segurança (2026-09-23): esta pasta guarda,
+    # por alguns segundos, cópias em texto puro dos bancos de Memorial/
+    # Protocolo/HPLC/Whatts (o script privilegiado grava ali antes do
+    # `.tar.gz` final). `os.makedirs` sem `mode` explícito herda o umask
+    # do processo — em vez de confiar nisso, força 700 (só o dono lê) e
+    # corrige de propósito mesmo se a pasta já existir com outro modo.
+    os.makedirs(_PASTA_BACKUP_MANUAL, mode=0o700, exist_ok=True)
+    os.chmod(_PASTA_BACKUP_MANUAL, 0o700)
     caminho_erp = os.path.join(_PASTA_BACKUP_MANUAL, "erp.db")
     with open(caminho_erp, "wb") as arquivo:
         arquivo.write(dados_backup_erp)
