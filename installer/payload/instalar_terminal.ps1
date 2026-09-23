@@ -11,12 +11,17 @@
 #
 #  Este computador NAO instala Flask nem banco de dados - so cria um
 #  atalho que abre o navegador apontado para o SERVIDOR de verdade.
-#  Pode ser chamado com -Servidor "http://192.168.1.10:5000" (usado
-#  pelo instalador principal, modo Terminal) ou sem parametro nenhum
-#  (pede o endereco interativamente, mesmo jeito que sempre foi).
+#
+#  Fase 157b (2026-09) - o Servidor oficial migrou de vez para a nuvem
+#  (erp.alphafitus.com.br) - nao existe mais "cada empresa tem seu IP
+#  local". Pedido do usuario (2026-09-23, achado real: instalador do
+#  Terminal ainda perguntava "Endereco do servidor" numa tela de cmd
+#  preta, sem ninguem saber o que digitar): o padrao agora e SEMPRE o
+#  servidor oficial, sem perguntar nada - so aceita -Servidor explicito
+#  como excecao manual (ex.: um ambiente de teste separado).
 # ============================================================
 param(
-    [string]$Servidor = ''
+    [string]$Servidor = 'https://erp.alphafitus.com.br'
 )
 
 $ErrorActionPreference = 'Stop'

@@ -427,16 +427,17 @@ body {
    solto sem caixinha, destoando dos irmãos ao redor ("Configuração de
    Qualidade" acima, "Memorial Técnico" dentro dele) que são pílulas
    `.link-nav` de verdade — mesmo fundo/sombra/hover de `.link-nav` aqui,
-   só que aplicado ao <summary>, que não é um link (não tem `.link-nav`). */
+   só que aplicado ao <summary>, que não é um link (não tem `.link-nav`).
+   Achado (2026-09-23): a tentativa original também trocou a fonte pra
+   Outfit 10px maiúsculo com letter-spacing — ficou parecendo rótulo de
+   categoria (tipo ".toc-secao"), não uma pílula de menu igual às
+   vizinhas. Removido: agora herda a MESMA fonte/tamanho de `.link-nav`
+   (13px, sem caixa alta), só a forma de pílula continua diferente. */
 .barra-lateral-subgrupo summary {
   border-radius: 999px;
   margin: 0;
   padding: 8px 12px 8px 28px;
-  font-family: "Outfit", -apple-system, "Segoe UI", sans-serif;
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.9px;
-  text-transform: uppercase;
+  font-size: 13px;
   color: rgba(255, 255, 255, 0.5);
   background: rgba(255, 255, 255, 0.045);
   box-shadow: var(--brilho-topo-fraco);
