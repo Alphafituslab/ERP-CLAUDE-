@@ -1414,7 +1414,12 @@ tr.linha-selecionada td { background: #e6eef7; }
 }
 .agenda-equipe-dia:hover { background: color-mix(in srgb, var(--azul) 5%, transparent); }
 .agenda-equipe-dia:nth-child(7n) { border-right: none; }
-.agenda-equipe-dia-fora { opacity: .4; }
+/* Achado real (2026-09-24): "opacity" no container inteiro esmaecia
+   também os compromissos dentro da célula (um evento de verdade, marcado
+   nesse dia, não pode ficar difícil de ver só porque a célula é do
+   mês vizinho) — agora só o NÚMERO do dia fica esmaecido, o chip do
+   compromisso sempre mantém a cor cheia. */
+.agenda-equipe-dia-fora .agenda-equipe-dia-numero { opacity: .4; }
 .agenda-equipe-dia-hoje { background: color-mix(in srgb, var(--azul) 10%, transparent); }
 .agenda-equipe-dia-numero { font-size: 13px; font-weight: 700; color: var(--texto-suave); }
 .agenda-equipe-dia-hoje .agenda-equipe-dia-numero {
