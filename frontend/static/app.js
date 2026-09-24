@@ -2322,6 +2322,11 @@
           <div class="campo" style="flex:1;min-width:140px;"><label>Repetir quantas vezes</label><input type="number" min="1" name="lembrete_repeticoes" value="${evento?.lembrete_repeticoes ?? 1}"></div>
           <div class="campo" style="flex:1;min-width:140px;"><label>Intervalo entre avisos (min)</label><input type="number" min="1" name="lembrete_intervalo_min" value="${evento?.lembrete_intervalo_min ?? 10}"></div>
         </div>
+        <div class="campo" style="margin-top:8px;">
+          <label>Mensagem do lembrete (opcional)</label>
+          <textarea name="lembrete_mensagem_custom" rows="3" placeholder="Deixe em branco pra usar a mensagem automática (motivo + data + local + descrição)">${escapeHtml(evento?.lembrete_mensagem_custom || "")}</textarea>
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Se escrever aqui, essa é a mensagem exata que vai no chat interno/WhatsApp/push — em vez da automática.</div>
+        </div>
       </div>
       <input type="hidden" name="forcar" value="">`;
   }
@@ -2507,6 +2512,7 @@
       lembrete_antecedencia_min: Number(dados.get("lembrete_antecedencia_min")) || 0,
       lembrete_repeticoes: Math.max(1, Number(dados.get("lembrete_repeticoes")) || 1),
       lembrete_intervalo_min: Math.max(1, Number(dados.get("lembrete_intervalo_min")) || 10),
+      lembrete_mensagem_custom: (dados.get("lembrete_mensagem_custom") || "").trim() || null,
     };
   }
 

@@ -92,6 +92,7 @@ CAMPOS_EVENTO = (
     "titulo", "descricao", "data_inicio", "data_fim", "local_texto", "cor",
     "usuario_dono_id", "notificar_chat_interno", "notificar_whatsapp", "notificar_push",
     "lembrete_antecedencia_min", "lembrete_repeticoes", "lembrete_intervalo_min",
+    "lembrete_mensagem_custom",
 )
 
 # Defaults explícitos: o corpo da requisição pode simplesmente não mandar um
@@ -171,6 +172,12 @@ def excluir_evento(conn, evento_id: int):
 # ─── Envio de lembretes ─────────────────────────────────────────────────────
 
 def _texto_lembrete(evento: dict) -> str:
+    # Fase 196 — pedido do usuário: poder escrever a própria mensagem do
+    # lembrete. Quando preenchida, vai exatamente como digitada (sem
+    # anexar título/data/local automaticamente por cima) — "eu poder
+    # escrever o que eu quero e assim vai conforme eu escolher".
+    if evento.get("lembrete_mensagem_custom"):
+        return evento["lembrete_mensagem_custom"]
     inicio = datetime.datetime.fromisoformat(evento["data_inicio"])
     linhas = [f"🗓️ Lembrete: {evento['titulo']}", f"📅 {inicio.strftime('%d/%m/%Y às %H:%M')}"]
     if evento.get("local_texto"):
