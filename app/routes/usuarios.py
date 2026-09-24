@@ -100,6 +100,12 @@ def criar():
     # provisória mostrada logo em seguida — sem precisar esperar a pessoa
     # cadastrar o próprio celular depois em "Minha Conta" (Fase 158).
     celular = (dados.get("celular") or "").strip() or None
+    # Fase 194 — pedido do usuário: o chat interno (Whatts Inbox) é um
+    # sistema SEPARADO com conta própria por colaborador — o e-mail de
+    # LOGIN do ERP nem sempre é o mesmo cadastrado lá. Campo opcional; se
+    # vazio, a Agenda usa o e-mail de login do ERP mesmo (comportamento
+    # de antes desta fase).
+    email_chat_interno = (dados.get("email_chat_interno") or "").strip().lower() or None
     # Fase 191 — pedido do usuário: dar pra escolher a Função já na criação
     # do usuário (antes só dava pra completar depois em Funcionários).
     funcao = (dados.get("funcao") or "").strip() or None
@@ -130,10 +136,10 @@ def criar():
     senha_hash = security.hash_password(senha)
     cur = conn.execute(
         """
-        INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar, criado_por, foto_perfil, celular)
-        VALUES (?, ?, ?, 1, ?, ?, ?)
+        INSERT INTO usuarios (nome, email, senha_hash, senha_deve_trocar, criado_por, foto_perfil, celular, email_chat_interno)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?)
         """,
-        (nome, email, senha_hash, usuario_atual["id"], foto_perfil, celular),
+        (nome, email, senha_hash, usuario_atual["id"], foto_perfil, celular, email_chat_interno),
     )
     novo_id = cur.lastrowid
 
@@ -206,10 +212,13 @@ def editar(usuario_id):
     # "Criar" (Celular, Função) — só toca no que veio na requisição, pra
     # não apagar o que já estava lá num PUT que só mexe em outra coisa.
     celular = dados.get("celular", row["celular"])
+    email_chat_interno = dados.get("email_chat_interno", row["email_chat_interno"])
+    if email_chat_interno:
+        email_chat_interno = email_chat_interno.strip().lower() or None
 
     conn.execute(
-        "UPDATE usuarios SET nome = ?, email = ?, celular = ?, foto_perfil = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
-        (nome, email, celular, foto_perfil, _now_iso(), usuario_atual["id"], usuario_id),
+        "UPDATE usuarios SET nome = ?, email = ?, celular = ?, foto_perfil = ?, email_chat_interno = ?, atualizado_em = ?, atualizado_por = ? WHERE id = ?",
+        (nome, email, celular, foto_perfil, email_chat_interno, _now_iso(), usuario_atual["id"], usuario_id),
     )
     if "funcao" in dados:
         conn.execute(

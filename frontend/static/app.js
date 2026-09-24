@@ -2707,6 +2707,9 @@
         <div class="campo"><label>Celular (WhatsApp, opcional)</label><input name="celular" autocomplete="off" placeholder="48999998888">
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Se preenchido, dá pra mandar o login e a senha provisória direto por WhatsApp ao criar.</div>
         </div>
+        <div class="campo"><label>E-mail do Chat Interno (Whatts, opcional)</label><input name="email_chat_interno" type="email" autocomplete="off" placeholder="mesmo email de login, se em branco">
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Só preencha se o e-mail cadastrado no chat interno (Whatts Inbox) for diferente do e-mail de login acima — é pra lá que vão os lembretes da Agenda.</div>
+        </div>
         <div class="campo"><label>Senha temporária</label>
           <div style="display:flex;gap:8px;">
             <input name="senha" type="text" readonly autocomplete="off" style="flex:1;font-family:ui-monospace,monospace;" data-campo-senha-gerada>
@@ -2800,6 +2803,9 @@
         <div class="campo"><label>Nome</label><input name="nome" value="${escapeHtml(usuario.nome)}" required></div>
         <div class="campo"><label>Email</label><input name="email" type="email" value="${escapeHtml(usuario.email)}" required></div>
         <div class="campo"><label>Celular (WhatsApp, opcional)</label><input name="celular" value="${escapeHtml(usuario.celular || "")}" placeholder="48999998888"></div>
+        <div class="campo"><label>E-mail do Chat Interno (Whatts, opcional)</label><input name="email_chat_interno" type="email" value="${escapeHtml(usuario.email_chat_interno || "")}" placeholder="mesmo email de login, se em branco">
+          <div class="texto-suave" style="margin-top:4px;font-size:12px;">Só preencha se o e-mail cadastrado no chat interno (Whatts Inbox) for diferente do e-mail de login acima — é pra lá que vão os lembretes da Agenda.</div>
+        </div>
         ${htmlSeletorCatalogo("funcao", usuario.funcao || "", funcoes, "Função", "ex.: Televendas")}
         <div class="campo"><label>Perfis</label><div class="grade-checkbox">${opcoesPerfis || '<span class="texto-suave">Nenhum perfil cadastrado ainda.</span>'}</div>
           <div class="texto-suave" style="margin-top:4px;font-size:12px;">Pra liberar/bloquear uma permissão específica só pra este usuário (ajuste fino), use o botão "Perfis" na lista.</div>
@@ -21131,10 +21137,11 @@
         const emailCriado = dados.get("email");
         const senhaCriada = dados.get("senha");
         const celularCriado = (dados.get("celular") || "").trim();
+        const emailChatInternoCriado = (dados.get("email_chat_interno") || "").trim();
         const funcaoCriada = (dados.get("funcao") || "").trim();
         const usuarioCriado = await chamarApi("/usuarios", {
           method: "POST",
-          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, celular: celularCriado || null, funcao: funcaoCriada || null, perfil_ids, foto_perfil },
+          body: { nome: nomeCriado, email: emailCriado, senha: senhaCriada, celular: celularCriado || null, email_chat_interno: emailChatInternoCriado || null, funcao: funcaoCriada || null, perfil_ids, foto_perfil },
         });
         fecharModais();
         await renderUsuarios(estaNaTelaMemorialDeUsuarios());
@@ -21168,6 +21175,7 @@
         const corpo = {
           nome: dados.get("nome"), email: dados.get("email"),
           celular: (dados.get("celular") || "").trim() || null,
+          email_chat_interno: (dados.get("email_chat_interno") || "").trim() || null,
         };
         const funcaoEditada = (dados.get("funcao") || "").trim();
         if (funcaoEditada && funcaoEditada !== "__novo__") corpo.funcao = funcaoEditada;

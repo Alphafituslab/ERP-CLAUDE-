@@ -232,17 +232,33 @@ def enviar_lembrete(conn, evento: dict, repeticao_num: int):
     texto = _texto_lembrete(evento)
 
     if evento["notificar_chat_interno"] and not _ja_enviado(conn, evento["id"], "chat", repeticao_num):
-        chat_interno_service.enviar_mensagem_chat_interno(dono["email"], texto)
-        _marcar_enviado(conn, evento["id"], "chat", repeticao_num)
+        # Fase 194 — o chat interno (Whatts Inbox) é um sistema separado com
+        # conta própria por colaborador; o e-mail de login do ERP nem
+        # sempre é o mesmo cadastrado lá — usa o campo dedicado quando
+        # existir, senão cai no e-mail de login (comportamento de antes).
+        email_destino = dono["email_chat_interno"] or dono["email"]
+        sucesso, _motivo = chat_interno_service.enviar_mensagem_chat_interno(email_destino, texto)
+        # Só marca como enviado quando realmente deu certo — se o e-mail
+        # não bater com nenhuma conta do Whatts Inbox, tenta de novo no
+        # próximo ciclo (1 min) em vez de desistir silenciosamente pra
+        # sempre.
+        if sucesso:
+            _marcar_enviado(conn, evento["id"], "chat", repeticao_num)
 
     if evento["notificar_whatsapp"] and dono["celular"] and not _ja_enviado(conn, evento["id"], "whatsapp", repeticao_num):
+        # Achado real (2026-09-24): NÃO usar `whatsapp_ativo` daqui — esse
+        # interruptor é "mandar aviso de BACKUP por WhatsApp" (tela
+        # Sistema > Backups), sem relação nenhuma com a Agenda; se
+        # estivesse desligado (caso comum, já que backup por WhatsApp é
+        # opt-in), a Agenda nunca mandava nada mesmo com a Evolution API
+        # configurada e funcionando. `enviar_texto_whatsapp` já valida
+        # sozinho se a URL/chave da Evolution API existem.
         try:
             config = backup_service.obter_configuracao(conn)
-            if config.get("whatsapp_ativo"):
-                backup_service.enviar_texto_whatsapp(config, dono["celular"], texto)
+            backup_service.enviar_texto_whatsapp(config, dono["celular"], texto)
+            _marcar_enviado(conn, evento["id"], "whatsapp", repeticao_num)
         except Exception:
-            pass  # lembrete não pode derrubar o ciclo do agendador
-        _marcar_enviado(conn, evento["id"], "whatsapp", repeticao_num)
+            pass  # lembrete não pode derrubar o ciclo do agendador; tenta de novo no próximo ciclo
 
     if evento["notificar_push"] and not _ja_enviado(conn, evento["id"], "push", repeticao_num):
         enviar_push(conn, evento["usuario_dono_id"], evento["titulo"], texto, {"eventoId": evento["id"]})
