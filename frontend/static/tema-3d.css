@@ -394,7 +394,7 @@ body {
   color: rgba(255, 255, 255, 0.55);
   transition: color 0.15s ease;
 }
-.barra-lateral-grupo[open] summary,
+.barra-lateral-grupo[open] > summary,
 .barra-lateral-grupo summary:hover { color: rgba(255, 255, 255, 0.85); }
 .barra-lateral-grupo summary::after { margin-left: auto; opacity: 0.6; }
 .barra-lateral-grupo summary::before {
@@ -437,8 +437,12 @@ body {
   border-radius: 999px;
   margin: 0;
   padding: 8px 12px 8px 28px;
+  font-family: inherit;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.5);
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: rgba(255, 255, 255, 0.85);
   background: rgba(255, 255, 255, 0.045);
   box-shadow: var(--brilho-topo-fraco);
   transition: color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
@@ -661,7 +665,7 @@ tbody tr { transition: background 0.12s ease; }
   color: var(--azul);
 }
 [data-tema="claro"] .barra-lateral-grupo summary { color: color-mix(in srgb, var(--texto) 62%, transparent); }
-[data-tema="claro"] .barra-lateral-grupo[open] summary,
+[data-tema="claro"] .barra-lateral-grupo[open] > summary,
 [data-tema="claro"] .barra-lateral-grupo summary:hover,
 [data-tema="claro"] .barra-lateral-subgrupo[open] summary,
 [data-tema="claro"] .barra-lateral-subgrupo summary:hover { color: var(--texto); }

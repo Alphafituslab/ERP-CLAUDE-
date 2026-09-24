@@ -128,7 +128,7 @@ def main():
     print("  Alphafitus OS - Iniciando")
     print("=" * 64)
 
-    from app import backup_service, create_app
+    from app import backup_service, create_app, agenda_service
     from app import db as db_module
 
     resultado_restauracao = db_module.aplicar_restauracao_pendente_se_houver()
@@ -145,6 +145,7 @@ def main():
 
     app = create_app()
     backup_service.iniciar_agendador_em_background()
+    agenda_service.iniciar_agendador_em_background()  # Fase 193
 
     ip_local = detectar_ip_local()
     print()

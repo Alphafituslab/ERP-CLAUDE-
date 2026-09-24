@@ -4,6 +4,7 @@ import waitress
 
 from app import create_app
 from app import backup_service
+from app import agenda_service
 from app import db as db_module
 
 # Mesma sequência de run.py (nunca rodava aqui — achado numa auditoria de
@@ -25,5 +26,6 @@ else:
 app = create_app()
 
 backup_service.iniciar_agendador_em_background()
+agenda_service.iniciar_agendador_em_background()  # Fase 193
 
 waitress.serve(app, host="127.0.0.1", port=5010, threads=8)

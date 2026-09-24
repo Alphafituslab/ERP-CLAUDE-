@@ -314,6 +314,44 @@ def enviar_texto_whatsapp(config, numero, texto):
     return True
 
 
+def enviar_pdf_whatsapp(config, numero, texto, pdf_bytes, nome_arquivo):
+    """Mesma primitiva de `enviar_texto_whatsapp`, mas com anexo — pedido
+    do usuário (2026-09-24) pro botão "Enviar via WhatsApp" da
+    Padronização (Memorial Técnico) sair pela Evolution API já com o PDF
+    anexado, sem abrir wa.me/WhatsApp Web nem exigir anexar na mão."""
+    import base64
+
+    requests = _requests_backup()
+    if not config.get("whatsapp_evolution_url") or not config.get("whatsapp_evolution_apikey"):
+        raise ValueError("Configure a URL e a chave de API do WhatsApp (Evolution API) em Sistema > Backups antes de usar o envio por WhatsApp.")
+    digitos = "".join(c for c in numero if c.isdigit())
+    if not digitos:
+        raise ValueError("Número de WhatsApp inválido (sem dígitos).")
+    # A Evolution API exige o número completo com DDI — sem isso ela
+    # procura um JID que não existe e devolve 400 mesmo pra um número
+    # válido (achado real, 2026-09-24: teste com "48998678983" deu
+    # `{"exists": false}` sem o 55 na frente). O DDI já vem certo daqui
+    # pra frente: quem chama (tela de Padronização do Memorial) tem um
+    # campo de DDI próprio, padrão 55, editável pra número internacional
+    # — então NÃO adivinha/força 55 aqui, só confia no que chegou.
+    resp = requests.post(
+        f"{config['whatsapp_evolution_url']}/message/sendMedia/{config.get('whatsapp_instancia_nome') or 'whatts'}",
+        json={
+            "number": digitos,
+            "mediatype": "document",
+            "mimetype": "application/pdf",
+            "fileName": nome_arquivo,
+            "caption": texto,
+            "media": base64.b64encode(pdf_bytes).decode("ascii"),
+        },
+        headers={"apikey": config["whatsapp_evolution_apikey"], "Content-Type": "application/json"},
+        timeout=TIMEOUT_NUVEM_SEGUNDOS,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"Falha ao enviar PDF por WhatsApp (HTTP {resp.status_code}): {resp.text[:300]}")
+    return True
+
+
 def executar_backup(conn, usuario_id, origem):
     """Núcleo reaproveitado pela rota manual e pelo agendador. Gera o
     backup uma vez só e dispara os dois destinos ATIVOS em paralelo (ver

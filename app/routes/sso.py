@@ -20,7 +20,7 @@ import os
 import secrets
 import time
 
-from flask import Blueprint, g, jsonify
+from flask import Blueprint, g, jsonify, request
 
 from ..context import ApiError, get_db
 from ..permissions import requires_auth, usuario_tem_permissao
@@ -113,3 +113,98 @@ def emitir_url_sso(sistema):
     ticket = _emitir_ticket(segredo, usuario, papel)
     url = f"{url_base.rstrip('/')}{config['caminho_exchange']}?ticket={ticket}"
     return jsonify({"url": url})
+
+
+def _verificar_ticket_sistema(sistema: str, ticket: str) -> None:
+    """Lado inverso de `_emitir_ticket`: usado quando é o sistema EXTERNO
+    (Memorial/Protocolo/HPLC) que está chamando de VOLTA pro ERP — pedido
+    do usuário (2026-09-24): busca de empresas cadastradas e envio de
+    WhatsApp com anexo precisam ler dados do ERP, mas essas chamadas vêm
+    do BACKEND de cada sistema (sem cookie de sessão, sem usuário
+    logado aqui) — por isso a autenticação é só a assinatura, com o MESMO
+    segredo por sistema que já existe pro SSO de login."""
+    config_sistema = _SISTEMAS.get(sistema)
+    if not config_sistema:
+        raise ApiError("Sistema desconhecido.", status=404, codigo="sistema_invalido")
+    segredo = os.environ.get(config_sistema["segredo_env"])
+    if not segredo:
+        raise ApiError("Sistema não configurado nesta instalação.", status=503, codigo="sso_nao_configurado")
+    try:
+        payload_b64, assinatura = ticket.split(".", 1)
+    except (ValueError, AttributeError):
+        raise ApiError("Ticket inválido.", status=401, codigo="ticket_invalido")
+    assinatura_esperada = hmac.new(segredo.encode("utf-8"), payload_b64.encode("ascii"), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(assinatura, assinatura_esperada):
+        raise ApiError("Assinatura inválida.", status=401, codigo="assinatura_invalida")
+    padding = "=" * (-len(payload_b64) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(payload_b64 + padding))
+    if payload.get("exp", 0) < time.time():
+        raise ApiError("Ticket expirado.", status=401, codigo="ticket_expirado")
+
+
+@bp.get("/buscar-empresas-clientes")
+def buscar_empresas_clientes():
+    """Pedido do usuário (2026-09-24): a busca de "empresa já cadastrada"
+    na tela de Padronização do Memorial tem que vir do cadastro de
+    CLIENTES do ERP (a base real), não de um catálogo próprio do
+    Memorial."""
+    sistema = request.args.get("sistema", "")
+    ticket = request.args.get("ticket", "")
+    _verificar_ticket_sistema(sistema, ticket)
+
+    termo = (request.args.get("termo") or "").strip()
+    if len(termo) < 2:
+        return jsonify([])
+    termo_digitos = "".join(c for c in termo if c.isdigit())
+
+    conn = get_db()
+    if termo_digitos and len(termo_digitos) >= 3:
+        linhas = conn.execute(
+            """
+            SELECT razao_social, nome_fantasia, cnpj, endereco
+            FROM clientes
+            WHERE status = 'ativo' AND replace(replace(replace(cnpj, '.', ''), '/', ''), '-', '') LIKE ?
+            ORDER BY razao_social LIMIT 8
+            """,
+            (f"%{termo_digitos}%",),
+        ).fetchall()
+    else:
+        linhas = conn.execute(
+            """
+            SELECT razao_social, nome_fantasia, cnpj, endereco
+            FROM clientes
+            WHERE status = 'ativo' AND (razao_social LIKE ? OR nome_fantasia LIKE ?)
+            ORDER BY razao_social LIMIT 8
+            """,
+            (f"%{termo}%", f"%{termo}%"),
+        ).fetchall()
+    return jsonify([dict(l) for l in linhas])
+
+
+@bp.post("/enviar-anexo-whatsapp")
+def enviar_anexo_whatsapp():
+    """Pedido do usuário (2026-09-24): o botão "Enviar via WhatsApp" da
+    Padronização (Memorial) não pode mais abrir o WhatsApp Web (wa.me) —
+    tem que sair pelo MESMO WhatsApp (Evolution API) que o ERP já usa,
+    com o PDF já anexado, sem o usuário precisar anexar nada na mão."""
+    from .. import backup_service
+
+    dados = request.get_json(force=True) or {}
+    _verificar_ticket_sistema(dados.get("sistema", ""), dados.get("ticket", ""))
+
+    numero = (dados.get("numero") or "").strip()
+    pdf_base64 = dados.get("pdfBase64")
+    nome_arquivo = dados.get("nomeArquivo") or "documento.pdf"
+    texto = dados.get("texto") or ""
+    if not numero or not pdf_base64:
+        raise ApiError("Número e PDF são obrigatórios.", status=400, codigo="campos_obrigatorios")
+
+    try:
+        pdf_bytes = base64.b64decode(pdf_base64)
+    except Exception:
+        raise ApiError("PDF em base64 inválido.", status=400, codigo="pdf_invalido")
+
+    conn = get_db()
+    config = backup_service.obter_configuracao(conn)
+    backup_service.enviar_pdf_whatsapp(config, numero, texto, pdf_bytes, nome_arquivo)
+    return jsonify({"ok": True})

@@ -6,6 +6,7 @@ import os
 
 from app import create_app
 from app import backup_service
+from app import agenda_service
 from app import db as db_module
 
 # Fase 67 — se alguém enviou um backup pela tela de Restauração desde a
@@ -38,6 +39,9 @@ app = create_app()
 # nova, vazando threads e arriscando disparar backups de verdade durante
 # a bateria de testes.
 backup_service.iniciar_agendador_em_background()
+# Fase 193 — mesmo motivo/mesma posição do agendador de backup acima: fica
+# fora de create_app() para não vazar thread a cada create_app() de teste.
+agenda_service.iniciar_agendador_em_background()
 
 if __name__ == "__main__":
     if not os.environ.get("ALPHAFITUS_JWT_SECRET"):

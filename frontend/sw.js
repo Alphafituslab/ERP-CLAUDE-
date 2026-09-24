@@ -72,3 +72,45 @@ self.addEventListener("fetch", (evento) => {
       .catch(() => caches.match(evento.request))
   );
 });
+
+/*
+ * Fase 193 — Web Push da Agenda da equipe (pedido do usuário: notificação
+ * de verdade, não só o som do WhatsApp). O servidor (app/agenda_service.py,
+ * função `enviar_push`) manda um payload JSON `{title, body, data}`;
+ * `showNotification` funciona mesmo com o ERP fechado — é exatamente esse
+ * o motivo de existir um Service Worker aqui, e não só um alerta na aba
+ * aberta. `notificationclick` foca a aba já aberta em vez de abrir uma
+ * segunda, se existir uma.
+ */
+self.addEventListener("push", (evento) => {
+  let payload = { title: "Alphafitus OS", body: "Você tem uma notificação." };
+  try {
+    if (evento.data) payload = evento.data.json();
+  } catch (e) {
+    /* payload não veio em JSON — usa o texto puro como corpo */
+    if (evento.data) payload.body = evento.data.text();
+  }
+  evento.waitUntil(
+    self.registration.showNotification(payload.title || "Alphafitus OS", {
+      body: payload.body || "",
+      icon: "/static/icons/icon-192.png",
+      badge: "/static/icons/icon-192.png",
+      data: payload.data || {},
+    })
+  );
+});
+
+self.addEventListener("notificationclick", (evento) => {
+  evento.notification.close();
+  evento.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((janelas) => {
+      for (const janela of janelas) {
+        if ("focus" in janela) {
+          janela.navigate("/#/agenda-equipe");
+          return janela.focus();
+        }
+      }
+      return self.clients.openWindow("/#/agenda-equipe");
+    })
+  );
+});

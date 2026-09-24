@@ -599,6 +599,15 @@ PERMISSOES_PADRAO = [
     ("funcionarios", "cadastrar", "Cadastrar novos funcionários", 0),
     ("funcionarios", "editar", "Editar o cadastro de um funcionário", 0),
     ("funcionarios", "inativar", "Inativar ou reativar um funcionário", 0),
+
+    # Fase 193 — Agenda da equipe. Ver/criar/editar-o-próprio/excluir-o-
+    # próprio compromisso não passam por permissão nenhuma — são liberados
+    # a qualquer usuário autenticado, igual "ver meu próprio perfil" já é
+    # (mesmo espírito do POST /funcionarios/setores, que só exige login).
+    # Só o acesso CRUZADO (mexer no compromisso de outra pessoa) é permissão
+    # de verdade — o Administrador já ganha as duas de graça por ter "TODAS".
+    ("agenda", "editar_todos", "Editar o compromisso de outro usuário na Agenda", 0),
+    ("agenda", "excluir_todos", "Excluir o compromisso de outro usuário na Agenda", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)

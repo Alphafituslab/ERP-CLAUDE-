@@ -672,9 +672,9 @@ body::before {
 .barra-lateral-grupo summary::after {
   content: "▸"; font-size: 10px; opacity: 0.7; transition: transform 0.15s ease-out; flex-shrink: 0;
 }
-.barra-lateral-grupo[open] summary::after { transform: rotate(90deg); }
+.barra-lateral-grupo[open] > summary::after { transform: rotate(90deg); }
 .barra-lateral-grupo summary:hover { background: rgba(255,255,255,0.08); color: #fff; }
-.barra-lateral-grupo[open] summary { color: #fff; font-weight: 600; }
+.barra-lateral-grupo[open] > summary { color: #fff; font-weight: 600; }
 .barra-lateral-subitens { display: flex; flex-direction: column; }
 .barra-lateral-subitem { padding-left: 34px !important; font-size: 12.5px !important; }
 
@@ -691,7 +691,7 @@ body::before {
 }
 .barra-lateral-subgrupo summary::-webkit-details-marker { display: none; }
 .barra-lateral-subgrupo summary:hover { background: rgba(255,255,255,0.08); color: #fff; }
-.barra-lateral-subgrupo[open] summary { color: #fff; font-weight: 600; }
+.barra-lateral-subgrupo[open] summary { color: #fff; font-weight: 400; }
 
 .conteudo-principal { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 
@@ -998,6 +998,24 @@ tr.linha-selecionada td { background: #e6eef7; }
 .fundo-modal {
   position: fixed; inset: 0; background: rgba(0,0,0,0.45);
   display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+/* Pedido do usuário (2026-09-23) — aviso de conclusão de backup rodado
+   em segundo plano (ver mostrarToastFlutuante em app.js): não é um modal
+   (não bloqueia nada), só um cartão que aparece num canto e some sozinho
+   — por isso z-index maior que o dos modais, pra aparecer por cima mesmo
+   se o usuário já tiver aberto outra tela nesse meio tempo. */
+.toast-flutuante {
+  position: fixed; bottom: 20px; right: 20px; z-index: 200;
+  max-width: 360px; padding: 14px 18px; border-radius: 10px;
+  font-size: 13px; font-weight: 600; color: #fff;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  animation: toast-flutuante-entrada 0.2s ease-out;
+}
+.toast-flutuante-sucesso { background: #0f8a5f; }
+.toast-flutuante-erro { background: #b3261e; }
+@keyframes toast-flutuante-entrada {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .modal {
   background: var(--superficie); border-radius: var(--raio); padding: 24px;
@@ -1367,3 +1385,64 @@ tr.linha-selecionada td { background: #e6eef7; }
 .pe-pendencia-item + .pe-pendencia-item { border-top: 1px dashed rgba(255,255,255,.06); }
 .pe-pendencia-item .sub { display: block; opacity: .65; font-size: 11px; margin-top: 1px; }
 .pe-pendencia-vazio { font-size: 12px; opacity: .55; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Fase 193 — Agenda da equipe (tipo Google Agenda). Grid de mês responsivo,
+   cores vivas por evento (paleta escolhida no formulário), célula do dia
+   clicável pra criar compromisso, chip clicável pra abrir/editar.
+   ───────────────────────────────────────────────────────────────────────── */
+.agenda-equipe-cabecalho {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 4px;
+}
+.agenda-equipe-cabecalho h2 { margin: 0; }
+.agenda-equipe-navegacao { display: flex; align-items: center; gap: 8px; }
+.agenda-equipe-mes-titulo { font-weight: 700; font-size: 16px; min-width: 160px; text-align: center; }
+.agenda-equipe-acoes { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.agenda-equipe-grade { padding: 0; overflow: hidden; }
+.agenda-equipe-semana-cabecalho {
+  display: grid; grid-template-columns: repeat(7, 1fr);
+  background: var(--fundo); border-bottom: 1px solid var(--borda);
+}
+.agenda-equipe-semana-cabecalho > div {
+  padding: 8px 6px; text-align: center; font-size: 12px; font-weight: 700; color: var(--texto-suave); text-transform: uppercase;
+}
+.agenda-equipe-dias { display: grid; grid-template-columns: repeat(7, 1fr); }
+.agenda-equipe-dia {
+  min-height: 108px; border-right: 1px solid var(--borda); border-bottom: 1px solid var(--borda);
+  padding: 6px; cursor: pointer; transition: background .15s ease; display: flex; flex-direction: column; gap: 4px;
+}
+.agenda-equipe-dia:hover { background: color-mix(in srgb, var(--azul) 5%, transparent); }
+.agenda-equipe-dia:nth-child(7n) { border-right: none; }
+.agenda-equipe-dia-fora { opacity: .4; }
+.agenda-equipe-dia-hoje { background: color-mix(in srgb, var(--azul) 10%, transparent); }
+.agenda-equipe-dia-numero { font-size: 13px; font-weight: 700; color: var(--texto-suave); }
+.agenda-equipe-dia-hoje .agenda-equipe-dia-numero {
+  color: #fff; background: var(--azul); width: 22px; height: 22px; border-radius: 999px; display: flex; align-items: center; justify-content: center;
+}
+.agenda-equipe-dia-eventos { display: flex; flex-direction: column; gap: 3px; }
+.agenda-equipe-chip {
+  display: flex; align-items: center; gap: 5px; border: none; border-left: 3px solid; border-radius: 4px;
+  padding: 3px 6px; font-size: 11.5px; text-align: left; cursor: pointer; color: var(--texto); width: 100%;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+.agenda-equipe-chip:hover { filter: brightness(1.08); }
+.agenda-equipe-chip-hora { font-weight: 700; opacity: .8; flex-shrink: 0; }
+.agenda-equipe-chip-titulo { overflow: hidden; text-overflow: ellipsis; }
+.agenda-equipe-mais { font-size: 11px; color: var(--texto-suave); cursor: pointer; padding: 2px 4px; }
+.agenda-equipe-mais:hover { text-decoration: underline; }
+
+.agenda-equipe-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.agenda-equipe-swatch-rotulo { cursor: pointer; }
+.agenda-equipe-swatch-rotulo input { position: absolute; opacity: 0; width: 0; height: 0; }
+.agenda-equipe-swatch {
+  display: block; width: 28px; height: 28px; border-radius: 999px; border: 2px solid transparent; transition: transform .1s ease, border-color .1s ease;
+}
+.agenda-equipe-swatch-rotulo input:checked + .agenda-equipe-swatch { border-color: var(--texto); transform: scale(1.12); }
+.agenda-equipe-swatch-rotulo:hover .agenda-equipe-swatch { transform: scale(1.08); }
+
+@media (max-width: 720px) {
+  .agenda-equipe-dia { min-height: 64px; }
+  .agenda-equipe-chip-hora { display: none; }
+  .agenda-equipe-mes-titulo { min-width: auto; }
+}

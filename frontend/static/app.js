@@ -135,6 +135,12 @@
       const erro = new Error(dados.mensagem || `Erro ${resp.status} na requisição.`);
       erro.status = resp.status;
       erro.codigo = dados.erro;
+      // Fase 193 — a Agenda devolve um 409 com corpo estruturado
+      // (`{conflito: true, eventos_conflitantes: [...]}`, não uma simples
+      // mensagem) pra oferecer "confirmar mesmo assim" — guarda o corpo
+      // inteiro na exceção pra quem chamou poder inspecionar sem precisar
+      // refazer a requisição.
+      erro.corpo = dados;
       throw erro;
     }
     return dados;
@@ -718,28 +724,24 @@
           <button type="button" class="botao" data-acao-local="fazer-backup-lembrete">💾 Fazer backup agora</button>
         </div>
       </div>`);
-    const conteudo = modal.querySelector("[data-conteudo-lembrete-backup]");
     const botao = modal.querySelector('[data-acao-local="fazer-backup-lembrete"]');
-    botao.addEventListener("click", async () => {
-      botao.disabled = true;
-      botao.textContent = "Salvando…";
-      try {
-        const resultado = await salvarBackupLocalNesteTerminal(false, () => {});
-        const tamanhoLegivel = resultado.tamanhoBytes >= 1024 * 1024
-          ? `${(resultado.tamanhoBytes / (1024 * 1024)).toFixed(1)} MB`
-          : `${Math.max(1, Math.round(resultado.tamanhoBytes / 1024))} KB`;
-        conteudo.innerHTML = `
-          <p style="color:#00af6b;font-weight:600;">✅ Backup concluído com sucesso.</p>
-          <p class="texto-suave" style="font-size:12px;">${escapeHtml(resultado.arquivo)} (${tamanhoLegivel})</p>`;
-        setTimeout(() => fecharModais(), 1400);
-      } catch (erro) {
-        if (erro && erro.name === "AbortError") { fecharModais(); return; }
-        conteudo.innerHTML = `
-          <p class="mensagem-erro">${escapeHtml(erro.message || "Não foi possível salvar o backup.")}</p>
-          <div class="rodape-modal">
-            <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
-          </div>`;
-      }
+    botao.addEventListener("click", () => {
+      // Pedido do usuário (2026-09-23): não prender a tela esperando —
+      // fecha o modal já e libera o sistema; o backup segue rodando em
+      // segundo plano e avisa o resultado por um toast flutuante (não
+      // depende de qual tela o usuário estiver quando terminar).
+      fecharModais();
+      salvarBackupLocalNesteTerminal(false, () => {})
+        .then((resultado) => {
+          const tamanhoLegivel = resultado.tamanhoBytes >= 1024 * 1024
+            ? `${(resultado.tamanhoBytes / (1024 * 1024)).toFixed(1)} MB`
+            : `${Math.max(1, Math.round(resultado.tamanhoBytes / 1024))} KB`;
+          mostrarToastFlutuante("sucesso", `✅ Backup concluído com sucesso — ${resultado.arquivo} (${tamanhoLegivel})`);
+        })
+        .catch((erro) => {
+          if (erro && erro.name === "AbortError") return;
+          mostrarToastFlutuante("erro", `⚠️ Não foi possível salvar o backup: ${erro.message || "erro desconhecido"}`);
+        });
     });
   }
 
@@ -869,6 +871,7 @@
       await (async () => {
         switch (pagina) {
           case "dashboard": return renderDashboard();
+          case "agenda-equipe": return renderAgenda();
           case "usuarios": return renderUsuarios();
           case "funcionarios": return renderFuncionarios();
           case "perfis": return renderPerfis();
@@ -1004,6 +1007,11 @@
   // — ninguém vê uma "gaveta vazia" no menu.
   const ITENS_MENU = [
     { rota: "#/dashboard", chave: "dashboard", label: "Painel" },
+    // Fase 193 — sem `permissao` de propósito: é a agenda COMPARTILHADA da
+    // equipe, qualquer usuário logado pode ver/criar/gerenciar o próprio
+    // compromisso (só mexer no compromisso de outra pessoa exige a
+    // permissão "agenda.editar_todos"/"agenda.excluir_todos", checada no
+    // backend — ver app/agenda_service.py).
     // Fase 75 — sem `permissao` de propósito: o próprio endpoint filtra o
     // CONTEÚDO por seção (produção/comercial/compras) de acordo com as
     // permissões que o usuário logado já tem (ver app/routes/
@@ -1171,6 +1179,15 @@
     {
       tipo: "grupo", chave: "grupo-administracao", nome: "Administração",
       itens: [
+        // Rótulo "Agenda de Compromissos" (não só "Agenda") de propósito —
+        // já existe "Agenda" dentro de APS (Sequenciamento), que é outra
+        // coisa completamente diferente (agendamento de ordem de produção
+        // em centro de trabalho, Fase 25). Pedido do usuário (2026-09-24):
+        // nunca misturar os dois, nem visualmente nem na busca — e mora
+        // dentro de Administração porque é sobre deveres/compromissos e
+        // atendimento de clientes da equipe, não uma tela de uso diário
+        // isolada como Painel.
+        { rota: "#/agenda-equipe", chave: "agenda-equipe", label: "Agenda de Compromissos", apelidos: ["compromisso", "compromissos", "reuniao", "reunião", "evento", "calendario", "calendário", "agenda pessoal", "agenda da equipe", "dever", "deveres", "atendimento", "atendimentos"] },
         { rota: "#/usuarios", chave: "usuarios", label: "Usuários", permissao: ["usuarios", "visualizar"] },
         // Fase 188 (pedido do usuário) — cadastro dos FUNCIONÁRIOS da
         // empresa (produção, laboratório, vendas...), separado de
@@ -1654,6 +1671,20 @@
     document.querySelectorAll(".fundo-modal").forEach((m) => m.remove());
   }
 
+  // Pedido do usuário (2026-09-23): backup disparado pelo lembrete de
+  // 8h/16h não pode travar a tela — fecha o modal na hora e continua
+  // rodando por trás; este aviso flutuante (fora do fluxo de renderShell,
+  // por isso funciona em qualquer tela em que o usuário esteja quando o
+  // backup terminar) é quem avisa o resultado.
+  function mostrarToastFlutuante(tipo, texto) {
+    document.querySelectorAll(".toast-flutuante").forEach((t) => t.remove());
+    const toast = document.createElement("div");
+    toast.className = `toast-flutuante toast-flutuante-${tipo}`;
+    toast.textContent = texto;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 6000);
+  }
+
   // Fase 131 — menu de contexto (botão direito) reaproveitável — hoje só
   // usado na lista de clientes ("iniciar pedido"/"editar dados"/"tabela
   // de preço"/"prazo de pagamento" sem precisar abrir a linha inteira),
@@ -2126,6 +2157,315 @@
        </div>`,
       "funcionarios"
     );
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Fase 193 — Agenda da equipe (tipo Google Agenda). Compartilhada: todo
+  // mundo vê o compromisso de todo mundo (com o nome de quem criou), mas só
+  // o dono ou um Administrador edita/exclui — a checagem de verdade é sempre
+  // no backend (app/agenda_service.py); aqui na tela só escondemos os
+  // botões pra não oferecer uma ação que ia dar 403 mesmo.
+  // ─────────────────────────────────────────────────────────────────────────
+  const CORES_AGENDA_EQUIPE = [
+    { cor: "#3B82F6", nome: "Azul" }, { cor: "#10B981", nome: "Verde" },
+    { cor: "#F59E0B", nome: "Âmbar" }, { cor: "#EF4444", nome: "Vermelho" },
+    { cor: "#8B5CF6", nome: "Roxo" }, { cor: "#EC4899", nome: "Rosa" },
+    { cor: "#14B8A6", nome: "Turquesa" }, { cor: "#6B7280", nome: "Cinza" },
+  ];
+
+  function linkMapaAgendaEquipe(local) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(local)}`;
+  }
+
+  function fmtDataHoraAgendaEquipe(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  }
+
+  // <input type="datetime-local"> exige "AAAA-MM-DDTHH:MM" em hora LOCAL —
+  // sem isso, um evento marcado "14h" reaparece como "11h"/"17h" no formulário
+  // dependendo do fuso, porque `toISOString()` sozinho converte pra UTC.
+  function paraDatetimeLocalAgendaEquipe(iso) {
+    if (!iso) return "";
+    const d = new Date(iso);
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  async function renderAgenda(anoParam, mesParam) {
+    const hoje = new Date();
+    const ano = anoParam ?? (state.agendaEquipeAno ?? hoje.getFullYear());
+    const mes = mesParam ?? (state.agendaEquipeMes ?? hoje.getMonth());
+    state.agendaEquipeAno = ano;
+    state.agendaEquipeMes = mes;
+
+    app.innerHTML = '<div class="carregando">Carregando agenda…</div>';
+
+    const diaSemanaInicioMes = new Date(ano, mes, 1).getDay();
+    const gradeInicio = new Date(ano, mes, 1 - diaSemanaInicioMes);
+    const gradeFim = new Date(gradeInicio.getFullYear(), gradeInicio.getMonth(), gradeInicio.getDate() + 42);
+
+    const eventos = await chamarApi(
+      `/agenda/eventos?de=${encodeURIComponent(gradeInicio.toISOString())}&ate=${encodeURIComponent(gradeFim.toISOString())}`
+    );
+
+    const porDia = {};
+    eventos.forEach((ev) => {
+      const chave = new Date(ev.data_inicio).toDateString();
+      (porDia[chave] = porDia[chave] || []).push(ev);
+    });
+
+    const nomesMeses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    const diasSemana = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+    let celulas = "";
+    for (let i = 0; i < 42; i++) {
+      const d = new Date(gradeInicio.getFullYear(), gradeInicio.getMonth(), gradeInicio.getDate() + i);
+      const eventosNoDia = (porDia[d.toDateString()] || []).sort((a, b) => a.data_inicio.localeCompare(b.data_inicio));
+      const foraDoMes = d.getMonth() !== mes;
+      const ehHoje = d.toDateString() === hoje.toDateString();
+      const dataIsoDia = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const chips = eventosNoDia
+        .slice(0, 3)
+        .map(
+          (ev) => `
+        <button type="button" class="agenda-equipe-chip" style="background:color-mix(in srgb, ${ev.cor} 18%, transparent); border-left-color:${ev.cor};"
+                data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}">
+          <span class="agenda-equipe-chip-hora">${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
+          <span class="agenda-equipe-chip-titulo">${escapeHtml(ev.titulo)}</span>
+        </button>`
+        )
+        .join("");
+      const maisTexto =
+        eventosNoDia.length > 3
+          ? `<div class="agenda-equipe-mais" data-acao="ver-dia-agenda-equipe" data-data="${dataIsoDia}">+${eventosNoDia.length - 3} mais</div>`
+          : "";
+      celulas += `
+        <div class="agenda-equipe-dia ${foraDoMes ? "agenda-equipe-dia-fora" : ""} ${ehHoje ? "agenda-equipe-dia-hoje" : ""}"
+             data-acao="novo-evento-agenda-equipe" data-data="${dataIsoDia}">
+          <div class="agenda-equipe-dia-numero">${d.getDate()}</div>
+          <div class="agenda-equipe-dia-eventos">${chips}${maisTexto}</div>
+        </div>`;
+    }
+
+    const mesAnterior = mes === 0 ? 11 : mes - 1, anoAnterior = mes === 0 ? ano - 1 : ano;
+    const mesSeguinte = mes === 11 ? 0 : mes + 1, anoSeguinte = mes === 11 ? ano + 1 : ano;
+    const dataHojeIso = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, "0")}-${String(hoje.getDate()).padStart(2, "0")}`;
+
+    renderShell(
+      `
+      <div class="agenda-equipe-cabecalho">
+        <h2>📅 Agenda</h2>
+        <div class="agenda-equipe-navegacao">
+          <button type="button" class="botao secundario pequeno" data-acao="mudar-mes-agenda-equipe" data-ano="${anoAnterior}" data-mes="${mesAnterior}">‹</button>
+          <span class="agenda-equipe-mes-titulo">${nomesMeses[mes]} de ${ano}</span>
+          <button type="button" class="botao secundario pequeno" data-acao="mudar-mes-agenda-equipe" data-ano="${anoSeguinte}" data-mes="${mesSeguinte}">›</button>
+          <button type="button" class="botao secundario pequeno" data-acao="mudar-mes-agenda-equipe" data-ano="${hoje.getFullYear()}" data-mes="${hoje.getMonth()}">Hoje</button>
+        </div>
+        <div class="agenda-equipe-acoes">
+          <button type="button" class="botao secundario pequeno" data-acao="ativar-push-agenda-equipe">🔔 Ativar notificações</button>
+          <button type="button" class="botao" data-acao="novo-evento-agenda-equipe" data-data="${dataHojeIso}">+ Novo compromisso</button>
+        </div>
+      </div>
+      <p class="dica">Agenda compartilhada da equipe — todo mundo vê os compromissos de todo mundo, mas só o dono (ou um Administrador) edita ou exclui.</p>
+      <div class="cartao agenda-equipe-grade">
+        <div class="agenda-equipe-semana-cabecalho">${diasSemana.map((d) => `<div>${d}</div>`).join("")}</div>
+        <div class="agenda-equipe-dias">${celulas}</div>
+      </div>`,
+      "agenda-equipe"
+    );
+  }
+
+  async function htmlFormularioEventoAgendaEquipe(evento, dataPreenchida) {
+    const usuarios = await chamarApi("/agenda/usuarios");
+    const donoAtualId = evento ? evento.usuario_dono_id : state.usuarioAtual.id;
+    const opcoesDono = usuarios
+      .map((u) => `<option value="${u.id}" ${u.id === donoAtualId ? "selected" : ""}>${escapeHtml(u.nome)}${u.id === state.usuarioAtual.id ? " (eu)" : ""}</option>`)
+      .join("");
+    const opcoesCor = CORES_AGENDA_EQUIPE.map(
+      (c) => `
+      <label class="agenda-equipe-swatch-rotulo" title="${c.nome}">
+        <input type="radio" name="cor" value="${c.cor}" ${(evento ? evento.cor : CORES_AGENDA_EQUIPE[0].cor) === c.cor ? "checked" : ""}>
+        <span class="agenda-equipe-swatch" style="background:${c.cor};"></span>
+      </label>`
+    ).join("");
+    const inicioPadrao = dataPreenchida ? `${dataPreenchida}T09:00` : "";
+    return `
+      <div class="campo"><label>Motivo / título</label><input name="titulo" required value="${escapeHtml(evento?.titulo || "")}" placeholder="Ex: Reunião com fornecedor"></div>
+      <div class="campo"><label>Descrição (opcional)</label><textarea name="descricao" rows="2">${escapeHtml(evento?.descricao || "")}</textarea></div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;">
+        <div class="campo" style="flex:1;min-width:180px;"><label>Início</label><input type="datetime-local" name="data_inicio" required value="${evento ? paraDatetimeLocalAgendaEquipe(evento.data_inicio) : inicioPadrao}"></div>
+        <div class="campo" style="flex:1;min-width:180px;"><label>Fim (opcional)</label><input type="datetime-local" name="data_fim" value="${evento ? paraDatetimeLocalAgendaEquipe(evento.data_fim) : ""}"></div>
+      </div>
+      <div class="campo">
+        <label>Local (opcional)</label>
+        <div style="display:flex;gap:8px;">
+          <input name="local_texto" style="flex:1;" value="${escapeHtml(evento?.local_texto || "")}" placeholder="Endereço ou nome do lugar" data-campo-local-agenda-equipe>
+          <button type="button" class="botao secundario" data-acao-local="abrir-mapa-agenda-equipe">🗺️ Mapa</button>
+        </div>
+      </div>
+      <div class="campo"><label>Para quem é esse compromisso</label><select name="usuario_dono_id">${opcoesDono}</select></div>
+      <div class="campo"><label>Cor</label><div class="agenda-equipe-swatches">${opcoesCor}</div></div>
+      <div class="campo">
+        <label>Lembrete</label>
+        <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+          <label><input type="checkbox" name="notificar_chat_interno" ${evento ? (evento.notificar_chat_interno ? "checked" : "") : "checked"}> Chat interno</label>
+          <label><input type="checkbox" name="notificar_whatsapp" ${evento ? (evento.notificar_whatsapp ? "checked" : "") : "checked"}> WhatsApp</label>
+          <label><input type="checkbox" name="notificar_push" ${evento ? (evento.notificar_push ? "checked" : "") : "checked"}> Notificação push</label>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <div class="campo" style="flex:1;min-width:140px;"><label>Avisar quantos minutos antes</label><input type="number" min="0" name="lembrete_antecedencia_min" value="${evento?.lembrete_antecedencia_min ?? 30}"></div>
+          <div class="campo" style="flex:1;min-width:140px;"><label>Repetir quantas vezes</label><input type="number" min="1" name="lembrete_repeticoes" value="${evento?.lembrete_repeticoes ?? 1}"></div>
+          <div class="campo" style="flex:1;min-width:140px;"><label>Intervalo entre avisos (min)</label><input type="number" min="1" name="lembrete_intervalo_min" value="${evento?.lembrete_intervalo_min ?? 10}"></div>
+        </div>
+      </div>
+      <input type="hidden" name="forcar" value="">`;
+  }
+
+  async function modalNovoEventoAgendaEquipe(dataPreenchida) {
+    const camposHtml = await htmlFormularioEventoAgendaEquipe(null, dataPreenchida);
+    const modal = abrirModal(`
+      <h3>Novo compromisso</h3>
+      <form data-form="criar-evento-agenda-equipe">
+        ${camposHtml}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Agendar</button>
+        </div>
+      </form>`);
+    ligarMapaFormularioAgendaEquipe(modal);
+  }
+
+  async function modalEditarEventoAgendaEquipe(evento) {
+    const podeExcluir = evento.usuario_dono_id === state.usuarioAtual.id || temPermissao("agenda", "excluir_todos");
+    const camposHtml = await htmlFormularioEventoAgendaEquipe(evento, null);
+    const modal = abrirModal(`
+      <h3>Editar compromisso</h3>
+      <p class="texto-suave" style="margin-top:-8px;">Criado por ${escapeHtml(evento.criado_por_nome)} — ${fmtDataHoraAgendaEquipe(evento.criado_em)}</p>
+      <form data-form="editar-evento-agenda-equipe" data-id="${evento.id}">
+        ${camposHtml}
+        <div class="rodape-modal">
+          ${podeExcluir ? `<button type="button" class="botao perigo" data-acao="excluir-evento-agenda-equipe" data-id="${evento.id}" style="margin-right:auto;">Excluir</button>` : ""}
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar</button>
+        </div>
+      </form>`);
+    ligarMapaFormularioAgendaEquipe(modal);
+  }
+
+  function ligarMapaFormularioAgendaEquipe(modal) {
+    const botaoMapa = modal.querySelector('[data-acao-local="abrir-mapa-agenda-equipe"]');
+    const campoLocal = modal.querySelector("[data-campo-local-agenda-equipe]");
+    if (botaoMapa && campoLocal) {
+      botaoMapa.addEventListener("click", () => {
+        if (!campoLocal.value.trim()) { alert("Digite o local primeiro."); return; }
+        window.open(linkMapaAgendaEquipe(campoLocal.value.trim()), "_blank", "noopener");
+      });
+    }
+  }
+
+  async function abrirDetalheEventoAgendaEquipe(eventoId) {
+    const evento = await chamarApi(`/agenda/eventos/${eventoId}`);
+    const podeEditar = evento.usuario_dono_id === state.usuarioAtual.id || temPermissao("agenda", "editar_todos");
+    if (podeEditar) return modalEditarEventoAgendaEquipe(evento);
+    abrirModal(`
+      <h3>${escapeHtml(evento.titulo)}</h3>
+      <p><strong>Quando:</strong> ${fmtDataHoraAgendaEquipe(evento.data_inicio)}${evento.data_fim ? " até " + fmtDataHoraAgendaEquipe(evento.data_fim) : ""}</p>
+      ${evento.local_texto ? `<p><strong>Local:</strong> ${escapeHtml(evento.local_texto)} <a href="${linkMapaAgendaEquipe(evento.local_texto)}" target="_blank" rel="noopener">🗺️ Abrir no mapa</a></p>` : ""}
+      ${evento.descricao ? `<p>${escapeHtml(evento.descricao)}</p>` : ""}
+      <p class="texto-suave">De: ${escapeHtml(evento.dono_nome)} — criado por ${escapeHtml(evento.criado_por_nome)}</p>
+      <div class="rodape-modal"><button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button></div>`);
+  }
+
+  // Fase 193 — Web Push (padrão do navegador, sem depender só do som do
+  // WhatsApp): reaproveita o Service Worker que o PWA já registra logo
+  // abaixo (`/sw.js`). `Notification.requestPermission()` só pode ser
+  // chamado a partir de um gesto explícito do usuário (clique no botão),
+  // nunca sozinho ao carregar a tela — por isso fica atrás do botão
+  // "Ativar notificações", nunca automático.
+  function base64UrlParaUint8Array(base64Url) {
+    const padding = "=".repeat((4 - (base64Url.length % 4)) % 4);
+    const base64 = (base64Url + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const bruto = atob(base64);
+    return Uint8Array.from([...bruto].map((c) => c.charCodeAt(0)));
+  }
+
+  async function ativarNotificacoesPushAgendaEquipe() {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+      alert("Este navegador não suporta notificações push.");
+      return;
+    }
+    const permissao = await Notification.requestPermission();
+    if (permissao !== "granted") {
+      alert("Permissão de notificação negada. Ative manualmente nas configurações do navegador se mudar de ideia.");
+      return;
+    }
+    const { chave } = await chamarApi("/agenda/push/chave-publica");
+    if (!chave) {
+      alert("O servidor ainda não tem as chaves de notificação push configuradas (variáveis ALPHAFITUS_VAPID_*). Fale com o administrador do sistema.");
+      return;
+    }
+    const registro = await navigator.serviceWorker.ready;
+    const inscricao = await registro.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: base64UrlParaUint8Array(chave),
+    });
+    await chamarApi("/agenda/push/inscrever", { method: "POST", body: inscricao.toJSON() });
+    definirFlash("ok", "Notificações push ativadas neste navegador.");
+    montarRota();
+  }
+
+  // Inverso de paraDatetimeLocalAgendaEquipe: o valor de um
+  // <input type="datetime-local"> ("AAAA-MM-DDTHH:MM", sempre em hora
+  // LOCAL, sem fuso) já bate exatamente com o formato que
+  // `datetime.fromisoformat` espera no backend — só completa os segundos
+  // que o input não manda. Deliberadamente NÃO usa `.toISOString()` (que
+  // converteria pra UTC): tanto a criação quanto a checagem de conflito
+  // comparam essas strings ingenuamente, então tudo tem que ficar no
+  // mesmo fuso (o local de quem está usando) do início ao fim.
+  function deDatetimeLocalParaIsoAgendaEquipe(valor) {
+    if (!valor) return null;
+    return valor.length === 16 ? `${valor}:00` : valor;
+  }
+
+  function montarCorpoEventoAgendaEquipe(dados) {
+    return {
+      titulo: dados.get("titulo"),
+      descricao: dados.get("descricao") || null,
+      data_inicio: deDatetimeLocalParaIsoAgendaEquipe(dados.get("data_inicio")),
+      data_fim: deDatetimeLocalParaIsoAgendaEquipe(dados.get("data_fim")),
+      local_texto: dados.get("local_texto") || null,
+      cor: dados.get("cor"),
+      usuario_dono_id: Number(dados.get("usuario_dono_id")),
+      notificar_chat_interno: dados.get("notificar_chat_interno") === "on",
+      notificar_whatsapp: dados.get("notificar_whatsapp") === "on",
+      notificar_push: dados.get("notificar_push") === "on",
+      lembrete_antecedencia_min: Number(dados.get("lembrete_antecedencia_min")) || 0,
+      lembrete_repeticoes: Math.max(1, Number(dados.get("lembrete_repeticoes")) || 1),
+      lembrete_intervalo_min: Math.max(1, Number(dados.get("lembrete_intervalo_min")) || 10),
+    };
+  }
+
+  // Fluxo de conflito (pedido do usuário): tenta salvar sem forçar; se o
+  // backend responder 409 (já existe compromisso da mesma pessoa nesse
+  // horário — ver agenda_service.verificar_conflito), pergunta "confirma
+  // mesmo assim?" e só reenvia com `forcar: true` se a resposta for sim.
+  async function salvarEventoAgendaEquipeComConflito(caminho, metodo, corpo) {
+    try {
+      await chamarApi(caminho, { method: metodo, body: corpo });
+    } catch (erro) {
+      if (erro.status === 409 && erro.corpo && erro.corpo.conflito) {
+        const nomes = erro.corpo.eventos_conflitantes.map((e) => `"${e.titulo}" (${fmtDataHoraAgendaEquipe(e.data_inicio)})`).join(", ");
+        if (!confirm(`Já existe compromisso marcado nesse horário para essa pessoa: ${nomes}.\n\nConfirmar mesmo assim?`)) return;
+        await chamarApi(caminho, { method: metodo, body: { ...corpo, forcar: true } });
+      } else {
+        throw erro;
+      }
+    }
+    fecharModais();
+    definirFlash("ok", "Compromisso salvo.");
+    return renderAgenda();
   }
 
   // Fase 188c — pedido do usuário: NÃO é "vincular a um usuário que já
@@ -19048,6 +19388,43 @@
         await chamarApi(`/usuarios/${alvo.dataset.id}/reativar`, { method: "POST" });
         definirFlash("ok", "Usuário reativado.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      case "mudar-mes-agenda-equipe":
+        return renderAgenda(Number(alvo.dataset.ano), Number(alvo.dataset.mes));
+      case "novo-evento-agenda-equipe":
+        await modalNovoEventoAgendaEquipe(alvo.dataset.data);
+        return;
+      case "ver-evento-agenda-equipe":
+        await abrirDetalheEventoAgendaEquipe(Number(alvo.dataset.id));
+        return;
+      case "ver-dia-agenda-equipe": {
+        // "+X mais": lista simples do dia inteiro num modal, cada linha
+        // clicável pra abrir o detalhe/edição — sem lotar a célula do grid.
+        const dataAlvo = alvo.dataset.data;
+        const eventosDoDia = await chamarApi(`/agenda/eventos?de=${dataAlvo}T00:00:00&ate=${dataAlvo}T23:59:59`);
+        abrirModal(`
+          <h3>Compromissos em ${new Date(dataAlvo + "T00:00:00").toLocaleDateString("pt-BR")}</h3>
+          <div style="display:flex;flex-direction:column;gap:6px;">
+            ${eventosDoDia.map((ev) => `
+              <button type="button" class="botao secundario" style="text-align:left;border-left:3px solid ${ev.cor};" data-acao="ver-evento-agenda-equipe" data-id="${ev.id}">
+                ${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })} — ${escapeHtml(ev.titulo)} <span class="texto-suave">(${escapeHtml(ev.dono_nome)})</span>
+              </button>`).join("")}
+          </div>
+          <div class="rodape-modal"><button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button></div>`);
+        return;
+      }
+      case "excluir-evento-agenda-equipe":
+        if (!confirm("Excluir este compromisso? Não tem como desfazer.")) return;
+        await chamarApi(`/agenda/eventos/${alvo.dataset.id}`, { method: "DELETE" });
+        fecharModais();
+        definirFlash("ok", "Compromisso excluído.");
+        return renderAgenda();
+      case "ativar-push-agenda-equipe":
+        try {
+          await ativarNotificacoesPushAgendaEquipe();
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível ativar as notificações.");
+        }
+        return;
       case "novo-funcionario":
         await modalNovoFuncionario();
         return;
@@ -20823,6 +21200,14 @@
         fecharModais();
         definirFlash("ok", "Usuário atualizado.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      }
+      case "criar-evento-agenda-equipe": {
+        const corpo = montarCorpoEventoAgendaEquipe(dados);
+        return salvarEventoAgendaEquipeComConflito("/agenda/eventos", "POST", corpo);
+      }
+      case "editar-evento-agenda-equipe": {
+        const corpo = montarCorpoEventoAgendaEquipe(dados);
+        return salvarEventoAgendaEquipeComConflito(`/agenda/eventos/${form.dataset.id}`, "PUT", corpo);
       }
       case "criar-funcionario": {
         const corpo = {

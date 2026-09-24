@@ -47,6 +47,13 @@ boto3>=1.34
 # neste ambiente de desenvolvimento em nuvem, que é Linux) — só quem
 # instalar de verdade no Windows recebe esta dependência.
 pywin32>=306 ; sys_platform == "win32"
+# pywebpush: envia notificação push de verdade pro navegador (Web Push,
+# padrão W3C) — usado pela Agenda (Fase 193) pra avisar compromissos mesmo
+# com o ERP fechado, reaproveitando o Service Worker que o PWA já registra
+# (frontend/static/app.js, `/sw.js`). Importado sob demanda dentro de
+# app/agenda_service.py (mesmo padrão de boto3 acima): quem nunca ativar
+# notificações push não é afetado mesmo sem esta biblioteca instalada.
+pywebpush>=2.0
 # requests: usado só pela integração de NF-e (Fase 70) para falar com a
 # API REST do provedor terceirizado (Focus NFe) — importado sob demanda
 # dentro de app/nfe_service.py (mesmo padrão de boto3 acima), então uma

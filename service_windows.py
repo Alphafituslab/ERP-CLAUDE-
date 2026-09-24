@@ -169,7 +169,7 @@ if os.name == "nt":
             # serviço passa pelo mesmo caminho, porque ele TAMBÉM é uma
             # forma de "iniciar o Alphafitus OS" (ver run.py e a nota de
             # escopo em migrations/schema_fase67.sql).
-            from app import backup_service, create_app
+            from app import backup_service, create_app, agenda_service
             from app import db as db_module
 
             resultado_restauracao = db_module.aplicar_restauracao_pendente_se_houver()
@@ -182,6 +182,7 @@ if os.name == "nt":
 
             app = create_app()
             backup_service.iniciar_agendador_em_background()
+            agenda_service.iniciar_agendador_em_background()  # Fase 193
 
             import waitress
             from waitress.server import create_server
