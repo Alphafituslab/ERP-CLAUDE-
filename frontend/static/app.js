@@ -853,6 +853,9 @@
     // Fase 192 — lembrete de backup extra às 8h e 16h (mesma proteção
     // contra duplicar timer de iniciarHeartbeatTerminal).
     iniciarLembreteBackup();
+    // Fase 195 — alerta bloqueante de compromisso da Agenda, em QUALQUER
+    // tela do sistema (mesma proteção contra duplicar timer).
+    iniciarPollingAlertasAgenda();
     // Fase 176 — pedido do usuário: saber em tempo real o que cada terminal
     // está fazendo, não só a cada 60s. Manda a tela atual a cada navegação,
     // além do heartbeat periódico de sempre — chamada "fire and forget",
@@ -2414,6 +2417,66 @@
     await chamarApi("/agenda/push/inscrever", { method: "POST", body: inscricao.toJSON() });
     definirFlash("ok", "Notificações push ativadas neste navegador.");
     montarRota();
+  }
+
+  // Pedido do usuário (2026-09-24): "quando tiver alguma agenda pro
+  // usuário que agendou, deve dar um alerta na tela... e não sair da tela
+  // até o usuário fechar" — diferente do toast (que some sozinho), este é
+  // um modal TRAVADO (`abrirModal(..., {travado:true})`, mesmo recurso já
+  // usado em "Novo usuário" pra não perder o que já foi digitado): só
+  // fecha pelo botão "Ciente", nunca clicando fora. Roda em QUALQUER tela
+  // do sistema (mesmo padrão de `iniciarPollingNotificacoes`), não só
+  // dentro da Agenda — a pessoa pode estar em Produção quando a hora
+  // chegar.
+  let timerAlertasAgenda = null;
+  let filaAlertasAgenda = [];
+  let mostrandoAlertaAgenda = false;
+
+  function iniciarPollingAlertasAgenda() {
+    if (timerAlertasAgenda) return;
+    verificarAlertasAgenda();
+    timerAlertasAgenda = setInterval(verificarAlertasAgenda, 20000);
+  }
+
+  async function verificarAlertasAgenda() {
+    if (mostrandoAlertaAgenda) return; // já tem um na tela, não busca de novo
+    let pendentes;
+    try {
+      pendentes = await chamarApi("/agenda/alertas-tela");
+    } catch (e) {
+      return; // nunca pode travar a navegação normal do sistema
+    }
+    for (const p of pendentes || []) {
+      if (!filaAlertasAgenda.some((f) => f.id === p.id && f.repeticao_num === p.repeticao_num)) {
+        filaAlertasAgenda.push(p);
+      }
+    }
+    mostrarProximoAlertaAgenda();
+  }
+
+  function mostrarProximoAlertaAgenda() {
+    if (mostrandoAlertaAgenda || filaAlertasAgenda.length === 0) return;
+    mostrandoAlertaAgenda = true;
+    const alerta = filaAlertasAgenda.shift();
+    const inicio = new Date(alerta.data_inicio);
+    const modal = abrirModal(
+      `
+      <h3>🔔 Lembrete de compromisso</h3>
+      <p style="font-size:16px;font-weight:700;margin-bottom:4px;">${escapeHtml(alerta.titulo)}</p>
+      <p class="texto-suave">📅 ${inicio.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
+      ${alerta.local_texto ? `<p class="texto-suave">📍 ${escapeHtml(alerta.local_texto)} <a href="${linkMapaAgendaEquipe(alerta.local_texto)}" target="_blank" rel="noopener">🗺️ Mapa</a></p>` : ""}
+      ${alerta.descricao ? `<p>${escapeHtml(alerta.descricao)}</p>` : ""}
+      <div class="rodape-modal"><button type="button" class="botao" data-acao-local="ciente-alerta-agenda">Ciente</button></div>`,
+      { travado: true }
+    );
+    modal.querySelector('[data-acao-local="ciente-alerta-agenda"]').addEventListener("click", async () => {
+      try {
+        await chamarApi(`/agenda/alertas-tela/${alerta.id}/${alerta.repeticao_num}/confirmar`, { method: "POST" });
+      } catch (e) { /* se falhar, o próximo poll traz de novo — não é grave */ }
+      modal.remove();
+      mostrandoAlertaAgenda = false;
+      mostrarProximoAlertaAgenda();
+    });
   }
 
   // Inverso de paraDatetimeLocalAgendaEquipe: o valor de um

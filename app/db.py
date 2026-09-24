@@ -188,6 +188,7 @@ SCHEMA_FILES = [
     "schema_fase191.sql",  # Fase 191 — Função aplica Perfis padrão automaticamente ao criar usuário
     "schema_fase193.sql",  # Fase 193 — Agenda da equipe (compromissos, lembretes multi-canal, push do navegador)
     "schema_fase194.sql",  # Fase 194 — Agenda: e-mail próprio do usuário pro chat interno (Whatts Inbox), separado do login do ERP
+    "schema_fase195.sql",  # Fase 195 — Agenda: canal "tela" no lembrete (alerta bloqueante que só fecha manualmente)
 ]
 
 

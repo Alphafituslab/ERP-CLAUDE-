@@ -687,7 +687,8 @@ def solicitar_recuperacao_senha():
     if usuario.get("celular"):
         try:
             config_whats = backup_service.obter_configuracao(conn)
-            backup_service.enviar_texto_whatsapp(config_whats, usuario["celular"], texto)
+            numero_whats = backup_service.normalizar_numero_brasileiro(usuario["celular"])
+            backup_service.enviar_texto_whatsapp(config_whats, numero_whats, texto)
             canais_ok.append("whatsapp")
         except Exception as erro:
             audit.registrar(conn, tabela="usuarios", registro_id=usuario["id"], usuario_id=None,

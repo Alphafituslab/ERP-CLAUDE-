@@ -124,6 +124,33 @@ def excluir_evento(evento_id):
     return jsonify({"ok": True})
 
 
+# ─── Alerta bloqueante na tela ───────────────────────────────────────────────
+
+@bp.get("/alertas-tela")
+@requires_auth
+def listar_alertas_tela():
+    """Poll do navegador (mesmo espírito de `iniciarPollingNotificacoes`):
+    devolve os lembretes da AGENDA DE QUEM ESTÁ LOGADO que já chegaram na
+    hora e ainda não foram mostrados/confirmados nesta tela."""
+    return jsonify(agenda_service.lembretes_tela_pendentes(get_db(), g.usuario_atual["id"]))
+
+
+@bp.post("/alertas-tela/<int:evento_id>/<int:repeticao_num>/confirmar")
+@requires_auth
+def confirmar_alerta_tela(evento_id, repeticao_num):
+    conn = get_db()
+    evento = conn.execute("SELECT usuario_dono_id FROM agenda_eventos WHERE id = ?", (evento_id,)).fetchone()
+    if evento is None:
+        raise ApiError("Compromisso não encontrado.", status=404)
+    # Só o próprio dono confirma o alerta dele — ninguém fecha um aviso que
+    # não é seu (nem o Administrador; é só um "ciente", não uma ação de
+    # gerenciar o compromisso).
+    if evento["usuario_dono_id"] != g.usuario_atual["id"]:
+        raise ForbiddenError("Este alerta não é seu.")
+    agenda_service.confirmar_alerta_tela(conn, evento_id, repeticao_num)
+    return jsonify({"ok": True})
+
+
 # ─── Push do navegador (Web Push) ───────────────────────────────────────────
 
 @bp.get("/push/chave-publica")

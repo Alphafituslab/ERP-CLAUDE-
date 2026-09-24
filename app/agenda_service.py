@@ -255,7 +255,8 @@ def enviar_lembrete(conn, evento: dict, repeticao_num: int):
         # sozinho se a URL/chave da Evolution API existem.
         try:
             config = backup_service.obter_configuracao(conn)
-            backup_service.enviar_texto_whatsapp(config, dono["celular"], texto)
+            numero = backup_service.normalizar_numero_brasileiro(dono["celular"])
+            backup_service.enviar_texto_whatsapp(config, numero, texto)
             _marcar_enviado(conn, evento["id"], "whatsapp", repeticao_num)
         except Exception:
             pass  # lembrete não pode derrubar o ciclo do agendador; tenta de novo no próximo ciclo
@@ -263,6 +264,53 @@ def enviar_lembrete(conn, evento: dict, repeticao_num: int):
     if evento["notificar_push"] and not _ja_enviado(conn, evento["id"], "push", repeticao_num):
         enviar_push(conn, evento["usuario_dono_id"], evento["titulo"], texto, {"eventoId": evento["id"]})
         _marcar_enviado(conn, evento["id"], "push", repeticao_num)
+
+
+def _repeticoes_devidas(evento: dict, agora: datetime.datetime, limite_atraso: datetime.datetime):
+    """Quais números de repetição do lembrete já chegaram na hora (entre o
+    horário calculado e agora, sem contar os velhos demais nem os que
+    aconteceriam depois do início do evento). Compartilhado pelo
+    agendador em background (chat/whatsapp/push) e pelo alerta bloqueante
+    de tela (que é sob demanda, cada vez que o navegador pergunta)."""
+    inicio = datetime.datetime.fromisoformat(evento["data_inicio"])
+    base = inicio - datetime.timedelta(minutes=evento["lembrete_antecedencia_min"])
+    devidas = []
+    for repeticao_num in range(1, evento["lembrete_repeticoes"] + 1):
+        horario_lembrete = base + datetime.timedelta(minutes=evento["lembrete_intervalo_min"] * (repeticao_num - 1))
+        if horario_lembrete > agora or horario_lembrete > inicio or horario_lembrete < limite_atraso:
+            continue
+        devidas.append(repeticao_num)
+    return devidas
+
+
+# ─── Alerta bloqueante na tela ──────────────────────────────────────────────
+# Pedido do usuário (2026-09-24): quando chegar a hora do lembrete (ex.: 4h
+# antes), quem marcou o compromisso vê um alerta NA TELA que não sai
+# sozinho — só fecha quando a pessoa clicar em "Ciente". Diferente dos
+# outros 3 canais (que "enviam" pra fora), esse é sob demanda: o navegador
+# pergunta a cada poucos segundos (mesmo padrão do sino de notificações,
+# `iniciarPollingNotificacoes`) "tem algum alerta meu pendente?" — e só
+# quando a pessoa fecha o alerta é que ele conta como "mostrado" (canal
+# 'tela' em agenda_lembretes_enviados), pra nunca reaparecer sozinho.
+
+def lembretes_tela_pendentes(conn, usuario_id: int):
+    agora = datetime.datetime.now()
+    limite_atraso = agora - datetime.timedelta(minutes=JANELA_TOLERANCIA_ATRASO_MINUTOS)
+    eventos = conn.execute(
+        "SELECT * FROM agenda_eventos WHERE usuario_dono_id = ? AND status = 'agendado' AND data_inicio >= ?",
+        (usuario_id, limite_atraso.isoformat()),
+    ).fetchall()
+    pendentes = []
+    for row in eventos:
+        evento = dict(row)
+        for repeticao_num in _repeticoes_devidas(evento, agora, limite_atraso):
+            if not _ja_enviado(conn, evento["id"], "tela", repeticao_num):
+                pendentes.append({**evento, "repeticao_num": repeticao_num})
+    return pendentes
+
+
+def confirmar_alerta_tela(conn, evento_id: int, repeticao_num: int):
+    _marcar_enviado(conn, evento_id, "tela", repeticao_num)
 
 
 # ─── Agendador em background ────────────────────────────────────────────────
@@ -279,12 +327,7 @@ def _rodar_ciclo(db_path):
         ).fetchall()
         for row in eventos:
             evento = dict(row)
-            inicio = datetime.datetime.fromisoformat(evento["data_inicio"])
-            base = inicio - datetime.timedelta(minutes=evento["lembrete_antecedencia_min"])
-            for repeticao_num in range(1, evento["lembrete_repeticoes"] + 1):
-                horario_lembrete = base + datetime.timedelta(minutes=evento["lembrete_intervalo_min"] * (repeticao_num - 1))
-                if horario_lembrete > agora or horario_lembrete > inicio or horario_lembrete < limite_atraso:
-                    continue
+            for repeticao_num in _repeticoes_devidas(evento, agora, limite_atraso):
                 enviar_lembrete(conn, evento, repeticao_num)
 
 

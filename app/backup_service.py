@@ -290,6 +290,23 @@ def _enviar_aviso_whatsapp(config, nome_arquivo, tamanho_bytes, resultados_outro
     return enviar_texto_whatsapp(config, numero, texto)
 
 
+def normalizar_numero_brasileiro(numero):
+    """`usuarios.celular` é sempre um número BRASILEIRO sem DDI (DDD +
+    número, 10 ou 11 dígitos) — diferente do campo de WhatsApp da
+    Padronização do Memorial (Fase 171+), que já vem com DDI escolhido
+    pelo próprio usuário (editável, pensado pra número internacional).
+    Sem o "55" na frente, a Evolution API não encontra o número
+    (`{"exists": false}`, achado real em produção, 2026-09-24, testando
+    lembrete da Agenda com "48998678983"). Só prepende quando o número
+    tem cara de doméstico (10-11 dígitos); um que já veio com DDI (12+
+    dígitos, como o da Padronização) fica como está — nunca dobra o
+    prefixo."""
+    digitos = "".join(c for c in (numero or "") if c.isdigit())
+    if len(digitos) in (10, 11):
+        return "55" + digitos
+    return digitos
+
+
 def enviar_texto_whatsapp(config, numero, texto):
     """Primitivo reaproveitável — extraído de `_enviar_aviso_whatsapp`
     (Fase 130) na Fase 136 pra também servir o portal de Terceirização
