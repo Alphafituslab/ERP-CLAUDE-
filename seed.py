@@ -608,6 +608,14 @@ PERMISSOES_PADRAO = [
     # de verdade — o Administrador já ganha as duas de graça por ter "TODAS".
     ("agenda", "editar_todos", "Editar o compromisso de outro usuário na Agenda", 0),
     ("agenda", "excluir_todos", "Excluir o compromisso de outro usuário na Agenda", 0),
+
+    # Fase 197 — Orçamentos (proposta comercial com aprovação por link).
+    # Cliente bloqueado financeiramente ainda pode receber orçamento — a
+    # trava é só na confirmação do pedido gerado (mesma regra de sempre,
+    # Fase 102), não na criação da proposta.
+    ("orcamentos", "visualizar", "Ver orçamentos cadastrados", 0),
+    ("orcamentos", "criar", "Criar, editar e enviar orçamentos", 0),
+    ("orcamentos", "cancelar", "Cancelar um orçamento", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
@@ -812,6 +820,9 @@ PERFIS_PADRAO = [
         "terceirizacao.aprovar_comercial",
         # Fase 171 — gestor comercial acompanha o funil da equipe inteira.
         "oportunidades.visualizar_todas", "oportunidades.gerenciar",
+        # Fase 197 — mesmo perfil que já monta o pedido monta a proposta
+        # comercial antes dele (orçamento aprovado vira pedido sozinho).
+        "orcamentos.visualizar", "orcamentos.criar", "orcamentos.cancelar",
     ]),
     ("Vendedor", "Uso do aplicativo de vendas em campo", 1, [
         "itens.visualizar", "comercial.visualizar", "comercial.criar_pedido",

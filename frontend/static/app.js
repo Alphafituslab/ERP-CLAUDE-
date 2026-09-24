@@ -924,6 +924,7 @@
           case "transportadoras": return renderTransportadoras();
           case "pagamentos": return renderPagamentos();
           case "pedidos-venda": return renderPedidosVenda();
+          case "orcamentos": return param ? renderOrcamentoDetalhe(Number(param)) : renderOrcamentosLista();
           case "terceirizacao": return param ? renderTerceirizacaoDetalhe(Number(param)) : renderTerceirizacoes();
           case "terceirizacao-embalagens": return renderTerceirizacaoEmbalagens();
           // Fase 147 — documentos + contratos do cliente ("deve ficar
@@ -1120,7 +1121,14 @@
       tipo: "grupo", chave: "grupo-comercial", nome: "Comercial & Vendas",
       itens: [
         { rota: "#/comercial", chave: "comercial", label: "Comercial (CRM)", permissao: ["comercial", "visualizar"], apelidos: ["clientes", "cliente"] },
-        { rota: "#/pedidos-venda", chave: "pedidos-venda", label: "Pedidos de Venda", permissao: ["comercial", "visualizar"], apelidos: ["orcamentos", "orcamento", "faturados", "faturado"] },
+        { rota: "#/pedidos-venda", chave: "pedidos-venda", label: "Pedidos de Venda", permissao: ["comercial", "visualizar"], apelidos: ["faturados", "faturado"] },
+        // Fase 197 — pedido do usuário: proposta comercial formal (capa,
+        // validade, condições), aprovação por link público (mesmo
+        // mecanismo do Contrato/Terceirização) — ao aprovar, gera o
+        // Pedido de Venda sozinho. "orcamentos"/"orcamento" tirado dos
+        // apelidos de Pedidos de Venda acima (achado real: apontava pra
+        // tela errada antes desta tela existir).
+        { rota: "#/orcamentos", chave: "orcamentos", label: "Orçamentos", permissao: ["orcamentos", "visualizar"], apelidos: ["orcamento", "proposta", "proposta comercial", "cotacao", "cotação"] },
         // Fase 97 — tela única para lançar e faturar pedidos sem alternar
         // entre Comercial e Fiscal a cada etapa.
         { rota: "#/lancar-faturar", chave: "lancar-faturar", label: "Lançar & Faturar Pedidos", permissao: ["comercial", "criar_pedido"] },
@@ -14270,6 +14278,212 @@
   // lista TODOS os contratos de todos os clientes — abrir um cliente
   // específico continua funcionando como sempre, isto aqui é só a visão
   // geral que faltava pra virar uma "pasta" de verdade no menu.
+  // ─────────────────────────────────────────────────────────────────────────
+  // Fase 197 — Orçamentos (proposta comercial formal, aprovação por link
+  // público). Cliente bloqueado financeiramente ainda pode receber
+  // orçamento — a trava de verdade é só na confirmação do Pedido de Venda
+  // gerado (mesma regra de sempre, Fase 102), nunca aqui.
+  // ─────────────────────────────────────────────────────────────────────────
+  function seloStatusOrcamento(status) {
+    const mapa = {
+      rascunho: ["inativo", "Rascunho"], enviado: ["amarelo", "Enviado — aguardando decisão"],
+      aprovado: ["ativo", "Aprovado"], recusado: ["bloqueado", "Recusado"],
+      expirado: ["inativo", "Expirado"], cancelado: ["bloqueado", "Cancelado"],
+    };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
+  }
+
+  async function renderOrcamentosLista() {
+    app.innerHTML = '<div class="carregando">Carregando orçamentos…</div>';
+    const [clientes, itens] = await Promise.all([chamarApi("/comercial/clientes"), chamarApi("/itens")]);
+    state.cache.clientes = clientes;
+    state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
+    const podeCriar = temPermissao("orcamentos", "criar");
+    const orcamentos = await chamarApi("/orcamentos");
+
+    const linhas = orcamentos.map((o) => `<tr>
+      <td class="mono"><a href="#/orcamentos/${o.id}">${escapeHtml(o.numero)}</a></td>
+      <td>${escapeHtml(o.cliente_razao_social)}</td>
+      <td>${seloStatusOrcamento(o.status)}</td>
+      <td>${fmtData(o.criado_em)}</td>
+      <td><a class="botao secundario pequeno" href="#/orcamentos/${o.id}">Abrir</a></td>
+    </tr>`).join("");
+
+    renderShell(
+      `<div class="barra-acoes">
+         <h2 style="margin:0;">Orçamentos</h2>
+         ${podeCriar ? `<button type="button" class="botao" data-acao="novo-orcamento">+ Novo orçamento</button>` : ""}
+       </div>
+       <p class="texto-suave" style="margin-top:-6px;">Proposta comercial formal — envie por link, o cliente aprova ou recusa sem precisar de login. Ao aprovar, o Pedido de Venda é gerado sozinho, já com os itens e preços negociados aqui.</p>
+       <div class="cartao">
+         <div class="tabela-scroll">
+         <table>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Status</th><th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhum orçamento cadastrado ainda.</td></tr>'}</tbody>
+         </table>
+         </div>
+       </div>`,
+      "orcamentos"
+    );
+  }
+
+  function _linhaItemOrcamento(item) {
+    const opcoes = (state.cache.itensVendaveis || [])
+      .map((i) => `<option value="${i.id}" ${item && item.item_id === i.id ? "selected" : ""}>${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`)
+      .join("");
+    return `
+      <tr class="linha-item-orcamento">
+        <td><select class="orcamento-item-select" required><option value="">Escolha…</option>${opcoes}</select></td>
+        <td><input type="number" step="any" min="0.0001" class="orcamento-item-qtd" value="${item ? item.quantidade : "1"}" style="width:80px;" required></td>
+        <td><input type="text" class="orcamento-item-unidade" value="${escapeHtml(item ? item.unidade || "" : "")}" style="width:70px;" placeholder="UN"></td>
+        <td><input type="number" step="0.01" min="0" class="orcamento-item-preco" value="${item ? item.preco_unitario : ""}" style="width:100px;" required></td>
+        <td><button type="button" class="botao secundario pequeno" data-acao-local="remover-linha-item-orcamento">✕</button></td>
+      </tr>`;
+  }
+
+  function _ligarLinhasItemOrcamento(wrap) {
+    const corpo = wrap.querySelector("#corpo-itens-orcamento");
+    wrap.querySelector('[data-acao-local="adicionar-linha-item-orcamento"]').addEventListener("click", () => {
+      corpo.insertAdjacentHTML("beforeend", _linhaItemOrcamento(null));
+    });
+    corpo.addEventListener("click", (e) => {
+      const botao = e.target.closest('[data-acao-local="remover-linha-item-orcamento"]');
+      if (!botao) return;
+      if (corpo.children.length > 1) botao.closest("tr").remove();
+    });
+  }
+
+  function _coletarItensOrcamento(wrap) {
+    return [...wrap.querySelectorAll(".linha-item-orcamento")].map((linha) => ({
+      item_id: Number(linha.querySelector(".orcamento-item-select").value),
+      quantidade: Number(linha.querySelector(".orcamento-item-qtd").value),
+      unidade: linha.querySelector(".orcamento-item-unidade").value.trim() || null,
+      preco_unitario: Number(linha.querySelector(".orcamento-item-preco").value),
+    })).filter((l) => l.item_id);
+  }
+
+  function _htmlFormularioOrcamento(orcamento) {
+    return `
+      ${_buscaClienteHtml()}
+      <div class="campo"><label>Validade (dias)</label><input type="number" name="validade_dias" min="1" value="${orcamento?.validade_dias ?? 15}"></div>
+      <div class="campo"><label>Itens</label>
+        <table style="width:100%;">
+          <thead><tr><th style="text-align:left;font-size:11px;color:var(--texto-suave);">Produto</th><th style="font-size:11px;color:var(--texto-suave);">Qtd.</th><th style="font-size:11px;color:var(--texto-suave);">Unid.</th><th style="font-size:11px;color:var(--texto-suave);">Preço unit.</th><th></th></tr></thead>
+          <tbody id="corpo-itens-orcamento">${(orcamento?.itens?.length ? orcamento.itens : [null]).map(_linhaItemOrcamento).join("")}</tbody>
+        </table>
+        <button type="button" class="botao secundario pequeno" data-acao-local="adicionar-linha-item-orcamento" style="margin-top:8px;">+ Adicionar item</button>
+      </div>
+      <div class="campo"><label>Condições (opcional)</label><textarea name="condicoes_texto" rows="2">${escapeHtml(orcamento?.condicoes_texto || "")}</textarea></div>
+      <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes" rows="2">${escapeHtml(orcamento?.observacoes || "")}</textarea></div>`;
+  }
+
+  function modalNovoOrcamento() {
+    const wrap = abrirModal(`
+      <h3>Novo orçamento</h3>
+      <form data-form="criar-orcamento">
+        ${_htmlFormularioOrcamento(null)}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Criar orçamento</button>
+        </div>
+      </form>`,
+      { largo: true }
+    );
+    _ligarLinhasItemOrcamento(wrap);
+    const campoBusca = wrap.querySelector("#busca-cliente-pedido");
+    const listaResultados = wrap.querySelector("#resultados-busca-cliente-pedido");
+    const clientes = (state.cache.clientes || []).filter((c) => c.status === "ativo");
+    campoBusca.addEventListener("input", () => {
+      const termo = campoBusca.value.trim().toLowerCase();
+      if (!termo) { listaResultados.innerHTML = ""; return; }
+      const encontrados = clientes.filter((c) => (c.razao_social || "").toLowerCase().includes(termo) || (c.cnpj || "").includes(termo)).slice(0, 8);
+      listaResultados.innerHTML = encontrados.length
+        ? encontrados.map((c) => `<button type="button" class="item-busca-resultado" data-id="${c.id}" data-rotulo="${escapeHtml(c.razao_social)}">${escapeHtml(c.razao_social)} — <span class="mono">${escapeHtml(c.cnpj)}</span></button>`).join("")
+        : `<button type="button" class="item-busca-resultado" data-acao="abrir-cadastro-cliente-orcamento" style="color:var(--azul);">Nenhum cliente encontrado — + Cadastrar novo cliente</button>`;
+    });
+    listaResultados.addEventListener("click", (e) => {
+      const botao = e.target.closest(".item-busca-resultado");
+      if (!botao) return;
+      if (botao.dataset.acao === "abrir-cadastro-cliente-orcamento") {
+        fecharModais();
+        modalNovoCliente((clienteCriado) => {
+          state.cache.clientes = [...(state.cache.clientes || []), clienteCriado];
+          fecharModais();
+          modalNovoOrcamento();
+          setTimeout(() => {
+            const w = document.querySelector('form[data-form="criar-orcamento"]').closest(".fundo-modal");
+            w.querySelector("#busca-cliente-pedido").value = clienteCriado.razao_social;
+            w.querySelector("#cliente-id-pedido").value = clienteCriado.id;
+          }, 0);
+        });
+        return;
+      }
+      wrap.querySelector("#cliente-id-pedido").value = botao.dataset.id;
+      campoBusca.value = botao.dataset.rotulo;
+      listaResultados.innerHTML = "";
+    });
+  }
+
+  async function renderOrcamentoDetalhe(orcamentoId) {
+    app.innerHTML = '<div class="carregando">Carregando orçamento…</div>';
+    const orcamento = await chamarApi(`/orcamentos/${orcamentoId}`);
+    const podeGerenciar = temPermissao("orcamentos", "criar");
+    const podeCancelar = temPermissao("orcamentos", "cancelar");
+    const linhasItens = orcamento.itens.map((it) => `<tr>
+      <td>${escapeHtml(it.item_codigo)} — ${escapeHtml(it.item_descricao)}</td>
+      <td>${it.quantidade} ${escapeHtml(it.unidade || "")}</td>
+      <td>R$ ${it.preco_unitario.toFixed(2)}</td>
+      <td>R$ ${(it.quantidade * it.preco_unitario).toFixed(2)}</td>
+    </tr>`).join("");
+
+    renderShell(
+      `<div class="barra-acoes">
+         <h2 style="margin:0;">${escapeHtml(orcamento.numero)} ${seloStatusOrcamento(orcamento.status)}</h2>
+         <a class="botao secundario pequeno" href="#/orcamentos">← Voltar</a>
+       </div>
+       <p class="texto-suave" style="margin-top:-8px;">Cliente: <strong>${escapeHtml(orcamento.cliente.razao_social)}</strong>
+        ${orcamento.cliente.aprovacao_financeira_status !== "aprovado" ? seloAprovacaoFinanceiraCliente(orcamento.cliente.aprovacao_financeira_status) : ""}
+       </p>
+
+       <div class="cartao">
+         <div class="barra-acoes"><h3 style="margin:0;">Itens</h3>
+           <button type="button" class="botao secundario pequeno" data-acao="ver-pdf-orcamento" data-id="${orcamento.id}">📄 Ver PDF</button>
+         </div>
+         <div class="tabela-scroll"><table>
+           <thead><tr><th>Produto</th><th>Qtd.</th><th>Preço unit.</th><th>Subtotal</th></tr></thead>
+           <tbody>${linhasItens}</tbody>
+         </table></div>
+         <p style="text-align:right;font-weight:700;margin-top:8px;">Valor total: R$ ${orcamento.valor_total.toFixed(2)}</p>
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Link de aprovação</h3>
+         ${orcamento.link_portal ? `
+           <p class="texto-suave" style="word-break:break-all;">${escapeHtml(orcamento.link_portal)}</p>
+           <div style="display:flex;gap:8px;flex-wrap:wrap;">
+             <button type="button" class="botao secundario pequeno" data-acao="copiar-link-orcamento" data-link="${escapeHtml(orcamento.link_portal)}">📋 Copiar link</button>
+             ${podeGerenciar && orcamento.status !== "aprovado" && orcamento.status !== "cancelado" ? `<button type="button" class="botao secundario pequeno" data-acao="gerar-link-orcamento" data-id="${orcamento.id}">🔄 Gerar novo link</button>
+             <button type="button" class="botao pequeno" data-acao="gerar-link-orcamento" data-id="${orcamento.id}" data-whatsapp="1">📲 Gerar e enviar por WhatsApp</button>` : ""}
+           </div>
+         ` : podeGerenciar && orcamento.status !== "cancelado" ? `
+           <p class="texto-suave">Ainda não gerado.</p>
+           <button type="button" class="botao pequeno" data-acao="gerar-link-orcamento" data-id="${orcamento.id}">Gerar link de aprovação</button>
+           <button type="button" class="botao secundario pequeno" data-acao="gerar-link-orcamento" data-id="${orcamento.id}" data-whatsapp="1">Gerar e enviar por WhatsApp</button>
+         ` : '<p class="texto-suave">—</p>'}
+       </div>
+
+       ${orcamento.status === "recusado" && orcamento.motivo_recusa ? `<div class="cartao"><p class="mensagem-erro">Recusado pelo cliente: ${escapeHtml(orcamento.motivo_recusa)}</p></div>` : ""}
+       ${orcamento.status === "aprovado" && orcamento.pedido_venda_id ? `<div class="cartao"><p>✅ Aprovado — <a href="#/pedido/${orcamento.pedido_venda_id}">Abrir Pedido de Venda gerado →</a></p></div>` : ""}
+       ${orcamento.condicoes_texto ? `<div class="cartao"><h3 style="margin-top:0;">Condições</h3><p>${escapeHtml(orcamento.condicoes_texto)}</p></div>` : ""}
+       ${orcamento.observacoes ? `<div class="cartao"><h3 style="margin-top:0;">Observações</h3><p>${escapeHtml(orcamento.observacoes)}</p></div>` : ""}
+
+       ${podeCancelar && !["aprovado", "cancelado"].includes(orcamento.status) ? `
+       <button type="button" class="botao perigo" data-acao="cancelar-orcamento" data-id="${orcamento.id}">Cancelar orçamento</button>` : ""}`,
+      "orcamentos"
+    );
+  }
+
   async function renderContratosLista() {
     app.innerHTML = '<div class="carregando">Carregando contratos…</div>';
     const podeCriarContrato = temPermissao("terceirizacao", "criar");
@@ -19511,6 +19725,54 @@
           definirFlash("erro", erro.message || "Não foi possível ativar as notificações.");
         }
         return;
+      case "novo-orcamento":
+        modalNovoOrcamento();
+        return;
+      case "ver-pdf-orcamento": {
+        try {
+          await abrirBinarioEmNovaAba(`/orcamentos/${alvo.dataset.id}/pdf`);
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível abrir o PDF do orçamento.");
+        }
+        return;
+      }
+      case "copiar-link-orcamento": {
+        try {
+          await navigator.clipboard.writeText(alvo.dataset.link);
+          definirFlash("ok", "Link copiado.");
+        } catch (e) {
+          definirFlash("erro", "Não foi possível copiar — copie manualmente.");
+        }
+        return montarRota();
+      }
+      case "gerar-link-orcamento": {
+        const enviarWhatsapp = alvo.dataset.whatsapp === "1";
+        try {
+          const resultado = await chamarApi(`/orcamentos/${alvo.dataset.id}/link`, {
+            method: "POST", body: { enviar_whatsapp: enviarWhatsapp },
+          });
+          if (enviarWhatsapp && resultado.enviado_via_whatsapp) {
+            definirFlash("ok", "Link gerado e enviado por WhatsApp.");
+          } else if (enviarWhatsapp && resultado.erro_envio_whatsapp) {
+            definirFlash("erro", `Link gerado, mas o envio por WhatsApp falhou: ${resultado.erro_envio_whatsapp}`);
+          } else {
+            definirFlash("ok", "Link gerado.");
+          }
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível gerar o link.");
+        }
+        return renderOrcamentoDetalhe(Number(alvo.dataset.id));
+      }
+      case "cancelar-orcamento": {
+        if (!confirm("Cancelar este orçamento? Essa ação não pode ser desfeita.")) return;
+        try {
+          await chamarApi(`/orcamentos/${alvo.dataset.id}/cancelar`, { method: "POST" });
+          definirFlash("ok", "Orçamento cancelado.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível cancelar o orçamento.");
+        }
+        return renderOrcamentoDetalhe(Number(alvo.dataset.id));
+      }
       case "abrir-cadastro-rapido-cliente-contrato":
         // Pedido do usuário (2026-09-24): "cadastrar aqui deve abrir o
         // local ORIGINAL... e ao terminar volta pra essa tela e seleciona
@@ -23014,6 +23276,24 @@
         fecharModais();
         definirFlash("ok", "Pedido criado como rascunho.");
         return dados.get("origem") === "lf" ? renderLancarFaturarPedidos() : navegarPara(`#/pedido/${pedido.id}`);
+      }
+      case "criar-orcamento": {
+        if (!dados.get("cliente_id")) throw new Error("Busque e selecione um cliente.");
+        const itensOrcamento = _coletarItensOrcamento(form);
+        if (!itensOrcamento.length) throw new Error("Adicione ao menos um item.");
+        const orcamento = await chamarApi("/orcamentos", {
+          method: "POST",
+          body: {
+            cliente_id: Number(dados.get("cliente_id")),
+            validade_dias: dados.get("validade_dias") ? Number(dados.get("validade_dias")) : undefined,
+            condicoes_texto: dados.get("condicoes_texto") || null,
+            observacoes: dados.get("observacoes") || null,
+            itens: itensOrcamento,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Orçamento criado.");
+        return renderOrcamentoDetalhe(orcamento.id);
       }
       case "adicionar-item-pedido": {
         if (!dados.get("item_id")) throw new Error("Busque e selecione um item.");
