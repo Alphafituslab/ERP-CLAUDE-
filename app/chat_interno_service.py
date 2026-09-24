@@ -97,8 +97,20 @@ def enviar_mensagem_chat_interno(email_destinatario, texto):
             conversa_id = conversa["id"]
             remetente_id = bot_id
             campo_nao_lida = "nao_lidas_participante" if bot_id == conversa["criado_por_id"] else "nao_lidas_criador"
+            # Achado real em produção (2026-09-24): o Whatts Inbox evoluiu pra
+            # fechamento POR LADO (`fechada_para_criador_em`/
+            # `fechada_para_participante_em` — cada um fecha só pra si, ver
+            # `listar_conversas` de lá) depois que este código foi escrito —
+            # só reabrir `status`/`fechada_em` (os campos antigos, que ainda
+            # existem mas não são mais o que a listagem usa) deixava a
+            # conversa "fechada pra sempre" do lado de quem tinha fechado
+            # antes, mesmo com mensagem nova chegando: ela ficava fora da
+            # aba "Minhas" (só aparecia em "Encerradas"), sem nenhum aviso.
+            # Reabre nos DOIS lados, não só no do destinatário — mensagem
+            # nova sempre deveria valer pros dois.
             conn.execute(
                 f"UPDATE chat_interno_conversas SET status = 'aberta', fechada_em = NULL, "
+                f"fechada_para_criador_em = NULL, fechada_para_participante_em = NULL, "
                 f"{campo_nao_lida} = {campo_nao_lida} + 1 WHERE id = ?",
                 (conversa_id,),
             )
