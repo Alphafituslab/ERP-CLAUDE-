@@ -1179,18 +1179,20 @@
     // link no menu; Protocolo nunca existiu aqui dentro, mesmo raciocínio
     // de fidelidade) se mudaram pra dentro de Qualidade > Shelf Life, ver
     // acima — não ficam mais soltos no nível raiz do menu.
+    // Rótulo "Agenda de Compromissos" (não só "Agenda") de propósito — já
+    // existe "Agenda" dentro de APS (Sequenciamento), que é outra coisa
+    // completamente diferente (agendamento de ordem de produção em centro
+    // de trabalho, Fase 25). Pedido do usuário (2026-09-24): nunca
+    // misturar os dois, nem visualmente nem na busca. Fica LOGO ACIMA do
+    // grupo Administração (posição pedida), mas como item SOLTO, não
+    // dentro do grupo — sem `permissao`, de propósito, pra aparecer pra
+    // QUALQUER usuário logado (achado real: colocar dentro de
+    // Administração escondia a Agenda de quem não é admin, e é sobre
+    // deveres/compromissos de todo mundo, não só administração).
+    { rota: "#/agenda-equipe", chave: "agenda-equipe", label: "Agenda de Compromissos", apelidos: ["compromisso", "compromissos", "reuniao", "reunião", "evento", "calendario", "calendário", "agenda pessoal", "agenda da equipe", "dever", "deveres", "atendimento", "atendimentos"] },
     {
       tipo: "grupo", chave: "grupo-administracao", nome: "Administração",
       itens: [
-        // Rótulo "Agenda de Compromissos" (não só "Agenda") de propósito —
-        // já existe "Agenda" dentro de APS (Sequenciamento), que é outra
-        // coisa completamente diferente (agendamento de ordem de produção
-        // em centro de trabalho, Fase 25). Pedido do usuário (2026-09-24):
-        // nunca misturar os dois, nem visualmente nem na busca — e mora
-        // dentro de Administração porque é sobre deveres/compromissos e
-        // atendimento de clientes da equipe, não uma tela de uso diário
-        // isolada como Painel.
-        { rota: "#/agenda-equipe", chave: "agenda-equipe", label: "Agenda de Compromissos", apelidos: ["compromisso", "compromissos", "reuniao", "reunião", "evento", "calendario", "calendário", "agenda pessoal", "agenda da equipe", "dever", "deveres", "atendimento", "atendimentos"] },
         { rota: "#/usuarios", chave: "usuarios", label: "Usuários", permissao: ["usuarios", "visualizar"] },
         // Fase 188 (pedido do usuário) — cadastro dos FUNCIONÁRIOS da
         // empresa (produção, laboratório, vendas...), separado de
@@ -14215,6 +14217,7 @@
         <div class="campo"><label>Cliente</label><select name="cliente_id" required autofocus>
           <option value="">Escolha…</option>${opcoes}
         </select></div>
+        <button type="button" class="botao secundario pequeno" data-acao="abrir-cadastro-rapido-cliente-contrato" style="margin-bottom:12px;">+ Cadastrar novo cliente</button>
         <div class="rodape-modal">
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Continuar</button>
@@ -14933,7 +14936,14 @@
       </form>`);
   }
 
-  function modalNovoCliente() {
+  // Pedido do usuário (2026-09-24): quando aberto a partir de outra tela
+  // (Contrato, Orçamento...), "cadastrar aqui deve abrir o local ORIGINAL
+  // onde deve ser preenchido e ao terminar volta pra essa tela e seleciona
+  // ele" — é literalmente ESTE modal (mesmo cadastro oficial de Comercial,
+  // com consulta de CNPJ e tudo), nunca um atalho com menos campos.
+  // `onCriado`, quando informado, substitui o comportamento padrão de
+  // navegar pra Comercial (ver "case criar-cliente" no tratarFormulario).
+  function modalNovoCliente(onCriado) {
     const wrap = abrirModal(`
       <h3>Novo cliente</h3>
       <form data-form="criar-cliente">
@@ -14966,6 +14976,7 @@
       </form>`,
       { largo: true }
     );
+    wrap.querySelector('form[data-form="criar-cliente"]')._onCriadoCliente = onCriado;
 
     wrap.querySelector('[data-acao="consultar-cnpj-cliente"]').addEventListener("click", async () => {
       const campoCnpj = wrap.querySelector('input[name="cnpj"]');
@@ -19500,6 +19511,17 @@
           definirFlash("erro", erro.message || "Não foi possível ativar as notificações.");
         }
         return;
+      case "abrir-cadastro-rapido-cliente-contrato":
+        // Pedido do usuário (2026-09-24): "cadastrar aqui deve abrir o
+        // local ORIGINAL... e ao terminar volta pra essa tela e seleciona
+        // ele" — fecha o picker, abre o cadastro real de Cliente, e o
+        // callback reabre o fluxo de Contrato já com o cliente novo.
+        fecharModais();
+        modalNovoCliente(async (clienteCriado) => {
+          const projetos = await chamarApi(`/terceirizacao/projetos?cliente_id=${clienteCriado.id}`).catch(() => []);
+          modalCriarContratoCliente(clienteCriado.id, projetos);
+        });
+        return;
       case "novo-funcionario":
         await modalNovoFuncionario();
         return;
@@ -22768,7 +22790,7 @@
 
       // ---- Fase 5: Comercial (CRM + Pedidos de Venda) ----
       case "criar-cliente": {
-        await chamarApi("/comercial/clientes", {
+        const clienteCriado = await chamarApi("/comercial/clientes", {
           method: "POST",
           body: {
             razao_social: dados.get("razao_social"), nome_fantasia: dados.get("nome_fantasia") || null,
@@ -22788,6 +22810,15 @@
           },
         });
         fecharModais();
+        // Pedido do usuário (2026-09-24): quando o cadastro de cliente é
+        // aberto A PARTIR de outra tela (Contrato, Orçamento...), "ao
+        // terminar volta pra essa tela e seleciona ele" — em vez de
+        // sempre navegar pra Comercial, quem abriu o modal decide o que
+        // acontece a seguir.
+        if (form._onCriadoCliente) {
+          form._onCriadoCliente(clienteCriado);
+          return;
+        }
         definirFlash("ok", "Cliente cadastrado.");
         return renderComercial();
       }
