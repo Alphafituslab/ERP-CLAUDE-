@@ -2230,7 +2230,7 @@
         .slice(0, 3)
         .map(
           (ev) => `
-        <button type="button" class="agenda-equipe-chip" style="background:color-mix(in srgb, ${ev.cor} 18%, transparent); border-left-color:${ev.cor};"
+        <button type="button" class="agenda-equipe-chip" style="background:${ev.cor}; border-left-color:color-mix(in srgb, ${ev.cor} 60%, black);"
                 data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}">
           <span class="agenda-equipe-chip-hora">${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
           <span class="agenda-equipe-chip-titulo">${escapeHtml(ev.titulo)}</span>
