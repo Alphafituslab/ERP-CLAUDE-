@@ -39,6 +39,24 @@ def listar_usuarios_para_dono():
     return jsonify([dict(r) for r in rows])
 
 
+@bp.get("/contatos-externos")
+@requires_auth
+def listar_contatos_externos():
+    """Fase 204 — pedido do usuário: reaproveitar nome/e-mail/WhatsApp/
+    empresa de quem já foi convidado antes, sem digitar tudo de novo numa
+    próxima reunião. Lista compartilhada entre todo mundo (não é por quem
+    criou o contato)."""
+    return jsonify(agenda_service.listar_contatos_externos(get_db()))
+
+
+@bp.delete("/contatos-externos/<int:contato_id>")
+@requires_auth
+def excluir_contato_externo(contato_id):
+    conn = get_db()
+    agenda_service.excluir_contato_externo(conn, contato_id)
+    return jsonify({"ok": True})
+
+
 @bp.get("/eventos")
 @requires_auth
 def listar_eventos():

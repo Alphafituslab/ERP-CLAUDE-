@@ -2328,7 +2328,11 @@
   }
 
   async function htmlFormularioEventoAgendaEquipe(evento, dataPreenchida) {
-    const usuarios = await chamarApi("/agenda/usuarios");
+    const [usuarios, contatosExternos] = await Promise.all([
+      chamarApi("/agenda/usuarios"),
+      chamarApi("/agenda/contatos-externos"),
+    ]);
+    state.cache.contatosExternosAgenda = contatosExternos;
     const donoAtualId = evento ? evento.usuario_dono_id : state.usuarioAtual.id;
     const opcoesDono = usuarios
       .map((u) => `<option value="${u.id}" ${u.id === donoAtualId ? "selected" : ""}>${escapeHtml(u.nome)}${u.id === state.usuarioAtual.id ? " (eu)" : ""}</option>`)
@@ -2370,7 +2374,10 @@
       </div>
       <div class="campo">
         <label>Convidar pessoas de fora do sistema (opcional)</label>
-        <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Cliente, fornecedor ou prestador — informe nome e pelo menos um contato (e-mail ou WhatsApp). O convite sai por esse(s) canal(is), com opção de aceitar ou recusar sem precisar logar.</div>
+        <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Cliente, fornecedor ou prestador — informe nome e pelo menos um contato (e-mail ou WhatsApp), ou comece digitando o nome pra escolher alguém já salvo de um convite anterior. O convite sai por esse(s) canal(is), com opção de aceitar ou recusar sem precisar logar.</div>
+        <datalist id="lista-contatos-externos-agenda-equipe">
+          ${contatosExternos.map((c) => `<option value="${escapeHtml(c.nome)}">${escapeHtml(c.empresa || "")}</option>`).join("")}
+        </datalist>
         <div id="corpo-participantes-externos-agenda-equipe">${((evento?.participantes || []).filter((p) => p.externo).map(_linhaParticipanteExternoAgendaEquipe).join("")) || ""}</div>
         <button type="button" class="botao secundario pequeno" data-acao-local="adicionar-participante-externo-agenda-equipe" style="margin-top:6px;">+ Adicionar convidado externo</button>
       </div>
@@ -2400,7 +2407,8 @@
     return `
       <div class="linha-participante-externo-agenda-equipe" style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
         <input type="hidden" class="participante-externo-id" value="${p && p.id ? p.id : ""}">
-        <input type="text" class="participante-externo-nome" placeholder="Nome" style="flex:1;min-width:140px;" value="${escapeHtml(p?.nome_externo || p?.nome || "")}">
+        <input type="text" class="participante-externo-nome" placeholder="Nome" list="lista-contatos-externos-agenda-equipe" style="flex:1;min-width:140px;" value="${escapeHtml(p?.nome_externo || p?.nome || "")}">
+        <input type="text" class="participante-externo-empresa" placeholder="Empresa" style="flex:1;min-width:120px;" value="${escapeHtml(p?.empresa_externo || p?.empresa || "")}">
         <input type="email" class="participante-externo-email" placeholder="E-mail" style="flex:1;min-width:160px;" value="${escapeHtml(p?.email_externo || "")}">
         <input type="text" class="participante-externo-celular" placeholder="WhatsApp (DDD+número)" style="flex:1;min-width:160px;" value="${escapeHtml(p?.celular_externo || "")}">
         <button type="button" class="botao secundario pequeno" data-acao-local="remover-participante-externo-agenda-equipe">✕</button>
@@ -2420,16 +2428,31 @@
       if (!botao) return;
       botao.closest(".linha-participante-externo-agenda-equipe").remove();
     });
+    // Escolheu um nome já salvo (datalist) — preenche empresa/e-mail/WhatsApp
+    // sozinho, sem sobrescrever campos que a pessoa já tenha editado à mão.
+    corpo.addEventListener("input", (e) => {
+      if (!e.target.classList.contains("participante-externo-nome")) return;
+      const contato = (state.cache.contatosExternosAgenda || []).find((c) => c.nome === e.target.value);
+      if (!contato) return;
+      const linha = e.target.closest(".linha-participante-externo-agenda-equipe");
+      const campoEmpresa = linha.querySelector(".participante-externo-empresa");
+      const campoEmail = linha.querySelector(".participante-externo-email");
+      const campoCelular = linha.querySelector(".participante-externo-celular");
+      if (!campoEmpresa.value) campoEmpresa.value = contato.empresa || "";
+      if (!campoEmail.value) campoEmail.value = contato.email || "";
+      if (!campoCelular.value) campoCelular.value = contato.celular || "";
+    });
   }
 
   function _coletarParticipantesExternosAgendaEquipe(form) {
     return [...form.querySelectorAll(".linha-participante-externo-agenda-equipe")].map((linha) => {
       const nome = linha.querySelector(".participante-externo-nome").value.trim();
+      const empresa = linha.querySelector(".participante-externo-empresa").value.trim();
       const email = linha.querySelector(".participante-externo-email").value.trim();
       const celular = linha.querySelector(".participante-externo-celular").value.trim();
       const idExistente = linha.querySelector(".participante-externo-id").value;
       if (!nome || (!email && !celular)) return null;
-      const item = { nome, email: email || null, celular: celular || null };
+      const item = { nome, empresa: empresa || null, email: email || null, celular: celular || null };
       if (idExistente) item.id = Number(idExistente);
       return item;
     }).filter(Boolean);
@@ -2461,7 +2484,7 @@
     const camposHtml = await htmlFormularioEventoAgendaEquipe(evento, null);
     const participantesHtml = (evento.participantes || []).length
       ? `<div class="campo"><label>Convidados</label><div style="display:flex;flex-direction:column;gap:6px;">
-          ${evento.participantes.map((p) => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;"><span style="flex:1;">${escapeHtml(p.nome)}${p.externo ? ' <span class="texto-suave">(externo)</span>' : ""}</span>${_seloStatusConviteAgendaEquipe(p.status)}</div>`).join("")}
+          ${evento.participantes.map((p) => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;"><span style="flex:1;">${escapeHtml(p.nome)}${p.externo ? ` <span class="texto-suave">(externo${p.empresa_externo ? " — " + escapeHtml(p.empresa_externo) : ""})</span>` : ""}</span>${_seloStatusConviteAgendaEquipe(p.status)}</div>`).join("")}
         </div></div>`
       : "";
     const modal = abrirModal(`

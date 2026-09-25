@@ -289,7 +289,7 @@ def participantes_do_evento(conn, evento_id: int):
     os dois de forma parecida usando `nome`/`externo`."""
     rows = conn.execute(
         """
-        SELECT p.id, p.usuario_id, u.nome AS usuario_nome, p.nome_externo, p.email_externo,
+        SELECT p.id, p.usuario_id, u.nome AS usuario_nome, p.nome_externo, p.empresa_externo, p.email_externo,
                p.celular_externo, p.status, p.motivo_recusa, p.convidado_em, p.respondido_em
         FROM agenda_participantes p
         LEFT JOIN usuarios u ON u.id = p.usuario_id
@@ -418,9 +418,14 @@ def convidar_participantes_externos(conn, evento: dict, participantes_externos: 
     (cliente, fornecedor, prestador), digitando nome + e-mail e/ou WhatsApp
     na hora. Convite igual ao de um usuário interno (WhatsApp/e-mail com
     link de aceitar/recusar sem login), só sem chat interno/push — a
-    pessoa não tem conta no ERP nem no Whatts Inbox."""
+    pessoa não tem conta no ERP nem no Whatts Inbox.
+
+    Fase 204 — cada convidado externo é salvo (ou atualizado) na agenda de
+    contatos reutilizável (`salvar_contato_externo`), pra não precisar
+    digitar tudo de novo numa próxima reunião com a mesma pessoa."""
     for participante in participantes_externos:
         nome = (participante.get("nome") or "").strip()
+        empresa = (participante.get("empresa") or "").strip() or None
         email = (participante.get("email") or "").strip() or None
         celular = (participante.get("celular") or "").strip() or None
         if not nome or not (email or celular):
@@ -428,15 +433,59 @@ def convidar_participantes_externos(conn, evento: dict, participantes_externos: 
         token = secrets.token_urlsafe(32)
         conn.execute(
             """
-            INSERT INTO agenda_participantes (evento_id, nome_externo, email_externo, celular_externo, token_convite, convidado_por)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO agenda_participantes (evento_id, nome_externo, empresa_externo, email_externo, celular_externo, token_convite, convidado_por)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (evento["id"], nome, email, celular, token, convidado_por_id),
+            (evento["id"], nome, empresa, email, celular, token, convidado_por_id),
         )
+        salvar_contato_externo(conn, nome, empresa, email, celular, convidado_por_id)
         link = _link_convite(token)
         texto = _texto_convite(evento, convidado_por_nome, link)
         _dispatch_whatsapp_direto(conn, celular, texto)
         _dispatch_email_direto(conn, email, f"Convite: {evento['titulo']}", texto)
+
+
+# ─── Contatos externos salvos (Fase 204) ────────────────────────────────────
+# Lista compartilhada entre todo mundo que usa a Agenda (como uma agenda de
+# contatos da empresa) — não é por usuário, pra qualquer um poder reaproveitar
+# um contato que outra pessoa já convidou antes.
+
+def listar_contatos_externos(conn):
+    rows = conn.execute("SELECT * FROM agenda_contatos_externos ORDER BY nome").fetchall()
+    return [dict(r) for r in rows]
+
+
+def salvar_contato_externo(conn, nome: str, empresa: str | None, email: str | None, celular: str | None, criado_por_id: int):
+    """Upsert por e-mail OU celular (o que tiver) — evita duplicar o mesmo
+    contato a cada convite novo, mas sempre atualiza nome/empresa/o outro
+    contato com o valor mais recente informado."""
+    existente = None
+    if email:
+        existente = conn.execute("SELECT * FROM agenda_contatos_externos WHERE email = ?", (email,)).fetchone()
+    if existente is None and celular:
+        existente = conn.execute("SELECT * FROM agenda_contatos_externos WHERE celular = ?", (celular,)).fetchone()
+
+    if existente:
+        conn.execute(
+            """
+            UPDATE agenda_contatos_externos
+            SET nome = ?, empresa = COALESCE(?, empresa), email = COALESCE(?, email), celular = COALESCE(?, celular),
+                atualizado_em = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE id = ?
+            """,
+            (nome, empresa, email, celular, existente["id"]),
+        )
+        return existente["id"]
+
+    cur = conn.execute(
+        "INSERT INTO agenda_contatos_externos (nome, empresa, email, celular, criado_por) VALUES (?, ?, ?, ?, ?)",
+        (nome, empresa, email, celular, criado_por_id),
+    )
+    return cur.lastrowid
+
+
+def excluir_contato_externo(conn, contato_id: int):
+    conn.execute("DELETE FROM agenda_contatos_externos WHERE id = ?", (contato_id,))
 
 
 def remover_participantes_ausentes(conn, evento_id: int, usuario_ids_mantidos: list, participantes_externos_ids_mantidos: list):
