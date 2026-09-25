@@ -191,6 +191,7 @@ SCHEMA_FILES = [
     "schema_fase195.sql",  # Fase 195 — Agenda: canal "tela" no lembrete (alerta bloqueante que só fecha manualmente)
     "schema_fase196.sql",  # Fase 196 — Agenda: mensagem de lembrete personalizável por compromisso
     "schema_fase197.sql",  # Fase 197 — Orçamentos: proposta formal com aprovação por link público
+    "schema_fase198.sql",  # Fase 198 — Agenda: visibilidade de detalhe por usuário (busy/free pros demais)
 ]
 
 

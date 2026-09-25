@@ -46,7 +46,7 @@ def listar_eventos():
     ate = request.args.get("ate")
     if not de or not ate:
         raise ApiError("Informe o período (de/ate).", status=400)
-    return jsonify(agenda_service.listar_eventos(get_db(), de, ate))
+    return jsonify(agenda_service.listar_eventos(get_db(), de, ate, g.usuario_atual["id"]))
 
 
 @bp.get("/eventos/<int:evento_id>")
@@ -65,7 +65,8 @@ def obter_evento(evento_id):
     ).fetchone()
     if row is None:
         raise ApiError("Compromisso não encontrado.", status=404)
-    return jsonify(dict(row))
+    donos_visiveis = agenda_service._donos_visiveis_em_detalhe(conn, g.usuario_atual["id"])
+    return jsonify(agenda_service._redigir_evento_se_necessario(dict(row), donos_visiveis))
 
 
 @bp.post("/eventos")

@@ -2,7 +2,7 @@ import datetime
 
 from flask import Blueprint, g, jsonify, request
 
-from .. import audit, backup_service, chat_interno_service, security, senha_sync_service
+from .. import agenda_service, audit, backup_service, chat_interno_service, security, senha_sync_service
 from ..context import ApiError, ForbiddenError, client_device, client_ip, get_db
 from ..imagens import validar_imagem_base64
 from ..permissions import (
@@ -480,6 +480,56 @@ def definir_excecoes_permissao(usuario_id):
                      acao="excecoes_de_permissao_alteradas", valor_anterior=anteriores, valor_novo=novas,
                      ip=client_ip(), dispositivo=client_device())
     return jsonify({"usuario_id": usuario_id, "excecoes": novas})
+
+
+@bp.get("/<int:usuario_id>/agenda-visivel")
+@requires_permission("usuarios", "editar")
+def listar_agenda_visivel(usuario_id):
+    conn = get_db()
+    if conn.execute("SELECT 1 FROM usuarios WHERE id = ?", (usuario_id,)).fetchone() is None:
+        raise ApiError("Usuário não encontrado.", status=404)
+    return jsonify(agenda_service.permissoes_visualizacao_do_usuario(conn, usuario_id))
+
+
+@bp.put("/<int:usuario_id>/agenda-visivel")
+@requires_permission("usuarios", "editar")
+def definir_agenda_visivel(usuario_id):
+    """Fase 198 — pedido do usuário: ao configurar um usuário, marcar de quem
+    mais (além dele mesmo) ele pode ver o compromisso da Agenda em detalhe.
+    Substitui a lista inteira (mesmo padrão de `definir_excecoes_permissao`
+    acima), não faz merge incremental. Mesma regra de segregação de função:
+    ninguém define suas PRÓPRIAS permissões de visualização — daria pra se
+    auto-liberar a ver a agenda de qualquer colega por essa via."""
+    usuario_atual = g.usuario_atual
+    dados = request.get_json(silent=True) or {}
+    donos_ids = dados.get("usuario_dono_ids")
+    conn = get_db()
+
+    if donos_ids is None or not isinstance(donos_ids, list) or not all(isinstance(i, int) for i in donos_ids):
+        raise ApiError("Informe 'usuario_dono_ids' como lista de ids (números).", status=400)
+
+    alvo = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
+    if alvo is None:
+        raise ApiError("Usuário não encontrado.", status=404)
+
+    if usuario_id == usuario_atual["id"]:
+        raise ForbiddenError(
+            "Você não pode alterar de quem VOCÊ pode ver a agenda em detalhe "
+            "(regra de segregação de função). Peça a outro administrador para fazer essa alteração."
+        )
+
+    ids_usuarios_validos = {r["id"] for r in conn.execute("SELECT id FROM usuarios").fetchall()}
+    for dono_id in donos_ids:
+        if dono_id not in ids_usuarios_validos:
+            raise ApiError(f"Usuário {dono_id} não existe.", status=400)
+
+    anteriores = agenda_service.permissoes_visualizacao_do_usuario(conn, usuario_id)
+    novas = agenda_service.definir_permissoes_visualizacao(conn, usuario_id, donos_ids, usuario_atual["id"])
+
+    audit.registrar(conn, tabela="agenda_permissoes_visualizacao", registro_id=usuario_id, usuario_id=usuario_atual["id"],
+                     acao="agenda_visivel_alterada", valor_anterior=anteriores, valor_novo=novas,
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify({"usuario_id": usuario_id, "usuario_dono_ids": novas})
 
 
 @bp.post("/<int:usuario_id>/inativar")

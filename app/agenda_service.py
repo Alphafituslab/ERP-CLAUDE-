@@ -51,6 +51,60 @@ def pode_excluir(conn, usuario_id: int, evento: dict) -> bool:
     return usuario_id == evento["usuario_dono_id"] or usuario_tem_permissao(conn, usuario_id, "agenda", "excluir_todos")
 
 
+# ─── Visibilidade de detalhe (Fase 198) ─────────────────────────────────────
+# Quem tem "agenda.editar_todos" (Administrador, de graça via "TODAS") sempre
+# vê tudo em detalhe. Os demais só veem o motivo/local/descrição de outro
+# dono se houver uma linha explícita em `agenda_permissoes_visualizacao` — a
+# própria agenda é sempre visível, sem precisar de linha nenhuma. Quem não
+# tem a permissão pra um dono continua vendo QUE existe um compromisso
+# naquele horário (nunca escondido — é uma agenda de equipe, ninguém marca
+# por cima sem saber), só que com um rótulo genérico no lugar do conteúdo.
+def _donos_visiveis_em_detalhe(conn, usuario_visualizador_id: int):
+    """`None` = enxerga todo mundo em detalhe (Administrador). Do contrário,
+    devolve o conjunto de `usuario_dono_id` que este usuário pode ver em
+    detalhe (sempre incluindo ele mesmo)."""
+    if usuario_tem_permissao(conn, usuario_visualizador_id, "agenda", "editar_todos"):
+        return None
+    rows = conn.execute(
+        "SELECT usuario_dono_id FROM agenda_permissoes_visualizacao WHERE usuario_visualizador_id = ?",
+        (usuario_visualizador_id,),
+    ).fetchall()
+    donos = {r["usuario_dono_id"] for r in rows}
+    donos.add(usuario_visualizador_id)
+    return donos
+
+
+def _redigir_evento_se_necessario(evento: dict, donos_visiveis) -> dict:
+    if donos_visiveis is None or evento["usuario_dono_id"] in donos_visiveis:
+        return evento
+    evento = dict(evento)
+    evento["titulo"] = f"Agenda de {evento.get('dono_nome') or 'outro usuário'}"
+    evento["descricao"] = None
+    evento["local_texto"] = None
+    evento["lembrete_mensagem_custom"] = None
+    return evento
+
+
+def permissoes_visualizacao_do_usuario(conn, usuario_visualizador_id: int):
+    rows = conn.execute(
+        "SELECT usuario_dono_id FROM agenda_permissoes_visualizacao WHERE usuario_visualizador_id = ?",
+        (usuario_visualizador_id,),
+    ).fetchall()
+    return [r["usuario_dono_id"] for r in rows]
+
+
+def definir_permissoes_visualizacao(conn, usuario_visualizador_id: int, donos_ids: list, criado_por_id: int):
+    conn.execute("DELETE FROM agenda_permissoes_visualizacao WHERE usuario_visualizador_id = ?", (usuario_visualizador_id,))
+    for dono_id in donos_ids:
+        if dono_id == usuario_visualizador_id:
+            continue  # a própria agenda já é sempre visível, não precisa de linha
+        conn.execute(
+            "INSERT INTO agenda_permissoes_visualizacao (usuario_visualizador_id, usuario_dono_id, criado_por) VALUES (?, ?, ?)",
+            (usuario_visualizador_id, dono_id, criado_por_id),
+        )
+    return permissoes_visualizacao_do_usuario(conn, usuario_visualizador_id)
+
+
 # ─── Conflito de horário ────────────────────────────────────────────────────
 
 def _fim_efetivo(data_inicio_iso: str, data_fim_iso: str | None) -> str:
@@ -122,7 +176,7 @@ def _valores_com_default(dados: dict) -> dict:
     return valores
 
 
-def listar_eventos(conn, de: str, ate: str):
+def listar_eventos(conn, de: str, ate: str, usuario_visualizador_id: int):
     rows = conn.execute(
         """
         SELECT e.*, u.nome AS dono_nome, c.nome AS criado_por_nome
@@ -134,7 +188,8 @@ def listar_eventos(conn, de: str, ate: str):
         """,
         (ate, de),
     ).fetchall()
-    return [dict(r) for r in rows]
+    donos_visiveis = _donos_visiveis_em_detalhe(conn, usuario_visualizador_id)
+    return [_redigir_evento_se_necessario(dict(r), donos_visiveis) for r in rows]
 
 
 def criar_evento(conn, dados: dict, criado_por_id: int) -> dict:

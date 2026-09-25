@@ -2082,6 +2082,7 @@
           <td>
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="editar-usuario" data-id="${u.id}">Editar</button>` : ""}
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="perfis-usuario" data-id="${u.id}">Perfis</button>` : ""}
+            ${podeEditar ? `<button class="botao secundario pequeno" data-acao="agenda-visivel-usuario" data-id="${u.id}">Agenda</button>` : ""}
             ${podeEditar ? `<button class="botao secundario pequeno" data-acao="abrir-resetar-senha-usuario" data-id="${u.id}" data-nome="${escapeHtml(u.nome)}" data-celular="${escapeHtml(u.celular || "")}">Resetar senha</button>` : ""}
             ${podeInativar && u.status === "ativo" ? `<button class="botao perigo pequeno" data-acao="inativar-usuario" data-id="${u.id}">Inativar</button>` : ""}
             ${podeInativar && u.status !== "ativo" ? `<button class="botao pequeno" data-acao="reativar-usuario" data-id="${u.id}">Reativar</button>` : ""}
@@ -2284,7 +2285,7 @@
           <button type="button" class="botao" data-acao="novo-evento-agenda-equipe" data-data="${dataHojeIso}">+ Novo compromisso</button>
         </div>
       </div>
-      <p class="dica">Agenda compartilhada da equipe — todo mundo vê os compromissos de todo mundo, mas só o dono (ou um Administrador) edita ou exclui.</p>
+      <p class="dica">Agenda compartilhada da equipe — todo mundo vê que um horário está ocupado, mas só quem tiver permissão vê o motivo/local em detalhe (configurável em Administração &gt; Usuários &gt; Agenda). Editar ou excluir continua só para o dono ou um Administrador.</p>
       <div class="cartao agenda-equipe-grade">
         <div class="agenda-equipe-semana-cabecalho">${diasSemana.map((d) => `<div>${d}</div>`).join("")}</div>
         <div class="agenda-equipe-dias">${celulas}</div>
@@ -3066,6 +3067,46 @@
         });
       });
     });
+  }
+
+  // Fase 198 — pedido do usuário: a Agenda de Compromissos (Fase 193) é
+  // compartilhada, mas nem todo mundo deve ver o MOTIVO/LOCAL/DESCRIÇÃO do
+  // compromisso de qualquer colega — só que continua ocupado naquele
+  // horário (nunca escondido de vez, só sem detalhe: aparece como "Agenda
+  // de Fulano"). Aqui o admin marca de QUAIS colegas esta pessoa pode ver o
+  // detalhe — mesma regra de segregação de função de `modalPerfisUsuario`
+  // (ninguém edita a própria lista, nem o próprio Administrador — que já
+  // vê tudo de qualquer forma via "agenda.editar_todos").
+  async function modalAgendaVisivelUsuario(usuario) {
+    const ehEuMesmo = state.usuarioAtual && usuario.id === state.usuarioAtual.id;
+    const todosUsuarios = await chamarApi("/agenda/usuarios");
+    const outros = todosUsuarios.filter((u) => u.id !== usuario.id);
+    const atuais = ehEuMesmo ? new Set() : new Set(await chamarApi(`/usuarios/${usuario.id}/agenda-visivel`));
+
+    const corpoHtml = ehEuMesmo
+      ? `<p class="texto-suave" style="font-size:12px;">
+           Peça a outro administrador para ajustar de quem VOCÊ pode ver a agenda em detalhe
+           (regra de segregação de função — ninguém altera a própria lista).
+         </p>`
+      : `<p class="texto-suave" style="font-size:12px;margin-top:0;">
+           <strong>${escapeHtml(usuario.nome)}</strong> sempre vê a própria agenda e, se for Administrador,
+           vê tudo de qualquer forma. Marque de quais colegas abaixo ela também pode ver o
+           motivo/local/descrição do compromisso — sem marcar, o compromisso do colega continua
+           aparecendo (só ocupado o horário), mas com um rótulo genérico no lugar do detalhe.
+         </p>
+         <div class="grade-checkbox">
+           ${outros.map((u) => `<label><input type="checkbox" name="usuario_dono_ids" value="${u.id}" ${atuais.has(u.id) ? "checked" : ""}> ${escapeHtml(u.nome)}</label>`).join("") || '<p class="texto-suave">Não há outros usuários cadastrados.</p>'}
+         </div>`;
+
+    abrirModal(`
+      <h3>Agenda visível para ${escapeHtml(usuario.nome)}</h3>
+      <form data-form="definir-agenda-visivel-usuario" data-id="${usuario.id}">
+        ${corpoHtml}
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">${ehEuMesmo ? "Fechar" : "Cancelar"}</button>
+          ${ehEuMesmo ? "" : '<button type="submit" class="botao">Salvar</button>'}
+        </div>
+      </form>`);
   }
 
   // =======================================================================
@@ -19610,6 +19651,11 @@
         await modalPerfisUsuario(usuario);
         return;
       }
+      case "agenda-visivel-usuario": {
+        const usuario = await chamarApi(`/usuarios/${alvo.dataset.id}`);
+        await modalAgendaVisivelUsuario(usuario);
+        return;
+      }
       case "abrir-resetar-senha-usuario": {
         // Pedido do usuário (2026-09-21) — resetou a própria senha sem
         // querer, duas vezes seguidas, num intervalo de segundos: o
@@ -21698,6 +21744,13 @@
         await chamarApi(`/usuarios/${form.dataset.id}/excecoes-permissao`, { method: "PUT", body: { excecoes } });
         fecharModais();
         definirFlash("ok", "Perfis atualizados.");
+        return renderUsuarios(estaNaTelaMemorialDeUsuarios());
+      }
+      case "definir-agenda-visivel-usuario": {
+        const usuario_dono_ids = dados.getAll("usuario_dono_ids").map(Number);
+        await chamarApi(`/usuarios/${form.dataset.id}/agenda-visivel`, { method: "PUT", body: { usuario_dono_ids } });
+        fecharModais();
+        definirFlash("ok", "Agenda visível atualizada.");
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
       }
       case "criar-perfil": {
