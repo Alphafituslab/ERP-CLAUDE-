@@ -194,6 +194,7 @@ SCHEMA_FILES = [
     "schema_fase198.sql",  # Fase 198 — Agenda: visibilidade de detalhe por usuário (busy/free pros demais)
     "schema_fase199.sql",  # Fase 199 — Agenda: convidar participantes (convite multi-canal + aceitar/recusar)
     "schema_fase200.sql",  # Fase 200 — Agenda: convidar participante EXTERNO (fora do sistema)
+    "schema_fase201.sql",  # Fase 201 — Agenda: lembrete também pros participantes que aceitaram
 ]
 
 

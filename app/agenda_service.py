@@ -543,17 +543,22 @@ def _texto_lembrete(evento: dict) -> str:
     return "\n".join(linhas)
 
 
-def _ja_enviado(conn, evento_id: int, canal: str, repeticao_num: int) -> bool:
+def _ja_enviado(conn, evento_id: int, canal: str, repeticao_num: int, participante_id: int | None = None) -> bool:
+    """`participante_id=None` = lembrete do DONO do compromisso; um valor
+    identifica o lembrete de um participante específico que aceitou o
+    convite — cada um com seu próprio controle de idempotência (Fase 201),
+    senão o envio pro dono "usaria" o mesmo registro de controle do envio
+    pro participante e vice-versa, pulando um dos dois por engano."""
     return conn.execute(
-        "SELECT 1 FROM agenda_lembretes_enviados WHERE evento_id = ? AND canal = ? AND repeticao_num = ?",
-        (evento_id, canal, repeticao_num),
+        "SELECT 1 FROM agenda_lembretes_enviados WHERE evento_id = ? AND canal = ? AND repeticao_num = ? AND participante_id IS ?",
+        (evento_id, canal, repeticao_num, participante_id),
     ).fetchone() is not None
 
 
-def _marcar_enviado(conn, evento_id: int, canal: str, repeticao_num: int):
+def _marcar_enviado(conn, evento_id: int, canal: str, repeticao_num: int, participante_id: int | None = None):
     conn.execute(
-        "INSERT OR IGNORE INTO agenda_lembretes_enviados (evento_id, canal, repeticao_num) VALUES (?, ?, ?)",
-        (evento_id, canal, repeticao_num),
+        "INSERT OR IGNORE INTO agenda_lembretes_enviados (evento_id, canal, repeticao_num, participante_id) VALUES (?, ?, ?, ?)",
+        (evento_id, canal, repeticao_num, participante_id),
     )
 
 
@@ -627,6 +632,49 @@ def enviar_lembrete(conn, evento: dict, repeticao_num: int):
     if evento["notificar_push"] and not _ja_enviado(conn, evento["id"], "push", repeticao_num):
         enviar_push(conn, evento["usuario_dono_id"], evento["titulo"], texto, {"eventoId": evento["id"]})
         _marcar_enviado(conn, evento["id"], "push", repeticao_num)
+
+    # Fase 201 — pedido do usuário: quem ACEITOU o convite (interno ou
+    # externo) recebe o MESMO lembrete que o dono, respeitando a mesma
+    # antecedência/repetições/intervalo do compromisso — não é uma
+    # configuração separada por pessoa, só uma audiência maior pro mesmo
+    # aviso. Continua enquanto o compromisso não for cancelado (ver
+    # `_repeticoes_devidas`/agendador, que já ignora eventos cancelados) —
+    # aceitar não depende dos outros convidados, então cada aceite garante
+    # o lembrete daquela pessoa até alguém cancelar o compromisso.
+    participantes_aceitos = conn.execute(
+        "SELECT * FROM agenda_participantes WHERE evento_id = ? AND status = 'aceito'", (evento["id"],)
+    ).fetchall()
+    for p in participantes_aceitos:
+        p = dict(p)
+        if p["usuario_id"]:
+            usuario_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (p["usuario_id"],)).fetchone()
+            if usuario_row is None:
+                continue
+            if evento["notificar_chat_interno"] and not _ja_enviado(conn, evento["id"], "chat", repeticao_num, p["id"]):
+                email_destino = usuario_row["email_chat_interno"] or usuario_row["email"]
+                sucesso, _motivo = chat_interno_service.enviar_mensagem_chat_interno(email_destino, texto)
+                if sucesso:
+                    _marcar_enviado(conn, evento["id"], "chat", repeticao_num, p["id"])
+            if evento["notificar_whatsapp"] and usuario_row["celular"] and not _ja_enviado(conn, evento["id"], "whatsapp", repeticao_num, p["id"]):
+                try:
+                    config = backup_service.obter_configuracao(conn)
+                    numero = backup_service.normalizar_numero_brasileiro(usuario_row["celular"])
+                    backup_service.enviar_texto_whatsapp(config, numero, texto)
+                    _marcar_enviado(conn, evento["id"], "whatsapp", repeticao_num, p["id"])
+                except Exception:
+                    pass
+            if evento["notificar_push"] and not _ja_enviado(conn, evento["id"], "push", repeticao_num, p["id"]):
+                enviar_push(conn, p["usuario_id"], evento["titulo"], texto, {"eventoId": evento["id"]})
+                _marcar_enviado(conn, evento["id"], "push", repeticao_num, p["id"])
+        else:
+            # Convidado externo — só WhatsApp/e-mail (não tem conta no ERP
+            # nem no Whatts Inbox pra chat interno/push).
+            if evento["notificar_whatsapp"] and p["celular_externo"] and not _ja_enviado(conn, evento["id"], "whatsapp", repeticao_num, p["id"]):
+                _dispatch_whatsapp_direto(conn, p["celular_externo"], texto)
+                _marcar_enviado(conn, evento["id"], "whatsapp", repeticao_num, p["id"])
+            if p["email_externo"] and not _ja_enviado(conn, evento["id"], "email", repeticao_num, p["id"]):
+                _dispatch_email_direto(conn, p["email_externo"], f"Lembrete: {evento['titulo']}", texto)
+                _marcar_enviado(conn, evento["id"], "email", repeticao_num, p["id"])
 
 
 def _repeticoes_devidas(evento: dict, agora: datetime.datetime, limite_atraso: datetime.datetime):
