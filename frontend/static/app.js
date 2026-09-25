@@ -1705,6 +1705,36 @@
     document.querySelectorAll(".fundo-modal").forEach((m) => m.remove());
   }
 
+  // Achado real (2026-09-25): "não está aparecendo o reagendar" — o
+  // diálogo nativo `confirm()` do navegador pode não ficar visível
+  // (ou nem renderizar) dependendo do componente de navegador embutido
+  // usado pelo instalador do Terminal/Servidor. Um modal PRÓPRIO (mesmo
+  // `abrirModal` de sempre, com dois botões) é garantido de aparecer em
+  // qualquer ambiente, já que é só HTML/CSS normal, não uma API do
+  // navegador. Usado nos fluxos da Agenda que dependem de o usuário
+  // realmente VER a pergunta antes de decidir (convite novo, avisar
+  // atualização, remarcar, cancelar).
+  function confirmarModal(mensagem, opcoes) {
+    opcoes = opcoes || {};
+    return new Promise((resolve) => {
+      const modal = abrirModal(
+        `<h3>${escapeHtml(opcoes.titulo || "Confirmar")}</h3>
+         <p style="white-space:pre-line;">${escapeHtml(mensagem)}</p>
+         <div class="rodape-modal">
+           <button type="button" class="botao secundario" data-resolver="nao">${escapeHtml(opcoes.textoNao || "Não")}</button>
+           <button type="button" class="botao" data-resolver="sim">${escapeHtml(opcoes.textoSim || "Sim")}</button>
+         </div>`,
+        { travado: true }
+      );
+      modal.addEventListener("click", (e) => {
+        const botao = e.target.closest("[data-resolver]");
+        if (!botao) return;
+        modal.remove();
+        resolve(botao.dataset.resolver === "sim");
+      });
+    });
+  }
+
   // Pedido do usuário (2026-09-23): backup disparado pelo lembrete de
   // 8h/16h não pode travar a tela — fecha o modal na hora e continua
   // rodando por trás; este aviso flutuante (fora do fluxo de renderShell,
@@ -2276,7 +2306,9 @@
           (ev) => `
         <button type="button" class="agenda-equipe-chip ${ev.meu_convite_status === "pendente" ? "agenda-equipe-chip-pendente" : ""} ${ev.usuario_dono_id === state.usuarioAtual.id ? "agenda-equipe-chip-minha" : ""}" style="background:${ev.cor}; border-left-color:color-mix(in srgb, ${ev.cor} 60%, black);"
                 data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}${ev.usuario_dono_id === state.usuarioAtual.id ? " — sua agenda" : ` — agenda de ${escapeHtml(ev.dono_nome || "")}`}${ev.meu_convite_status === "pendente" ? " — convite pendente" : ""}">
-          ${ev.usuario_dono_id === state.usuarioAtual.id ? '<span class="agenda-equipe-chip-selo-eu">Eu</span>' : ""}
+          ${ev.usuario_dono_id === state.usuarioAtual.id
+            ? '<span class="agenda-equipe-chip-selo-eu">Eu</span>'
+            : `<span class="agenda-equipe-chip-selo-dono">${escapeHtml((ev.dono_nome || "?").split(" ")[0])}</span>`}
           <span class="agenda-equipe-chip-hora">${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
           <span class="agenda-equipe-chip-titulo">${escapeHtml(ev.titulo)}</span>
           ${ev.meu_convite_status === "pendente" ? '<span class="agenda-equipe-chip-selo-convite">convite</span>' : ""}
@@ -2780,7 +2812,11 @@
     } catch (erro) {
       if (erro.status === 409 && erro.corpo && erro.corpo.conflito) {
         const nomes = erro.corpo.eventos_conflitantes.map((e) => `"${e.titulo}" (${fmtDataHoraAgendaEquipe(e.data_inicio)})`).join(", ");
-        if (!confirm(`Já existe compromisso marcado nesse horário para essa pessoa: ${nomes}.\n\nConfirmar mesmo assim?`)) return;
+        const confirmouConflito = await confirmarModal(
+          `Já existe compromisso marcado nesse horário para essa pessoa: ${nomes}.`,
+          { titulo: "Horário conflitante", textoSim: "Confirmar mesmo assim", textoNao: "Cancelar" }
+        );
+        if (!confirmouConflito) return;
         await chamarApi(caminho, { method: metodo, body: { ...corpo, forcar: true } });
       } else {
         throw erro;
@@ -20009,7 +20045,11 @@
         return;
       }
       case "cancelar-evento-agenda-equipe": {
-        if (!confirm("Cancelar este compromisso? Quem já foi convidado será avisado. Não tem como desfazer.")) return;
+        const confirmouCancelar = await confirmarModal(
+          "Quem já foi convidado será avisado. Não tem como desfazer.",
+          { titulo: "Cancelar este compromisso?", textoSim: "Cancelar compromisso", textoNao: "Voltar" }
+        );
+        if (!confirmouCancelar) return;
         const eventoId = alvo.dataset.id;
         // Pedido do usuário (2026-09-25): cancelar/remarcar avisa todo
         // mundo envolvido automaticamente; pra convidado INTERNO pergunta
@@ -20021,7 +20061,10 @@
           const eventoAtual = await chamarApi(`/agenda/eventos/${eventoId}`);
           const temConvidadoInterno = (eventoAtual.participantes || []).some((p) => !p.externo && p.status !== "recusado");
           if (temConvidadoInterno) {
-            avisarWhatsapp = confirm("Deseja avisar por WhatsApp também (além do chat interno), pra quem for usuário do sistema?");
+            avisarWhatsapp = await confirmarModal(
+              "Deseja avisar por WhatsApp também (além do chat interno), pra quem for usuário do sistema?",
+              { titulo: "Avisar por WhatsApp?", textoSim: "Sim, avisar por WhatsApp", textoNao: "Não, só chat interno" }
+            );
           }
         } catch (erro) { /* segue com o aviso padrão mesmo se essa checagem falhar */ }
         await chamarApi(`/agenda/eventos/${eventoId}`, { method: "DELETE", body: { avisar_whatsapp: avisarWhatsapp } });
@@ -21936,7 +21979,10 @@
         }
 
         if (todosNovos.length) {
-          const confirmou = confirm(`Isso vai enviar o convite pra: ${todosNovos.join(", ")}.\n\nConfirma o envio?`);
+          const confirmou = await confirmarModal(
+            `Isso vai enviar o convite pra: ${todosNovos.join(", ")}.`,
+            { titulo: "Enviar convite?", textoSim: "Enviar convite", textoNao: "Cancelar" }
+          );
           if (!confirmou) return;
         }
 
@@ -21958,7 +22004,11 @@
           const pergunta = horarioMudou
             ? `Você REMARCOU o compromisso pra outro horário. Deseja enviar pra ${existentesAtivos.map((p) => p.nome).join(", ")} pedindo confirmação de presença de novo?`
             : `Você alterou o compromisso. Deseja avisar quem já foi convidado (${existentesAtivos.map((p) => p.nome).join(", ")}) sobre a mudança?`;
-          const confirmouAviso = confirm(pergunta);
+          const confirmouAviso = await confirmarModal(pergunta, {
+            titulo: horarioMudou ? "Compromisso remarcado" : "Compromisso atualizado",
+            textoSim: horarioMudou ? "Enviar e pedir confirmação" : "Sim, avisar",
+            textoNao: "Não, só salvar",
+          });
           corpo.avisar_atualizacao = confirmouAviso && !horarioMudou;
           corpo.reagendar_pedir_reconfirmacao = confirmouAviso && horarioMudou;
         } else {

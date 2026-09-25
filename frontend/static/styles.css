@@ -1458,6 +1458,14 @@ tr.linha-selecionada td { background: #e6eef7; }
   flex-shrink: 0; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em;
   background: var(--dourado); color: #1a1408; border-radius: 999px; padding: 1px 5px;
 }
+/* Pedido do usuário (2026-09-25): no card de quem NÃO é você, mostrar o
+   primeiro nome do dono em vez de deixar sem nenhuma pista — discreto
+   (mesmo estilo neutro do selo de convite/confirmação), mas sempre
+   visível, sem precisar abrir o compromisso pra saber de quem é. */
+.agenda-equipe-chip-selo-dono {
+  flex-shrink: 0; font-size: 9.5px; font-weight: 700; max-width: 64px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; background: rgba(0,0,0,.28); border-radius: 999px; padding: 1px 6px;
+}
 .agenda-equipe-filtro { display: flex; gap: 6px; }
 
 .agenda-equipe-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
