@@ -21998,20 +21998,22 @@
           (p.status === "pendente" || p.status === "aceito") &&
           (p.externo ? idsExternosMantidos.has(p.id) : idsInternosMantidos.has(p.usuario_id))
         );
-        const horarioMudou = corpo.data_inicio !== original.data_inicio || corpo.data_fim !== original.data_fim;
+        // Pedido do usuário (2026-09-25): "recebi o aviso, mas não me
+        // deixou confirmar se vou poder ou não" — qualquer aviso de
+        // mudança (não só quando a data/hora muda) precisa SEMPRE dar
+        // pra confirmar ou recusar de novo, nunca ser só informativo.
+        // Por isso toda vez que a resposta for "sim, avisar", reabre pra
+        // "pendente" quem já tinha respondido e reenvia com o link de
+        // aceitar/recusar de novo — não existe mais um aviso "só pra
+        // saber", é sempre um pedido de confirmação de novo.
         if (detalhesMudaram && existentesAtivos.length) {
-          const pergunta = horarioMudou
-            ? `Você REMARCOU o compromisso pra outro horário. Deseja enviar pra ${existentesAtivos.map((p) => p.nome).join(", ")} pedindo confirmação de presença de novo?`
-            : `Você alterou o compromisso. Deseja avisar quem já foi convidado (${existentesAtivos.map((p) => p.nome).join(", ")}) sobre a mudança?`;
-          const confirmouAviso = await confirmarModal(pergunta, {
-            titulo: horarioMudou ? "Compromisso remarcado" : "Compromisso atualizado",
-            textoSim: horarioMudou ? "Enviar e pedir confirmação" : "Sim, avisar",
+          const pergunta = `Você alterou o compromisso. Deseja enviar pra ${existentesAtivos.map((p) => p.nome).join(", ")} pedindo confirmação de presença de novo?`;
+          corpo.reagendar_pedir_reconfirmacao = await confirmarModal(pergunta, {
+            titulo: "Compromisso alterado",
+            textoSim: "Enviar e pedir confirmação",
             textoNao: "Não, só salvar",
           });
-          corpo.avisar_atualizacao = confirmouAviso && !horarioMudou;
-          corpo.reagendar_pedir_reconfirmacao = confirmouAviso && horarioMudou;
         } else {
-          corpo.avisar_atualizacao = false;
           corpo.reagendar_pedir_reconfirmacao = false;
         }
 
