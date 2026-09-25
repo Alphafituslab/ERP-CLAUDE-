@@ -93,7 +93,10 @@ def criar_evento():
 
     evento = agenda_service.criar_evento(conn, dados, g.usuario_atual["id"])
     participante_ids = [int(i) for i in (dados.get("participante_ids") or [])]
-    agenda_service.sincronizar_participantes(conn, evento, participante_ids, g.usuario_atual["id"], g.usuario_atual["nome"])
+    participantes_externos = dados.get("participantes_externos") or []
+    agenda_service.sincronizar_participantes(
+        conn, evento, participante_ids, participantes_externos, g.usuario_atual["id"], g.usuario_atual["nome"]
+    )
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento["id"], usuario_id=g.usuario_atual["id"],
                      acao="criar", valor_novo=evento, ip=client_ip(), dispositivo=client_device())
     return jsonify(evento), 201
@@ -118,9 +121,12 @@ def atualizar_evento(evento_id):
             return jsonify({"conflito": True, "eventos_conflitantes": conflitos}), 409
 
     evento = agenda_service.atualizar_evento(conn, evento_id, dados, g.usuario_atual["id"])
-    if "participante_ids" in dados:
+    if "participante_ids" in dados or "participantes_externos" in dados:
         participante_ids = [int(i) for i in (dados.get("participante_ids") or [])]
-        agenda_service.sincronizar_participantes(conn, evento, participante_ids, g.usuario_atual["id"], g.usuario_atual["nome"])
+        participantes_externos = dados.get("participantes_externos") or []
+        agenda_service.sincronizar_participantes(
+            conn, evento, participante_ids, participantes_externos, g.usuario_atual["id"], g.usuario_atual["nome"]
+        )
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento_id, usuario_id=g.usuario_atual["id"],
                      acao="editar", valor_anterior=evento_atual, valor_novo=evento, ip=client_ip(), dispositivo=client_device())
     return jsonify(evento)

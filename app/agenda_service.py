@@ -63,11 +63,16 @@ def pode_excluir(conn, usuario_id: int, evento: dict) -> bool:
 # naquele horário (nunca escondido — é uma agenda de equipe, ninguém marca
 # por cima sem saber), só que com um rótulo genérico no lugar do conteúdo.
 def _donos_visiveis_em_detalhe(conn, usuario_visualizador_id: int):
-    """`None` = enxerga todo mundo em detalhe (Administrador). Do contrário,
-    devolve o conjunto de `usuario_dono_id` que este usuário pode ver em
-    detalhe (sempre incluindo ele mesmo)."""
-    if usuario_tem_permissao(conn, usuario_visualizador_id, "agenda", "editar_todos"):
-        return None
+    """Devolve o conjunto de `usuario_dono_id` que este usuário pode ver em
+    detalhe (sempre incluindo ele mesmo). Achado real (2026-09-25): a
+    permissão "agenda.editar_todos" (que o perfil Administrador tem de
+    graça via "TODAS") NÃO libera visualização de detalhe — ela existe só
+    pra editar/excluir o compromisso de outra pessoa. Sem isso, qualquer
+    Administrador via o motivo/local reais de um compromisso PESSOAL de
+    outro Administrador (achado com Caroline vendo o compromisso "Gaúcha"
+    do Clayton) — a visibilidade de detalhe agora é SEMPRE só a liberada
+    explicitamente em `agenda_permissoes_visualizacao`, sem atalho nenhum
+    por perfil."""
     rows = conn.execute(
         "SELECT usuario_dono_id FROM agenda_permissoes_visualizacao WHERE usuario_visualizador_id = ?",
         (usuario_visualizador_id,),
@@ -257,18 +262,28 @@ def excluir_evento(conn, evento_id: int):
 # convidados do mesmo compromisso.
 
 def participantes_do_evento(conn, evento_id: int):
+    """Fase 200 — o convidado pode ser um usuário do sistema (`usuario_id`
+    preenchido, `usuario_nome` vem do JOIN) ou alguém de fora (`usuario_id`
+    nulo, nome/e-mail/celular digitados na hora do convite) — o front trata
+    os dois de forma parecida usando `nome`/`externo`."""
     rows = conn.execute(
         """
-        SELECT p.id, p.usuario_id, u.nome AS usuario_nome, p.status, p.motivo_recusa,
-               p.convidado_em, p.respondido_em
+        SELECT p.id, p.usuario_id, u.nome AS usuario_nome, p.nome_externo, p.email_externo,
+               p.celular_externo, p.status, p.motivo_recusa, p.convidado_em, p.respondido_em
         FROM agenda_participantes p
-        JOIN usuarios u ON u.id = p.usuario_id
+        LEFT JOIN usuarios u ON u.id = p.usuario_id
         WHERE p.evento_id = ?
-        ORDER BY u.nome
+        ORDER BY COALESCE(u.nome, p.nome_externo)
         """,
         (evento_id,),
     ).fetchall()
-    return [dict(r) for r in rows]
+    resultado = []
+    for r in rows:
+        p = dict(r)
+        p["externo"] = p["usuario_id"] is None
+        p["nome"] = p["usuario_nome"] or p["nome_externo"]
+        resultado.append(p)
+    return resultado
 
 
 def _texto_convite(evento: dict, convidado_por_nome: str, link: str | None) -> str:
@@ -322,17 +337,28 @@ def _dispatch_mensagem_usuario(conn, usuario_row, texto: str, evento_id: int | N
         pass
 
 
-def _dispatch_email_usuario(conn, usuario_row, assunto: str, texto: str):
+def _dispatch_email_direto(conn, email: str, assunto: str, texto: str):
     """E-mail é opcional/melhor-esforço igual aos outros canais — sem SMTP
     configurado (`configuracoes_email.ativo`), simplesmente não manda nada,
     sem quebrar o convite pelos outros canais."""
-    if not usuario_row["email"]:
+    if not email:
         return
     try:
         config = notificacoes_service.obter_configuracao_email(conn)
         if not config.get("ativo") or not config.get("smtp_host"):
             return
-        notificacoes_service._enviar_email_smtp(config, usuario_row["email"], assunto, texto)
+        notificacoes_service._enviar_email_smtp(config, email, assunto, texto)
+    except Exception:
+        pass
+
+
+def _dispatch_whatsapp_direto(conn, celular: str, texto: str):
+    if not celular:
+        return
+    try:
+        config = backup_service.obter_configuracao(conn)
+        numero = backup_service.normalizar_numero_brasileiro(celular)
+        backup_service.enviar_texto_whatsapp(config, numero, texto)
     except Exception:
         pass
 
@@ -361,28 +387,67 @@ def convidar_participantes(conn, evento: dict, usuario_ids: list, convidado_por_
         link = _link_convite(token)
         texto = _texto_convite(evento, convidado_por_nome, link)
         _dispatch_mensagem_usuario(conn, usuario_row, texto, evento["id"])
-        _dispatch_email_usuario(conn, usuario_row, f"Convite: {evento['titulo']}", texto)
+        _dispatch_email_direto(conn, usuario_row["email"], f"Convite: {evento['titulo']}", texto)
 
 
-def remover_participantes_ausentes(conn, evento_id: int, usuario_ids_mantidos: list):
+def convidar_participantes_externos(conn, evento: dict, participantes_externos: list, convidado_por_id: int, convidado_por_nome: str):
+    """Fase 200 — pedido do usuário: convidar gente de FORA do sistema
+    (cliente, fornecedor, prestador), digitando nome + e-mail e/ou WhatsApp
+    na hora. Convite igual ao de um usuário interno (WhatsApp/e-mail com
+    link de aceitar/recusar sem login), só sem chat interno/push — a
+    pessoa não tem conta no ERP nem no Whatts Inbox."""
+    for participante in participantes_externos:
+        nome = (participante.get("nome") or "").strip()
+        email = (participante.get("email") or "").strip() or None
+        celular = (participante.get("celular") or "").strip() or None
+        if not nome or not (email or celular):
+            continue  # nome + pelo menos um contato são obrigatórios (checado de novo na rota)
+        token = secrets.token_urlsafe(32)
+        conn.execute(
+            """
+            INSERT INTO agenda_participantes (evento_id, nome_externo, email_externo, celular_externo, token_convite, convidado_por)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (evento["id"], nome, email, celular, token, convidado_por_id),
+        )
+        link = _link_convite(token)
+        texto = _texto_convite(evento, convidado_por_nome, link)
+        _dispatch_whatsapp_direto(conn, celular, texto)
+        _dispatch_email_direto(conn, email, f"Convite: {evento['titulo']}", texto)
+
+
+def remover_participantes_ausentes(conn, evento_id: int, usuario_ids_mantidos: list, participantes_externos_ids_mantidos: list):
     """Ao editar um compromisso, quem foi TIRADO da lista de convidados tem
     sua linha apagada — cancela o convite (pendente) ou a confirmação
     (aceito) dela pra esse compromisso, sem avisar (é uma remoção
-    administrativa, não uma recusa da própria pessoa)."""
+    administrativa, não uma recusa da própria pessoa). Um convidado externo
+    só existe pra esse compromisso (não tem cadastro pra "reencontrar"),
+    então ele é identificado pelo próprio id da linha em
+    `agenda_participantes`, não por usuario_id como o interno."""
     participantes_atuais = conn.execute(
-        "SELECT usuario_id FROM agenda_participantes WHERE evento_id = ?", (evento_id,)
+        "SELECT id, usuario_id FROM agenda_participantes WHERE evento_id = ?", (evento_id,)
     ).fetchall()
     for row in participantes_atuais:
-        if row["usuario_id"] not in usuario_ids_mantidos:
-            conn.execute(
-                "DELETE FROM agenda_participantes WHERE evento_id = ? AND usuario_id = ?",
-                (evento_id, row["usuario_id"]),
-            )
+        if row["usuario_id"] is not None:
+            if row["usuario_id"] not in usuario_ids_mantidos:
+                conn.execute("DELETE FROM agenda_participantes WHERE id = ?", (row["id"],))
+        else:
+            if row["id"] not in participantes_externos_ids_mantidos:
+                conn.execute("DELETE FROM agenda_participantes WHERE id = ?", (row["id"],))
 
 
-def sincronizar_participantes(conn, evento: dict, usuario_ids: list, convidado_por_id: int, convidado_por_nome: str):
-    remover_participantes_ausentes(conn, evento["id"], usuario_ids)
+def sincronizar_participantes(
+    conn, evento: dict, usuario_ids: list, participantes_externos: list, convidado_por_id: int, convidado_por_nome: str
+):
+    """`participantes_externos` é uma lista de dicts — os que já existem
+    (editando um compromisso) trazem `id` (o id da linha em
+    `agenda_participantes`, pra saber quem manter) e os NOVOS não trazem
+    `id` (só nome/email/celular), disparando um convite novo pra eles."""
+    ids_externos_existentes = [p["id"] for p in participantes_externos if p.get("id")]
+    externos_novos = [p for p in participantes_externos if not p.get("id")]
+    remover_participantes_ausentes(conn, evento["id"], usuario_ids, ids_externos_existentes)
     convidar_participantes(conn, evento, usuario_ids, convidado_por_id, convidado_por_nome)
+    convidar_participantes_externos(conn, evento, externos_novos, convidado_por_id, convidado_por_nome)
 
 
 def convites_pendentes_do_usuario(conn, usuario_id: int):
@@ -400,20 +465,18 @@ def convites_pendentes_do_usuario(conn, usuario_id: int):
     return [dict(r) for r in rows]
 
 
-def responder_convite(conn, participante_id: int, usuario_id: int, aceitar: bool, motivo: str | None = None):
-    """Só o PRÓPRIO convidado responde o convite dele (checado pelo chamador
-    — rota autenticada compara `usuario_id` com `g.usuario_atual`, e a rota
-    pública do portal resolve o participante pelo token, nunca pelo id).
-    Ao responder, confirma pro próprio convidado (fecha o loop pra quem
-    respondeu) e avisa quem convidou (pra saber que teve uma resposta)."""
-    participante = conn.execute(
-        "SELECT * FROM agenda_participantes WHERE id = ? AND usuario_id = ?", (participante_id, usuario_id)
-    ).fetchone()
+def _responder_convite_nucleo(conn, participante_id: int, aceitar: bool, motivo: str | None = None):
+    """Núcleo comum — identidade já foi provada por quem chamou (rota
+    autenticada checou `usuario_id`, ou o portal resolveu pelo token opaco).
+    Ao responder, confirma pro próprio convidado (interno pelos 3 canais
+    internos, externo por WhatsApp/e-mail) e avisa quem convidou."""
+    participante = conn.execute("SELECT * FROM agenda_participantes WHERE id = ?", (participante_id,)).fetchone()
     if participante is None:
         return None
     evento = conn.execute("SELECT * FROM agenda_eventos WHERE id = ?", (participante["evento_id"],)).fetchone()
     if evento is None:
         return None
+    participante = dict(participante)
     evento = dict(evento)
     novo_status = "aceito" if aceitar else "recusado"
     conn.execute(
@@ -421,20 +484,40 @@ def responder_convite(conn, participante_id: int, usuario_id: int, aceitar: bool
         (novo_status, (motivo or None) if not aceitar else None, participante_id),
     )
 
-    usuario_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
-    if usuario_row is not None:
-        texto_confirmacao = _texto_confirmacao(evento, aceitar)
-        _dispatch_mensagem_usuario(conn, usuario_row, texto_confirmacao, evento["id"])
+    texto_confirmacao = _texto_confirmacao(evento, aceitar)
+    nome_convidado = None
+    if participante["usuario_id"]:
+        usuario_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (participante["usuario_id"],)).fetchone()
+        if usuario_row is not None:
+            nome_convidado = usuario_row["nome"]
+            _dispatch_mensagem_usuario(conn, usuario_row, texto_confirmacao, evento["id"])
+    else:
+        nome_convidado = participante["nome_externo"]
+        _dispatch_whatsapp_direto(conn, participante["celular_externo"], texto_confirmacao)
+        _dispatch_email_direto(conn, participante["email_externo"], f"Confirmação: {evento['titulo']}", texto_confirmacao)
 
     convidado_por = conn.execute("SELECT * FROM usuarios WHERE id = ?", (participante["convidado_por"],)).fetchone()
-    if convidado_por is not None and usuario_row is not None:
+    if convidado_por is not None and nome_convidado:
         acao = "aceitou" if aceitar else "recusou"
-        texto_organizador = f"{usuario_row['nome']} {acao} o convite para \"{evento['titulo']}\"."
+        texto_organizador = f"{nome_convidado} {acao} o convite para \"{evento['titulo']}\"."
         if not aceitar and motivo:
             texto_organizador += f" Motivo: {motivo}"
         _dispatch_mensagem_usuario(conn, convidado_por, texto_organizador, evento["id"])
 
     return dict(conn.execute("SELECT * FROM agenda_participantes WHERE id = ?", (participante_id,)).fetchone())
+
+
+def responder_convite(conn, participante_id: int, usuario_id: int, aceitar: bool, motivo: str | None = None):
+    """Versão pra rota AUTENTICADA — só o próprio convidado (usuario_id
+    bate) responde o convite dele. Um convidado externo nunca passa por
+    aqui (não tem login) — só pelo portal público, que resolve pelo token
+    e chama `_responder_convite_nucleo` direto."""
+    participante = conn.execute(
+        "SELECT id FROM agenda_participantes WHERE id = ? AND usuario_id = ?", (participante_id, usuario_id)
+    ).fetchone()
+    if participante is None:
+        return None
+    return _responder_convite_nucleo(conn, participante_id, aceitar, motivo)
 
 
 def resolver_convite_por_token(conn, token: str):

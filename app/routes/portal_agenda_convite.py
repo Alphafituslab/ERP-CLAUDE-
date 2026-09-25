@@ -51,8 +51,8 @@ def obter_convite_portal(token):
 @bp.post("/<token>/aceitar")
 def aceitar_convite_portal(token):
     conn, participante, evento = _resolver_convite_ou_404(token)
-    resultado = agenda_service.responder_convite(conn, participante["id"], participante["usuario_id"], aceitar=True)
-    audit.registrar(conn, tabela="agenda_participantes", registro_id=participante["id"], usuario_id=participante["usuario_id"],
+    resultado = agenda_service._responder_convite_nucleo(conn, participante["id"], aceitar=True)
+    audit.registrar(conn, tabela="agenda_participantes", registro_id=participante["id"], usuario_id=participante["convidado_por"],
                      acao="convite_aceito_pelo_portal", valor_novo=resultado, ip=client_ip(), dispositivo=client_device())
     return jsonify(resultado)
 
@@ -61,7 +61,7 @@ def aceitar_convite_portal(token):
 def recusar_convite_portal(token):
     conn, participante, evento = _resolver_convite_ou_404(token)
     dados = request.get_json(silent=True) or {}
-    resultado = agenda_service.responder_convite(conn, participante["id"], participante["usuario_id"], aceitar=False, motivo=dados.get("motivo"))
-    audit.registrar(conn, tabela="agenda_participantes", registro_id=participante["id"], usuario_id=participante["usuario_id"],
+    resultado = agenda_service._responder_convite_nucleo(conn, participante["id"], aceitar=False, motivo=dados.get("motivo"))
+    audit.registrar(conn, tabela="agenda_participantes", registro_id=participante["id"], usuario_id=participante["convidado_por"],
                      acao="convite_recusado_pelo_portal", valor_novo=resultado, ip=client_ip(), dispositivo=client_device())
     return jsonify(resultado)

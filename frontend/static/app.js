@@ -2362,6 +2362,12 @@
           ${usuarios.filter((u) => u.id !== donoAtualId).map((u) => `<label><input type="checkbox" name="participante_ids" value="${u.id}" ${(evento?.participantes || []).some((p) => p.usuario_id === u.id) ? "checked" : ""}> ${escapeHtml(u.nome)}</label>`).join("") || '<p class="texto-suave">Não há outros usuários pra convidar.</p>'}
         </div>
       </div>
+      <div class="campo">
+        <label>Convidar pessoas de fora do sistema (opcional)</label>
+        <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Cliente, fornecedor ou prestador — informe nome e pelo menos um contato (e-mail ou WhatsApp). O convite sai por esse(s) canal(is), com opção de aceitar ou recusar sem precisar logar.</div>
+        <div id="corpo-participantes-externos-agenda-equipe">${((evento?.participantes || []).filter((p) => p.externo).map(_linhaParticipanteExternoAgendaEquipe).join("")) || ""}</div>
+        <button type="button" class="botao secundario pequeno" data-acao-local="adicionar-participante-externo-agenda-equipe" style="margin-top:6px;">+ Adicionar convidado externo</button>
+      </div>
       <div class="campo"><label>Cor</label><div class="agenda-equipe-swatches">${opcoesCor}</div></div>
       <div class="campo">
         <label>Lembrete</label>
@@ -2384,6 +2390,45 @@
       <input type="hidden" name="forcar" value="">`;
   }
 
+  function _linhaParticipanteExternoAgendaEquipe(p) {
+    return `
+      <div class="linha-participante-externo-agenda-equipe" style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
+        <input type="hidden" class="participante-externo-id" value="${p && p.id ? p.id : ""}">
+        <input type="text" class="participante-externo-nome" placeholder="Nome" style="flex:1;min-width:140px;" value="${escapeHtml(p?.nome_externo || p?.nome || "")}">
+        <input type="email" class="participante-externo-email" placeholder="E-mail" style="flex:1;min-width:160px;" value="${escapeHtml(p?.email_externo || "")}">
+        <input type="text" class="participante-externo-celular" placeholder="WhatsApp (DDD+número)" style="flex:1;min-width:160px;" value="${escapeHtml(p?.celular_externo || "")}">
+        <button type="button" class="botao secundario pequeno" data-acao-local="remover-participante-externo-agenda-equipe">✕</button>
+      </div>`;
+  }
+
+  function _ligarParticipantesExternosAgendaEquipe(modal) {
+    const corpo = modal.querySelector("#corpo-participantes-externos-agenda-equipe");
+    const botaoAdicionar = modal.querySelector('[data-acao-local="adicionar-participante-externo-agenda-equipe"]');
+    if (botaoAdicionar) {
+      botaoAdicionar.addEventListener("click", () => {
+        corpo.insertAdjacentHTML("beforeend", _linhaParticipanteExternoAgendaEquipe(null));
+      });
+    }
+    corpo.addEventListener("click", (e) => {
+      const botao = e.target.closest('[data-acao-local="remover-participante-externo-agenda-equipe"]');
+      if (!botao) return;
+      botao.closest(".linha-participante-externo-agenda-equipe").remove();
+    });
+  }
+
+  function _coletarParticipantesExternosAgendaEquipe(form) {
+    return [...form.querySelectorAll(".linha-participante-externo-agenda-equipe")].map((linha) => {
+      const nome = linha.querySelector(".participante-externo-nome").value.trim();
+      const email = linha.querySelector(".participante-externo-email").value.trim();
+      const celular = linha.querySelector(".participante-externo-celular").value.trim();
+      const idExistente = linha.querySelector(".participante-externo-id").value;
+      if (!nome || (!email && !celular)) return null;
+      const item = { nome, email: email || null, celular: celular || null };
+      if (idExistente) item.id = Number(idExistente);
+      return item;
+    }).filter(Boolean);
+  }
+
   async function modalNovoEventoAgendaEquipe(dataPreenchida) {
     const camposHtml = await htmlFormularioEventoAgendaEquipe(null, dataPreenchida);
     const modal = abrirModal(`
@@ -2396,6 +2441,7 @@
         </div>
       </form>`);
     ligarMapaFormularioAgendaEquipe(modal);
+    _ligarParticipantesExternosAgendaEquipe(modal);
   }
 
   function _seloStatusConviteAgendaEquipe(status) {
@@ -2409,7 +2455,7 @@
     const camposHtml = await htmlFormularioEventoAgendaEquipe(evento, null);
     const participantesHtml = (evento.participantes || []).length
       ? `<div class="campo"><label>Convidados</label><div style="display:flex;flex-direction:column;gap:6px;">
-          ${evento.participantes.map((p) => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;"><span style="flex:1;">${escapeHtml(p.usuario_nome)}</span>${_seloStatusConviteAgendaEquipe(p.status)}</div>`).join("")}
+          ${evento.participantes.map((p) => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;"><span style="flex:1;">${escapeHtml(p.nome)}${p.externo ? ' <span class="texto-suave">(externo)</span>' : ""}</span>${_seloStatusConviteAgendaEquipe(p.status)}</div>`).join("")}
         </div></div>`
       : "";
     const modal = abrirModal(`
@@ -2425,6 +2471,7 @@
         </div>
       </form>`);
     ligarMapaFormularioAgendaEquipe(modal);
+    _ligarParticipantesExternosAgendaEquipe(modal);
   }
 
   function ligarMapaFormularioAgendaEquipe(modal) {
@@ -3136,8 +3183,12 @@
   // horário (nunca escondido de vez, só sem detalhe: aparece como "Agenda
   // de Fulano"). Aqui o admin marca de QUAIS colegas esta pessoa pode ver o
   // detalhe — mesma regra de segregação de função de `modalPerfisUsuario`
-  // (ninguém edita a própria lista, nem o próprio Administrador — que já
-  // vê tudo de qualquer forma via "agenda.editar_todos").
+  // (ninguém edita a própria lista, nem o próprio Administrador).
+  // Achado real (2026-09-25): "agenda.editar_todos" (que o perfil
+  // Administrador tem de graça) NÃO libera mais visualização de detalhe —
+  // só edição/exclusão do compromisso alheio. Sem essa correção, qualquer
+  // Administrador via o conteúdo real de um compromisso PESSOAL de outro
+  // Administrador, mesmo sem liberação nenhuma aqui.
   async function modalAgendaVisivelUsuario(usuario) {
     const ehEuMesmo = state.usuarioAtual && usuario.id === state.usuarioAtual.id;
     const todosUsuarios = await chamarApi("/agenda/usuarios");
@@ -3150,10 +3201,10 @@
            (regra de segregação de função — ninguém altera a própria lista).
          </p>`
       : `<p class="texto-suave" style="font-size:12px;margin-top:0;">
-           <strong>${escapeHtml(usuario.nome)}</strong> sempre vê a própria agenda e, se for Administrador,
-           vê tudo de qualquer forma. Marque de quais colegas abaixo ela também pode ver o
-           motivo/local/descrição do compromisso — sem marcar, o compromisso do colega continua
-           aparecendo (só ocupado o horário), mas com um rótulo genérico no lugar do detalhe.
+           <strong>${escapeHtml(usuario.nome)}</strong> sempre vê a própria agenda — o resto, só o que for
+           marcado abaixo (nem Administrador vê o motivo/local/descrição de um compromisso alheio sem
+           liberação explícita). Sem marcar, o compromisso do colega continua aparecendo (só ocupado o
+           horário), mas com um rótulo genérico no lugar do detalhe.
          </p>
          <div class="grade-checkbox">
            ${outros.map((u) => `<label><input type="checkbox" name="usuario_dono_ids" value="${u.id}" ${atuais.has(u.id) ? "checked" : ""}> ${escapeHtml(u.nome)}</label>`).join("") || '<p class="texto-suave">Não há outros usuários cadastrados.</p>'}
@@ -21694,10 +21745,12 @@
       }
       case "criar-evento-agenda-equipe": {
         const corpo = montarCorpoEventoAgendaEquipe(dados);
+        corpo.participantes_externos = _coletarParticipantesExternosAgendaEquipe(form);
         return salvarEventoAgendaEquipeComConflito("/agenda/eventos", "POST", corpo);
       }
       case "editar-evento-agenda-equipe": {
         const corpo = montarCorpoEventoAgendaEquipe(dados);
+        corpo.participantes_externos = _coletarParticipantesExternosAgendaEquipe(form);
         return salvarEventoAgendaEquipeComConflito(`/agenda/eventos/${form.dataset.id}`, "PUT", corpo);
       }
       case "criar-funcionario": {

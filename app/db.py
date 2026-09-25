@@ -193,6 +193,7 @@ SCHEMA_FILES = [
     "schema_fase197.sql",  # Fase 197 — Orçamentos: proposta formal com aprovação por link público
     "schema_fase198.sql",  # Fase 198 — Agenda: visibilidade de detalhe por usuário (busy/free pros demais)
     "schema_fase199.sql",  # Fase 199 — Agenda: convidar participantes (convite multi-canal + aceitar/recusar)
+    "schema_fase200.sql",  # Fase 200 — Agenda: convidar participante EXTERNO (fora do sistema)
 ]
 
 
