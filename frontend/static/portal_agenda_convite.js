@@ -65,6 +65,7 @@
         <h2>Detalhes do compromisso</h2>
         <div class="linha">🗓️ <span>${escapeHtml(fmtDataHora(evento.data_inicio))}</span></div>
         ${evento.local_texto ? `<div class="linha">📍 <span>${escapeHtml(evento.local_texto)}</span></div>` : ""}
+        ${evento.link_video ? `<div class="linha">📹 <a href="${escapeHtml(evento.link_video)}" target="_blank" rel="noopener">Entrar na videochamada</a></div>` : ""}
         ${evento.descricao ? `<div class="linha">📝 <span>${escapeHtml(evento.descricao)}</span></div>` : ""}
       </div>
 

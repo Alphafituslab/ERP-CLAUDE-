@@ -195,6 +195,8 @@ SCHEMA_FILES = [
     "schema_fase199.sql",  # Fase 199 — Agenda: convidar participantes (convite multi-canal + aceitar/recusar)
     "schema_fase200.sql",  # Fase 200 — Agenda: convidar participante EXTERNO (fora do sistema)
     "schema_fase201.sql",  # Fase 201 — Agenda: lembrete também pros participantes que aceitaram
+    "schema_fase202.sql",  # Fase 202 — Agenda: "usuário master" (flag direto na conta) vê tudo, sem passar por perfil/permissão
+    "schema_fase203.sql",  # Fase 203 — Agenda: link de videochamada (Google Meet/Zoom/etc) no compromisso
 ]
 
 

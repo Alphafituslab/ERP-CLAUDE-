@@ -63,16 +63,23 @@ def pode_excluir(conn, usuario_id: int, evento: dict) -> bool:
 # naquele horário (nunca escondido — é uma agenda de equipe, ninguém marca
 # por cima sem saber), só que com um rótulo genérico no lugar do conteúdo.
 def _donos_visiveis_em_detalhe(conn, usuario_visualizador_id: int):
-    """Devolve o conjunto de `usuario_dono_id` que este usuário pode ver em
-    detalhe (sempre incluindo ele mesmo). Achado real (2026-09-25): a
-    permissão "agenda.editar_todos" (que o perfil Administrador tem de
-    graça via "TODAS") NÃO libera visualização de detalhe — ela existe só
-    pra editar/excluir o compromisso de outra pessoa. Sem isso, qualquer
-    Administrador via o motivo/local reais de um compromisso PESSOAL de
-    outro Administrador (achado com Caroline vendo o compromisso "Gaúcha"
-    do Clayton) — a visibilidade de detalhe agora é SEMPRE só a liberada
-    explicitamente em `agenda_permissoes_visualizacao`, sem atalho nenhum
-    por perfil."""
+    """`None` = enxerga todo mundo em detalhe (só o "usuário master", Fase
+    202). Do contrário, devolve o conjunto de `usuario_dono_id` que este
+    usuário pode ver em detalhe (sempre incluindo ele mesmo).
+
+    Achado real (2026-09-25): a permissão "agenda.editar_todos" (que o
+    perfil Administrador tem de graça via "TODAS") NÃO libera visualização
+    de detalhe — ela existe só pra editar/excluir o compromisso de outra
+    pessoa. Sem isso, qualquer Administrador via o motivo/local reais de um
+    compromisso PESSOAL de outro Administrador (achado com Caroline vendo o
+    compromisso "Gaúcha" do Clayton) — visibilidade de detalhe nunca passa
+    mais por atalho de perfil/permissão. O único bypass que existe é o flag
+    `usuarios.usuario_master` (conta marcada manualmente, fora do sistema
+    de perfis — nunca "TODAS", que daria de graça pra todo Administrador,
+    o oposto do pedido de ser só uma conta específica)."""
+    eh_master = conn.execute("SELECT usuario_master FROM usuarios WHERE id = ?", (usuario_visualizador_id,)).fetchone()
+    if eh_master and eh_master["usuario_master"]:
+        return None
     rows = conn.execute(
         "SELECT usuario_dono_id FROM agenda_permissoes_visualizacao WHERE usuario_visualizador_id = ?",
         (usuario_visualizador_id,),
@@ -89,6 +96,7 @@ def _redigir_evento_se_necessario(evento: dict, donos_visiveis) -> dict:
     evento["titulo"] = f"Agenda de {evento.get('dono_nome') or 'outro usuário'}"
     evento["descricao"] = None
     evento["local_texto"] = None
+    evento["link_video"] = None
     evento["lembrete_mensagem_custom"] = None
     return evento
 
@@ -151,7 +159,7 @@ def verificar_conflito(conn, usuario_dono_id: int, data_inicio: str, data_fim: s
 # ─── CRUD ───────────────────────────────────────────────────────────────────
 
 CAMPOS_EVENTO = (
-    "titulo", "descricao", "data_inicio", "data_fim", "local_texto", "cor",
+    "titulo", "descricao", "data_inicio", "data_fim", "local_texto", "link_video", "cor",
     "usuario_dono_id", "notificar_chat_interno", "notificar_whatsapp", "notificar_push",
     "lembrete_antecedencia_min", "lembrete_repeticoes", "lembrete_intervalo_min",
     "lembrete_mensagem_custom",
@@ -166,6 +174,7 @@ DEFAULTS_EVENTO = {
     "descricao": None,
     "data_fim": None,
     "local_texto": None,
+    "link_video": None,
     "cor": "#3B82F6",
     "notificar_chat_interno": 1,
     "notificar_whatsapp": 1,
@@ -203,6 +212,17 @@ def listar_eventos(conn, de: str, ate: str, usuario_visualizador_id: int):
             "SELECT evento_id, status FROM agenda_participantes WHERE usuario_id = ?", (usuario_visualizador_id,)
         ).fetchall()
     }
+    # Pedido do usuário (2026-09-25): dar pra ver de relance, sem abrir o
+    # compromisso, quantos convidados já responderam — resumo por evento
+    # (total de convidados / quantos já aceitaram), pra mostrar como um
+    # selinho no próprio card do calendário.
+    resumo_participantes = {}
+    for r in conn.execute("SELECT evento_id, status FROM agenda_participantes").fetchall():
+        resumo = resumo_participantes.setdefault(r["evento_id"], {"total": 0, "aceitos": 0})
+        resumo["total"] += 1
+        if r["status"] == "aceito":
+            resumo["aceitos"] += 1
+
     resultado = []
     for r in rows:
         evento = dict(r)
@@ -217,6 +237,7 @@ def listar_eventos(conn, de: str, ate: str, usuario_visualizador_id: int):
         else:
             evento = _redigir_evento_se_necessario(evento, donos_visiveis)
             evento["meu_convite_status"] = None
+        evento["participantes_resumo"] = resumo_participantes.get(evento["id"])
         resultado.append(evento)
     return resultado
 
@@ -295,6 +316,8 @@ def _texto_convite(evento: dict, convidado_por_nome: str, link: str | None) -> s
     ]
     if evento.get("local_texto"):
         linhas.append(f"📍 {evento['local_texto']}")
+    if evento.get("link_video"):
+        linhas.append(f"📹 Videochamada: {evento['link_video']}")
     if link:
         linhas.append(f"\nAceitar ou recusar: {link}")
     else:
@@ -538,6 +561,8 @@ def _texto_lembrete(evento: dict) -> str:
     linhas = [f"🗓️ Lembrete: {evento['titulo']}", f"📅 {inicio.strftime('%d/%m/%Y às %H:%M')}"]
     if evento.get("local_texto"):
         linhas.append(f"📍 {evento['local_texto']}")
+    if evento.get("link_video"):
+        linhas.append(f"📹 Videochamada: {evento['link_video']}")
     if evento.get("descricao"):
         linhas.append(evento["descricao"])
     return "\n".join(linhas)

@@ -42,6 +42,7 @@ def obter_convite_portal(token):
             "data_inicio": evento["data_inicio"],
             "data_fim": evento["data_fim"],
             "local_texto": evento["local_texto"],
+            "link_video": evento["link_video"],
             "cor": evento["cor"],
         },
         "convidado_por_nome": convidado_por["nome"] if convidado_por else None,

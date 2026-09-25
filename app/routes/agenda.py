@@ -69,9 +69,13 @@ def obter_evento(evento_id):
     meu_participante = conn.execute(
         "SELECT id, status FROM agenda_participantes WHERE evento_id = ? AND usuario_id = ?", (evento_id, g.usuario_atual["id"])
     ).fetchone()
+    evento["detalhe_redigido"] = False
     if meu_participante is None:
         donos_visiveis = agenda_service._donos_visiveis_em_detalhe(conn, g.usuario_atual["id"])
-        evento = agenda_service._redigir_evento_se_necessario(evento, donos_visiveis)
+        evento_redigido = agenda_service._redigir_evento_se_necessario(dict(evento), donos_visiveis)
+        if evento_redigido["titulo"] != evento["titulo"]:
+            evento = evento_redigido
+            evento["detalhe_redigido"] = True
     evento["meu_convite_status"] = meu_participante["status"] if meu_participante else None
     evento["meu_participante_id"] = meu_participante["id"] if meu_participante else None
     evento["participantes"] = agenda_service.participantes_do_evento(conn, evento_id)

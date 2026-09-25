@@ -2271,6 +2271,7 @@
           <span class="agenda-equipe-chip-hora">${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
           <span class="agenda-equipe-chip-titulo">${escapeHtml(ev.titulo)}</span>
           ${ev.meu_convite_status === "pendente" ? '<span class="agenda-equipe-chip-selo-convite">convite</span>' : ""}
+          ${ev.participantes_resumo ? `<span class="agenda-equipe-chip-selo-convite" title="${ev.participantes_resumo.aceitos} de ${ev.participantes_resumo.total} convidados confirmaram">✓${ev.participantes_resumo.aceitos}/${ev.participantes_resumo.total}</span>` : ""}
         </button>`
         )
         .join("");
@@ -2353,6 +2354,11 @@
           <input name="local_texto" style="flex:1;" value="${escapeHtml(evento?.local_texto || "")}" placeholder="Endereço ou nome do lugar" data-campo-local-agenda-equipe>
           <button type="button" class="botao secundario" data-acao-local="abrir-mapa-agenda-equipe">🗺️ Mapa</button>
         </div>
+      </div>
+      <div class="campo">
+        <label>Link da videochamada (opcional)</label>
+        <input type="url" name="link_video" value="${escapeHtml(evento?.link_video || "")}" placeholder="Cole aqui o link do Google Meet, Zoom, Teams...">
+        <div class="texto-suave" style="margin-top:4px;font-size:12px;">Vai junto no convite e no lembrete de todo mundo (WhatsApp/chat interno/push/e-mail). O sistema não gera o link sozinho — crie a reunião no Meet/Zoom e cole o link aqui.</div>
       </div>
       <div class="campo"><label>Para quem é esse compromisso</label><select name="usuario_dono_id">${opcoesDono}</select></div>
       <div class="campo">
@@ -2488,12 +2494,34 @@
   async function abrirDetalheEventoAgendaEquipe(eventoId) {
     const evento = await chamarApi(`/agenda/eventos/${eventoId}`);
     const podeEditar = evento.usuario_dono_id === state.usuarioAtual.id || temPermissao("agenda", "editar_todos");
-    if (podeEditar) return modalEditarEventoAgendaEquipe(evento);
+    if (podeEditar && !evento.detalhe_redigido) return modalEditarEventoAgendaEquipe(evento);
+    if (podeEditar && evento.detalhe_redigido) {
+      // Achado real (2026-09-25): "agenda.editar_todos" dá permissão de
+      // EDITAR o compromisso de outra pessoa, mas não necessariamente de
+      // VER o conteúdo dele (Fase 198/200 exige liberação explícita à
+      // parte). Abrir o formulário de edição com o rótulo genérico no
+      // lugar do título/local/descrição reais e permitir "Salvar" sem
+      // querer apagaria o conteúdo de verdade — em vez disso, só oferece
+      // Excluir (que não exige ver o conteúdo) e explica o motivo.
+      const podeExcluir = temPermissao("agenda", "excluir_todos");
+      abrirModal(`
+        <h3>Compromisso de ${escapeHtml(evento.dono_nome)}</h3>
+        <p class="texto-suave">${fmtDataHoraAgendaEquipe(evento.data_inicio)}${evento.data_fim ? " até " + fmtDataHoraAgendaEquipe(evento.data_fim) : ""}</p>
+        <p>Você tem permissão de administrador pra editar compromissos de qualquer pessoa, mas não tem liberação pra
+        VER o conteúdo deste específico (peça em Administração &gt; Usuários &gt; Agenda). Sem ver o conteúdo real,
+        editar aqui apagaria o motivo/local/descrição originais — por isso só dá pra excluir, se for o caso.</p>
+        <div class="rodape-modal">
+          ${podeExcluir ? `<button type="button" class="botao perigo" data-acao="excluir-evento-agenda-equipe" data-id="${evento.id}" style="margin-right:auto;">Excluir</button>` : ""}
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+        </div>`);
+      return;
+    }
     const souConvidadoPendente = evento.meu_convite_status === "pendente";
     abrirModal(`
       <h3>${escapeHtml(evento.titulo)} ${evento.meu_convite_status ? _seloStatusConviteAgendaEquipe(evento.meu_convite_status) : ""}</h3>
       <p><strong>Quando:</strong> ${fmtDataHoraAgendaEquipe(evento.data_inicio)}${evento.data_fim ? " até " + fmtDataHoraAgendaEquipe(evento.data_fim) : ""}</p>
       ${evento.local_texto ? `<p><strong>Local:</strong> ${escapeHtml(evento.local_texto)} <a href="${linkMapaAgendaEquipe(evento.local_texto)}" target="_blank" rel="noopener">🗺️ Abrir no mapa</a></p>` : ""}
+      ${evento.link_video ? `<p><strong>Videochamada:</strong> <a href="${escapeHtml(evento.link_video)}" target="_blank" rel="noopener">📹 Entrar na chamada</a></p>` : ""}
       ${evento.descricao ? `<p>${escapeHtml(evento.descricao)}</p>` : ""}
       <p class="texto-suave">De: ${escapeHtml(evento.dono_nome)} — criado por ${escapeHtml(evento.criado_por_nome)}</p>
       <div class="rodape-modal">
@@ -2625,6 +2653,7 @@
       data_inicio: deDatetimeLocalParaIsoAgendaEquipe(dados.get("data_inicio")),
       data_fim: deDatetimeLocalParaIsoAgendaEquipe(dados.get("data_fim")),
       local_texto: dados.get("local_texto") || null,
+      link_video: dados.get("link_video") || null,
       cor: dados.get("cor"),
       usuario_dono_id: Number(dados.get("usuario_dono_id")),
       participante_ids: dados.getAll("participante_ids").map(Number),
