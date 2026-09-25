@@ -2333,6 +2333,7 @@
       chamarApi("/agenda/contatos-externos"),
     ]);
     state.cache.contatosExternosAgenda = contatosExternos;
+    state.cache.usuariosAgenda = usuarios;
     const donoAtualId = evento ? evento.usuario_dono_id : state.usuarioAtual.id;
     const opcoesDono = usuarios
       .map((u) => `<option value="${u.id}" ${u.id === donoAtualId ? "selected" : ""}>${escapeHtml(u.nome)}${u.id === state.usuarioAtual.id ? " (eu)" : ""}</option>`)
@@ -2560,6 +2561,11 @@
     );
     ligarMapaFormularioAgendaEquipe(modal);
     _ligarParticipantesExternosAgendaEquipe(modal);
+    // Pedido do usuário (2026-09-25): antes de salvar uma EDIÇÃO, se isso
+    // for disparar convite novo pra alguém (participante que não estava na
+    // lista original), perguntar antes — nunca reenviar/enviar convite
+    // sem confirmação explícita, mesmo que seja só uma pessoa a mais.
+    modal.querySelector('form[data-form="editar-evento-agenda-equipe"]')._participantesOriginais = evento.participantes || [];
   }
 
   function ligarMapaFormularioAgendaEquipe(modal) {
@@ -21862,6 +21868,26 @@
       case "editar-evento-agenda-equipe": {
         const corpo = montarCorpoEventoAgendaEquipe(dados);
         corpo.participantes_externos = _coletarParticipantesExternosAgendaEquipe(form);
+        // Pedido do usuário: editar um compromisso já criado e salvar NUNCA
+        // manda convite novo sem perguntar antes — só quem já estava na
+        // lista original não dispara nada de novo (isso o backend já
+        // garante sozinho); um convidado a mais (interno ou externo) exige
+        // confirmação explícita aqui, mesmo sendo só uma edição de rotina.
+        const originais = form._participantesOriginais || [];
+        const idsInternosOriginais = new Set(originais.filter((p) => !p.externo).map((p) => p.usuario_id));
+        const idsExternosOriginais = new Set(originais.filter((p) => p.externo).map((p) => p.id));
+        const todosUsuariosAgenda = state.cache.usuariosAgenda || [];
+        const nomesNovosInternos = corpo.participante_ids
+          .filter((id) => !idsInternosOriginais.has(id))
+          .map((id) => (todosUsuariosAgenda.find((u) => u.id === id) || {}).nome)
+          .filter(Boolean);
+        const nomesNovosExternos = corpo.participantes_externos
+          .filter((p) => !p.id || !idsExternosOriginais.has(p.id)).map((p) => p.nome);
+        const todosNovos = [...nomesNovosInternos, ...nomesNovosExternos];
+        if (todosNovos.length) {
+          const confirmou = confirm(`Isso vai enviar o convite pra: ${todosNovos.join(", ")}.\n\nConfirma o envio?`);
+          if (!confirmou) return;
+        }
         return salvarEventoAgendaEquipeComConflito(`/agenda/eventos/${form.dataset.id}`, "PUT", corpo);
       }
       case "criar-funcionario": {
