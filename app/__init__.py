@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "198.0"
+VERSAO_SISTEMA = "199.0"
 
 
 def create_app(test_config: dict = None) -> Flask:
@@ -97,7 +97,7 @@ def create_app(test_config: dict = None) -> Flask:
         solicitacoes_material, fluxo, transportadoras, tabelas_preco, clientes_documentos, terminais,
         nfe_entrada, terceirizacao, portal_terceirizacao, contratos, portal_contrato,
         catalogos_vendas, crm, sso, seguranca, instalador, funcionarios, agenda,
-        orcamentos, portal_orcamento,
+        orcamentos, portal_orcamento, portal_agenda_convite,
     )
     app.register_blueprint(auth.bp)
     app.register_blueprint(usuarios.bp)
@@ -155,6 +155,7 @@ def create_app(test_config: dict = None) -> Flask:
     app.register_blueprint(agenda.bp)
     app.register_blueprint(orcamentos.bp)
     app.register_blueprint(portal_orcamento.bp)
+    app.register_blueprint(portal_agenda_convite.bp)
 
     @app.get("/api/v1/saude")
     def saude():
@@ -253,6 +254,11 @@ def create_app(test_config: dict = None) -> Flask:
     @app.get("/portal/orcamento/<token>")
     def portal_orcamento_pagina(token):
         return send_from_directory(FRONTEND_DIR, "portal_orcamento.html")
+
+    # Fase 199 — portal de aceite de CONVITE da Agenda (ver app/routes/portal_agenda_convite.py).
+    @app.get("/portal/agenda-convite/<token>")
+    def portal_agenda_convite_pagina(token):
+        return send_from_directory(FRONTEND_DIR, "portal_agenda_convite.html")
 
     if not app.debug:
         logging.basicConfig(level=logging.INFO)

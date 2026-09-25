@@ -192,6 +192,7 @@ SCHEMA_FILES = [
     "schema_fase196.sql",  # Fase 196 — Agenda: mensagem de lembrete personalizável por compromisso
     "schema_fase197.sql",  # Fase 197 — Orçamentos: proposta formal com aprovação por link público
     "schema_fase198.sql",  # Fase 198 — Agenda: visibilidade de detalhe por usuário (busy/free pros demais)
+    "schema_fase199.sql",  # Fase 199 — Agenda: convidar participantes (convite multi-canal + aceitar/recusar)
 ]
 
 

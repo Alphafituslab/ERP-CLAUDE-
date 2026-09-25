@@ -2223,9 +2223,10 @@
     const gradeInicio = new Date(ano, mes, 1 - diaSemanaInicioMes);
     const gradeFim = new Date(gradeInicio.getFullYear(), gradeInicio.getMonth(), gradeInicio.getDate() + 42);
 
-    const eventos = await chamarApi(
-      `/agenda/eventos?de=${encodeURIComponent(gradeInicio.toISOString())}&ate=${encodeURIComponent(gradeFim.toISOString())}`
-    );
+    const [eventos, convitesPendentes] = await Promise.all([
+      chamarApi(`/agenda/eventos?de=${encodeURIComponent(gradeInicio.toISOString())}&ate=${encodeURIComponent(gradeFim.toISOString())}`),
+      chamarApi("/agenda/convites-pendentes"),
+    ]);
 
     const porDia = {};
     eventos.forEach((ev) => {
@@ -2247,10 +2248,11 @@
         .slice(0, 3)
         .map(
           (ev) => `
-        <button type="button" class="agenda-equipe-chip" style="background:${ev.cor}; border-left-color:color-mix(in srgb, ${ev.cor} 60%, black);"
-                data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}">
+        <button type="button" class="agenda-equipe-chip ${ev.meu_convite_status === "pendente" ? "agenda-equipe-chip-pendente" : ""}" style="background:${ev.cor}; border-left-color:color-mix(in srgb, ${ev.cor} 60%, black);"
+                data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}${ev.meu_convite_status === "pendente" ? " — convite pendente" : ""}">
           <span class="agenda-equipe-chip-hora">${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
           <span class="agenda-equipe-chip-titulo">${escapeHtml(ev.titulo)}</span>
+          ${ev.meu_convite_status === "pendente" ? '<span class="agenda-equipe-chip-selo-convite">convite</span>' : ""}
         </button>`
         )
         .join("");
@@ -2286,6 +2288,18 @@
         </div>
       </div>
       <p class="dica">Agenda compartilhada da equipe — todo mundo vê que um horário está ocupado, mas só quem tiver permissão vê o motivo/local em detalhe (configurável em Administração &gt; Usuários &gt; Agenda). Editar ou excluir continua só para o dono ou um Administrador.</p>
+      ${convitesPendentes.length ? `
+      <div class="cartao agenda-equipe-convites-pendentes">
+        <h3 style="margin:0 0 10px;">📨 Você tem ${convitesPendentes.length} convite${convitesPendentes.length > 1 ? "s" : ""} pendente${convitesPendentes.length > 1 ? "s" : ""}</h3>
+        <div style="display:flex; flex-direction:column; gap:8px;">
+          ${convitesPendentes.map((c) => `
+            <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+              <span style="flex:1;"><strong>${escapeHtml(c.titulo)}</strong> — ${fmtDataHoraAgendaEquipe(c.data_inicio)} <span class="texto-suave">(convidado por ${escapeHtml(c.convidado_por_nome)})</span></span>
+              <button type="button" class="botao secundario pequeno" data-acao="recusar-convite-agenda-equipe" data-id="${c.participante_id}">Recusar</button>
+              <button type="button" class="botao pequeno" data-acao="aceitar-convite-agenda-equipe" data-id="${c.participante_id}">Aceitar</button>
+            </div>`).join("")}
+        </div>
+      </div>` : ""}
       <div class="cartao agenda-equipe-grade">
         <div class="agenda-equipe-semana-cabecalho">${diasSemana.map((d) => `<div>${d}</div>`).join("")}</div>
         <div class="agenda-equipe-dias">${celulas}</div>
@@ -2323,6 +2337,13 @@
         </div>
       </div>
       <div class="campo"><label>Para quem é esse compromisso</label><select name="usuario_dono_id">${opcoesDono}</select></div>
+      <div class="campo">
+        <label>Convidar participantes (opcional)</label>
+        <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Quem for convidado recebe um aviso por WhatsApp, chat interno, push e e-mail (o que estiver configurado), com opção de aceitar ou recusar. Um compromisso sem convidados não avisa ninguém.</div>
+        <div class="grade-checkbox">
+          ${usuarios.filter((u) => u.id !== donoAtualId).map((u) => `<label><input type="checkbox" name="participante_ids" value="${u.id}" ${(evento?.participantes || []).some((p) => p.usuario_id === u.id) ? "checked" : ""}> ${escapeHtml(u.nome)}</label>`).join("") || '<p class="texto-suave">Não há outros usuários pra convidar.</p>'}
+        </div>
+      </div>
       <div class="campo"><label>Cor</label><div class="agenda-equipe-swatches">${opcoesCor}</div></div>
       <div class="campo">
         <label>Lembrete</label>
@@ -2359,12 +2380,24 @@
     ligarMapaFormularioAgendaEquipe(modal);
   }
 
+  function _seloStatusConviteAgendaEquipe(status) {
+    const mapa = { pendente: ["inativo", "Pendente"], aceito: ["ativo", "Aceitou"], recusado: ["bloqueado", "Recusou"] };
+    const par = mapa[status] || ["inativo", status];
+    return `<span class="selo ${par[0]}" style="font-size:11px;">${par[1]}</span>`;
+  }
+
   async function modalEditarEventoAgendaEquipe(evento) {
     const podeExcluir = evento.usuario_dono_id === state.usuarioAtual.id || temPermissao("agenda", "excluir_todos");
     const camposHtml = await htmlFormularioEventoAgendaEquipe(evento, null);
+    const participantesHtml = (evento.participantes || []).length
+      ? `<div class="campo"><label>Convidados</label><div style="display:flex;flex-direction:column;gap:6px;">
+          ${evento.participantes.map((p) => `<div style="display:flex;align-items:center;gap:8px;font-size:13px;"><span style="flex:1;">${escapeHtml(p.usuario_nome)}</span>${_seloStatusConviteAgendaEquipe(p.status)}</div>`).join("")}
+        </div></div>`
+      : "";
     const modal = abrirModal(`
       <h3>Editar compromisso</h3>
       <p class="texto-suave" style="margin-top:-8px;">Criado por ${escapeHtml(evento.criado_por_nome)} — ${fmtDataHoraAgendaEquipe(evento.criado_em)}</p>
+      ${participantesHtml}
       <form data-form="editar-evento-agenda-equipe" data-id="${evento.id}">
         ${camposHtml}
         <div class="rodape-modal">
@@ -2391,13 +2424,22 @@
     const evento = await chamarApi(`/agenda/eventos/${eventoId}`);
     const podeEditar = evento.usuario_dono_id === state.usuarioAtual.id || temPermissao("agenda", "editar_todos");
     if (podeEditar) return modalEditarEventoAgendaEquipe(evento);
+    const souConvidadoPendente = evento.meu_convite_status === "pendente";
     abrirModal(`
-      <h3>${escapeHtml(evento.titulo)}</h3>
+      <h3>${escapeHtml(evento.titulo)} ${evento.meu_convite_status ? _seloStatusConviteAgendaEquipe(evento.meu_convite_status) : ""}</h3>
       <p><strong>Quando:</strong> ${fmtDataHoraAgendaEquipe(evento.data_inicio)}${evento.data_fim ? " até " + fmtDataHoraAgendaEquipe(evento.data_fim) : ""}</p>
       ${evento.local_texto ? `<p><strong>Local:</strong> ${escapeHtml(evento.local_texto)} <a href="${linkMapaAgendaEquipe(evento.local_texto)}" target="_blank" rel="noopener">🗺️ Abrir no mapa</a></p>` : ""}
       ${evento.descricao ? `<p>${escapeHtml(evento.descricao)}</p>` : ""}
       <p class="texto-suave">De: ${escapeHtml(evento.dono_nome)} — criado por ${escapeHtml(evento.criado_por_nome)}</p>
-      <div class="rodape-modal"><button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button></div>`);
+      <div class="rodape-modal">
+        ${souConvidadoPendente ? `
+          <button type="button" class="botao perigo" data-acao="recusar-convite-agenda-equipe" data-id="${evento.meu_participante_id}" style="margin-right:auto;">Recusar</button>
+          <button type="button" class="botao" data-acao="aceitar-convite-agenda-equipe" data-id="${evento.meu_participante_id}">Aceitar</button>
+        ` : evento.meu_convite_status === "aceito" ? `
+          <button type="button" class="botao perigo" data-acao="recusar-convite-agenda-equipe" data-id="${evento.meu_participante_id}" style="margin-right:auto;">Recusar agora</button>
+        ` : ""}
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
+      </div>`);
   }
 
   // Fase 193 — Web Push (padrão do navegador, sem depender só do som do
@@ -2520,6 +2562,7 @@
       local_texto: dados.get("local_texto") || null,
       cor: dados.get("cor"),
       usuario_dono_id: Number(dados.get("usuario_dono_id")),
+      participante_ids: dados.getAll("participante_ids").map(Number),
       notificar_chat_interno: dados.get("notificar_chat_interno") === "on",
       notificar_whatsapp: dados.get("notificar_whatsapp") === "on",
       notificar_push: dados.get("notificar_push") === "on",
@@ -19774,6 +19817,26 @@
           definirFlash("erro", erro.message || "Não foi possível ativar as notificações.");
         }
         return;
+      case "aceitar-convite-agenda-equipe":
+        try {
+          await chamarApi(`/agenda/participantes/${alvo.dataset.id}/aceitar`, { method: "POST" });
+          fecharModais();
+          definirFlash("ok", "Presença confirmada.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível confirmar.");
+        }
+        return renderAgenda();
+      case "recusar-convite-agenda-equipe": {
+        const motivo = prompt("Se quiser, conte o motivo (opcional):") || "";
+        try {
+          await chamarApi(`/agenda/participantes/${alvo.dataset.id}/recusar`, { method: "POST", body: { motivo } });
+          fecharModais();
+          definirFlash("ok", "Convite recusado.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível recusar.");
+        }
+        return renderAgenda();
+      }
       case "novo-orcamento":
         modalNovoOrcamento();
         return;

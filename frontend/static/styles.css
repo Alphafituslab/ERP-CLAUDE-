@@ -1438,6 +1438,17 @@ tr.linha-selecionada td { background: #e6eef7; }
 .agenda-equipe-mais { font-size: 11px; color: var(--texto-suave); cursor: pointer; padding: 2px 4px; }
 .agenda-equipe-mais:hover { text-decoration: underline; }
 
+/* Fase 199 — convite pendente: borda tracejada + opacidade reduzida até a
+   PRÓPRIA pessoa aceitar (decisão do usuário: por pessoa, nunca depende dos
+   outros convidados do mesmo compromisso) — assim que aceita, vira uma
+   pílula normal igual a qualquer outro compromisso. */
+.agenda-equipe-chip-pendente { opacity: .7; border-left-style: dashed; box-shadow: none; }
+.agenda-equipe-chip-selo-convite {
+  flex-shrink: 0; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em;
+  background: rgba(0,0,0,.28); border-radius: 999px; padding: 1px 5px;
+}
+.agenda-equipe-convites-pendentes { border-color: var(--dourado); }
+
 .agenda-equipe-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
 .agenda-equipe-swatch-rotulo { cursor: pointer; }
 .agenda-equipe-swatch-rotulo input { position: absolute; opacity: 0; width: 0; height: 0; }

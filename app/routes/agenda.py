@@ -65,8 +65,17 @@ def obter_evento(evento_id):
     ).fetchone()
     if row is None:
         raise ApiError("Compromisso não encontrado.", status=404)
-    donos_visiveis = agenda_service._donos_visiveis_em_detalhe(conn, g.usuario_atual["id"])
-    return jsonify(agenda_service._redigir_evento_se_necessario(dict(row), donos_visiveis))
+    evento = dict(row)
+    meu_participante = conn.execute(
+        "SELECT id, status FROM agenda_participantes WHERE evento_id = ? AND usuario_id = ?", (evento_id, g.usuario_atual["id"])
+    ).fetchone()
+    if meu_participante is None:
+        donos_visiveis = agenda_service._donos_visiveis_em_detalhe(conn, g.usuario_atual["id"])
+        evento = agenda_service._redigir_evento_se_necessario(evento, donos_visiveis)
+    evento["meu_convite_status"] = meu_participante["status"] if meu_participante else None
+    evento["meu_participante_id"] = meu_participante["id"] if meu_participante else None
+    evento["participantes"] = agenda_service.participantes_do_evento(conn, evento_id)
+    return jsonify(evento)
 
 
 @bp.post("/eventos")
@@ -83,6 +92,8 @@ def criar_evento():
             return jsonify({"conflito": True, "eventos_conflitantes": conflitos}), 409
 
     evento = agenda_service.criar_evento(conn, dados, g.usuario_atual["id"])
+    participante_ids = [int(i) for i in (dados.get("participante_ids") or [])]
+    agenda_service.sincronizar_participantes(conn, evento, participante_ids, g.usuario_atual["id"], g.usuario_atual["nome"])
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento["id"], usuario_id=g.usuario_atual["id"],
                      acao="criar", valor_novo=evento, ip=client_ip(), dispositivo=client_device())
     return jsonify(evento), 201
@@ -107,6 +118,9 @@ def atualizar_evento(evento_id):
             return jsonify({"conflito": True, "eventos_conflitantes": conflitos}), 409
 
     evento = agenda_service.atualizar_evento(conn, evento_id, dados, g.usuario_atual["id"])
+    if "participante_ids" in dados:
+        participante_ids = [int(i) for i in (dados.get("participante_ids") or [])]
+        agenda_service.sincronizar_participantes(conn, evento, participante_ids, g.usuario_atual["id"], g.usuario_atual["nome"])
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento_id, usuario_id=g.usuario_atual["id"],
                      acao="editar", valor_anterior=evento_atual, valor_novo=evento, ip=client_ip(), dispositivo=client_device())
     return jsonify(evento)
@@ -123,6 +137,39 @@ def excluir_evento(evento_id):
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento_id, usuario_id=g.usuario_atual["id"],
                      acao="excluir", valor_anterior=evento_atual, ip=client_ip(), dispositivo=client_device())
     return jsonify({"ok": True})
+
+
+# ─── Participantes / convites (Fase 199) ─────────────────────────────────────
+
+@bp.get("/convites-pendentes")
+@requires_auth
+def listar_convites_pendentes():
+    return jsonify(agenda_service.convites_pendentes_do_usuario(get_db(), g.usuario_atual["id"]))
+
+
+@bp.post("/participantes/<int:participante_id>/aceitar")
+@requires_auth
+def aceitar_convite(participante_id):
+    conn = get_db()
+    participante = agenda_service.responder_convite(conn, participante_id, g.usuario_atual["id"], aceitar=True)
+    if participante is None:
+        raise ApiError("Convite não encontrado.", status=404)
+    audit.registrar(conn, tabela="agenda_participantes", registro_id=participante_id, usuario_id=g.usuario_atual["id"],
+                     acao="convite_aceito", valor_novo=participante, ip=client_ip(), dispositivo=client_device())
+    return jsonify(participante)
+
+
+@bp.post("/participantes/<int:participante_id>/recusar")
+@requires_auth
+def recusar_convite(participante_id):
+    conn = get_db()
+    dados = request.get_json(silent=True) or {}
+    participante = agenda_service.responder_convite(conn, participante_id, g.usuario_atual["id"], aceitar=False, motivo=dados.get("motivo"))
+    if participante is None:
+        raise ApiError("Convite não encontrado.", status=404)
+    audit.registrar(conn, tabela="agenda_participantes", registro_id=participante_id, usuario_id=g.usuario_atual["id"],
+                     acao="convite_recusado", valor_novo=participante, ip=client_ip(), dispositivo=client_device())
+    return jsonify(participante)
 
 
 # ─── Alerta bloqueante na tela ───────────────────────────────────────────────
