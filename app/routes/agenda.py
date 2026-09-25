@@ -149,7 +149,9 @@ def atualizar_evento(evento_id):
         agenda_service.sincronizar_participantes(
             conn, evento, participante_ids, participantes_externos, g.usuario_atual["id"], g.usuario_atual["nome"]
         )
-    if dados.get("avisar_atualizacao"):
+    if dados.get("reagendar_pedir_reconfirmacao"):
+        agenda_service.reagendar_e_pedir_reconfirmacao(conn, evento, g.usuario_atual["nome"])
+    elif dados.get("avisar_atualizacao"):
         agenda_service.notificar_atualizacao_participantes(conn, evento, g.usuario_atual["nome"])
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento_id, usuario_id=g.usuario_atual["id"],
                      acao="editar", valor_anterior=evento_atual, valor_novo=evento, ip=client_ip(), dispositivo=client_device())
@@ -159,13 +161,22 @@ def atualizar_evento(evento_id):
 @bp.delete("/eventos/<int:evento_id>")
 @requires_auth
 def excluir_evento(evento_id):
+    """Pedido do usuário (2026-09-25): cancelar avisa todo mundo envolvido
+    automaticamente — por isso isso não é mais um DELETE definitivo, é um
+    cancelamento (ver `agenda_service.cancelar_evento`). `avisar_whatsapp`
+    (opcional no corpo) só afeta convidado INTERNO — o front pergunta isso
+    antes de chamar aqui; externo sempre recebe por WhatsApp/e-mail."""
     conn = get_db()
     evento_atual = _obter_evento_ou_404(conn, evento_id)
     if not agenda_service.pode_excluir(conn, g.usuario_atual["id"], evento_atual):
-        raise ForbiddenError("Só o dono do compromisso ou um Administrador pode excluí-lo.")
-    agenda_service.excluir_evento(conn, evento_id)
+        raise ForbiddenError("Só o dono do compromisso ou um Administrador pode cancelá-lo.")
+    dados = request.get_json(silent=True) or {}
+    agenda_service.cancelar_evento(conn, evento_id)
+    agenda_service.notificar_cancelamento_participantes(
+        conn, evento_atual, g.usuario_atual["nome"], avisar_whatsapp=bool(dados.get("avisar_whatsapp", True))
+    )
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento_id, usuario_id=g.usuario_atual["id"],
-                     acao="excluir", valor_anterior=evento_atual, ip=client_ip(), dispositivo=client_device())
+                     acao="cancelar", valor_anterior=evento_atual, ip=client_ip(), dispositivo=client_device())
     return jsonify({"ok": True})
 
 

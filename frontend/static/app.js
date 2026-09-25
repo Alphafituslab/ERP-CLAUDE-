@@ -2553,7 +2553,7 @@
       <form data-form="editar-evento-agenda-equipe" data-id="${evento.id}">
         ${camposHtml}
         <div class="rodape-modal">
-          ${podeExcluir ? `<button type="button" class="botao perigo" data-acao="excluir-evento-agenda-equipe" data-id="${evento.id}" style="margin-right:auto;">Excluir</button>` : ""}
+          ${podeExcluir ? `<button type="button" class="botao perigo" data-acao="cancelar-evento-agenda-equipe" data-id="${evento.id}" style="margin-right:auto;">Cancelar compromisso</button>` : ""}
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Salvar</button>
         </div>
@@ -2601,7 +2601,7 @@
         VER o conteúdo deste específico (peça em Administração &gt; Usuários &gt; Agenda). Sem ver o conteúdo real,
         editar aqui apagaria o motivo/local/descrição originais — por isso só dá pra excluir, se for o caso.</p>
         <div class="rodape-modal">
-          ${podeExcluir ? `<button type="button" class="botao perigo" data-acao="excluir-evento-agenda-equipe" data-id="${evento.id}" style="margin-right:auto;">Excluir</button>` : ""}
+          ${podeExcluir ? `<button type="button" class="botao perigo" data-acao="cancelar-evento-agenda-equipe" data-id="${evento.id}" style="margin-right:auto;">Cancelar compromisso</button>` : ""}
           <button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button>
         </div>`);
       return;
@@ -19992,12 +19992,27 @@
           <div class="rodape-modal"><button type="button" class="botao secundario" data-acao="fechar-modal">Fechar</button></div>`);
         return;
       }
-      case "excluir-evento-agenda-equipe":
-        if (!confirm("Excluir este compromisso? Não tem como desfazer.")) return;
-        await chamarApi(`/agenda/eventos/${alvo.dataset.id}`, { method: "DELETE" });
+      case "cancelar-evento-agenda-equipe": {
+        if (!confirm("Cancelar este compromisso? Quem já foi convidado será avisado. Não tem como desfazer.")) return;
+        const eventoId = alvo.dataset.id;
+        // Pedido do usuário (2026-09-25): cancelar/remarcar avisa todo
+        // mundo envolvido automaticamente; pra convidado INTERNO pergunta
+        // se manda por WhatsApp também (além do chat interno, que sempre
+        // vai); convidado EXTERNO recebe sem perguntar (só tem
+        // WhatsApp/e-mail mesmo, não tem o que escolher).
+        let avisarWhatsapp = true;
+        try {
+          const eventoAtual = await chamarApi(`/agenda/eventos/${eventoId}`);
+          const temConvidadoInterno = (eventoAtual.participantes || []).some((p) => !p.externo && p.status !== "recusado");
+          if (temConvidadoInterno) {
+            avisarWhatsapp = confirm("Deseja avisar por WhatsApp também (além do chat interno), pra quem for usuário do sistema?");
+          }
+        } catch (erro) { /* segue com o aviso padrão mesmo se essa checagem falhar */ }
+        await chamarApi(`/agenda/eventos/${eventoId}`, { method: "DELETE", body: { avisar_whatsapp: avisarWhatsapp } });
         fecharModais();
-        definirFlash("ok", "Compromisso excluído.");
+        definirFlash("ok", "Compromisso cancelado — os convidados foram avisados.");
         return renderAgenda();
+      }
       case "ativar-push-agenda-equipe":
         try {
           await ativarNotificacoesPushAgendaEquipe();
@@ -21911,15 +21926,29 @@
 
         // Detalhe do compromisso mudou (horário/local/link/etc.) e tem
         // gente que já foi convidada antes (pendente ou já aceitou) e
-        // continua na lista — pergunta se avisa essas pessoas da mudança
-        // (nunca reseta a resposta delas, só manda um aviso informativo).
+        // continua na lista — pergunta se avisa essas pessoas da mudança.
+        // Pedido do usuário (2026-09-25): se foi a DATA/HORA que mudou
+        // (reagendar/remarcar, não só ajustar local/descrição), o aviso
+        // não é só informativo — pede confirmação DE NOVO (reabre quem já
+        // tinha aceitado ou ainda não respondeu pra "pendente", porque uma
+        // aceitação do horário antigo não vale sozinha pro novo). Quem já
+        // recusou não é incomodado de novo.
         const existentesAtivos = originais.filter((p) =>
           (p.status === "pendente" || p.status === "aceito") &&
           (p.externo ? idsExternosMantidos.has(p.id) : idsInternosMantidos.has(p.usuario_id))
         );
-        corpo.avisar_atualizacao = detalhesMudaram && existentesAtivos.length
-          ? confirm(`Você alterou o compromisso. Deseja avisar quem já foi convidado (${existentesAtivos.map((p) => p.nome).join(", ")}) sobre a mudança?`)
-          : false;
+        const horarioMudou = corpo.data_inicio !== original.data_inicio || corpo.data_fim !== original.data_fim;
+        if (detalhesMudaram && existentesAtivos.length) {
+          const pergunta = horarioMudou
+            ? `Você REMARCOU o compromisso pra outro horário. Deseja enviar pra ${existentesAtivos.map((p) => p.nome).join(", ")} pedindo confirmação de presença de novo?`
+            : `Você alterou o compromisso. Deseja avisar quem já foi convidado (${existentesAtivos.map((p) => p.nome).join(", ")}) sobre a mudança?`;
+          const confirmouAviso = confirm(pergunta);
+          corpo.avisar_atualizacao = confirmouAviso && !horarioMudou;
+          corpo.reagendar_pedir_reconfirmacao = confirmouAviso && horarioMudou;
+        } else {
+          corpo.avisar_atualizacao = false;
+          corpo.reagendar_pedir_reconfirmacao = false;
+        }
 
         return salvarEventoAgendaEquipeComConflito(`/agenda/eventos/${form.dataset.id}`, "PUT", corpo);
       }

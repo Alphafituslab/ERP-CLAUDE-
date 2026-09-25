@@ -277,6 +277,22 @@ def excluir_evento(conn, evento_id: int):
     conn.execute("DELETE FROM agenda_eventos WHERE id = ?", (evento_id,))
 
 
+def cancelar_evento(conn, evento_id: int):
+    """Pedido do usuário (2026-09-25): "cancelar" um compromisso que já tem
+    gente convidada precisa AVISAR quem foi convidado — um DELETE
+    definitivo apagaria o registro (e os participantes, via ON DELETE
+    CASCADE) antes de dar chance de avisar ninguém. Em vez de excluir de
+    verdade, marca `status='cancelado'` (coluna que já existia desde a
+    Fase 193, só nunca tinha sido usada) — o agendador de lembrete já
+    ignora tudo que não for 'agendado', então um compromisso cancelado
+    simplesmente para de gerar lembrete sozinho, sem precisar de lógica
+    nova pra isso."""
+    conn.execute(
+        "UPDATE agenda_eventos SET status = 'cancelado', atualizado_em = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+        (evento_id,),
+    )
+
+
 # ─── Participantes / convites (Fase 199) ────────────────────────────────────
 # Só existe aviso quando alguém é CONVIDADO — um compromisso pessoal (sem
 # `participante_ids`) nunca dispara nada disso, exatamente como antes desta
@@ -637,7 +653,8 @@ def notificar_atualizacao_participantes(conn, evento: dict, atualizado_por_nome:
     """Pedido do usuário (2026-09-25): mudar detalhe de um compromisso que
     já tem gente convidada (pendente ou já aceito) pergunta ANTES se avisa
     essas pessoas — nunca reseta a resposta de quem já respondeu, é só um
-    aviso informativo da mudança."""
+    aviso informativo da mudança (usado quando o que mudou NÃO foi
+    data/hora — local, descrição, link de vídeo etc.)."""
     participantes = conn.execute(
         "SELECT * FROM agenda_participantes WHERE evento_id = ? AND status IN ('pendente','aceito')", (evento["id"],)
     ).fetchall()
@@ -652,6 +669,82 @@ def notificar_atualizacao_participantes(conn, evento: dict, atualizado_por_nome:
             if evento.get("notificar_whatsapp"):
                 _dispatch_whatsapp_direto(conn, p["celular_externo"], texto)
             _dispatch_email_direto(conn, p["email_externo"], f"Atualização: {evento['titulo']}", texto)
+
+
+def _texto_reagendamento(evento: dict, atualizado_por_nome: str, link: str) -> str:
+    inicio = datetime.datetime.fromisoformat(evento["data_inicio"])
+    linhas = [
+        f"🔁 {atualizado_por_nome} REMARCOU um compromisso — a data/hora mudou:",
+        f"*{evento['titulo']}*",
+        f"🗓️ Novo horário: {inicio.strftime('%d/%m/%Y às %H:%M')}",
+    ]
+    if evento.get("local_texto"):
+        linhas.append(f"📍 {evento['local_texto']}")
+    if evento.get("link_video"):
+        linhas.append(f"📹 Videochamada: {evento['link_video']}")
+    linhas.append(f"\nConfirma presença no novo horário? {link}")
+    return "\n".join(linhas)
+
+
+def reagendar_e_pedir_reconfirmacao(conn, evento: dict, atualizado_por_nome: str):
+    """Pedido do usuário (2026-09-25): quando a DATA/HORA muda (reagendar,
+    diferente de só ajustar local/descrição), quem já respondeu (aceito) ou
+    ainda não respondeu (pendente) é reaberto pra PENDENTE e recebe um
+    convite novo pedindo confirmação de novo pro horário atualizado — uma
+    aceitação antiga vale pro horário antigo, não faz sentido continuar
+    valendo sozinha pro novo. Quem já recusou continua recusado (não é
+    reaberto à força)."""
+    participantes = conn.execute(
+        "SELECT * FROM agenda_participantes WHERE evento_id = ? AND status IN ('pendente','aceito')", (evento["id"],)
+    ).fetchall()
+    for p in participantes:
+        p = dict(p)
+        conn.execute(
+            "UPDATE agenda_participantes SET status = 'pendente', motivo_recusa = NULL, respondido_em = NULL WHERE id = ?",
+            (p["id"],),
+        )
+        link = _link_convite(p["token_convite"])
+        texto = _texto_reagendamento(evento, atualizado_por_nome, link)
+        if p["usuario_id"]:
+            usuario_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (p["usuario_id"],)).fetchone()
+            if usuario_row is not None:
+                _dispatch_mensagem_usuario(conn, usuario_row, texto, evento["id"], evento)
+        else:
+            if evento.get("notificar_whatsapp"):
+                _dispatch_whatsapp_direto(conn, p["celular_externo"], texto)
+            _dispatch_email_direto(conn, p["email_externo"], f"Reagendado: {evento['titulo']}", texto)
+
+
+def _texto_cancelamento(evento: dict, cancelado_por_nome: str) -> str:
+    inicio = datetime.datetime.fromisoformat(evento["data_inicio"])
+    return (
+        f"🚫 {cancelado_por_nome} CANCELOU o compromisso:\n"
+        f"*{evento['titulo']}*\n"
+        f"🗓️ Estava marcado para {inicio.strftime('%d/%m/%Y às %H:%M')}"
+    )
+
+
+def notificar_cancelamento_participantes(conn, evento: dict, cancelado_por_nome: str, avisar_whatsapp: bool):
+    """Pedido do usuário (2026-09-25): cancelar avisa todo mundo envolvido
+    automaticamente (sem perguntar se avisa ou não — só cancelar já
+    justifica o aviso). `avisar_whatsapp` só entra pra convidado INTERNO
+    (pergunta feita no front antes de chamar); externo sempre recebe por
+    WhatsApp/e-mail, sem escolha — são os únicos canais que ele tem."""
+    participantes = conn.execute(
+        "SELECT * FROM agenda_participantes WHERE evento_id = ? AND status IN ('pendente','aceito')", (evento["id"],)
+    ).fetchall()
+    texto = _texto_cancelamento(evento, cancelado_por_nome)
+    for p in participantes:
+        p = dict(p)
+        if p["usuario_id"]:
+            usuario_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (p["usuario_id"],)).fetchone()
+            if usuario_row is not None:
+                canais = dict(evento)
+                canais["notificar_whatsapp"] = avisar_whatsapp and evento.get("notificar_whatsapp")
+                _dispatch_mensagem_usuario(conn, usuario_row, texto, evento["id"], canais)
+        else:
+            _dispatch_whatsapp_direto(conn, p["celular_externo"], texto)
+            _dispatch_email_direto(conn, p["email_externo"], f"Cancelado: {evento['titulo']}", texto)
 
 
 # ─── Envio de lembretes ─────────────────────────────────────────────────────
