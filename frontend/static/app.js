@@ -86,11 +86,29 @@
   // ---------------------------------------------------------------------
   // Cliente da API
   // ---------------------------------------------------------------------
+  // Pedido do usuário (2026-09-25) — "Restaurando sessão…" ficava preso na
+  // tela por muito tempo depois de um deploy (o Servidor na nuvem reinicia
+  // por alguns segundos — Fase 157b — e um `fetch` sem timeout simplesmente
+  // espera o tanto que o sistema operacional aguentar, às vezes bem mais de
+  // um minuto, antes de desistir). Com um limite de 12s, uma tentativa que
+  // cai bem no meio de um restart falha rápido e cai pra tela de login
+  // (que a pessoa só precisa tentar de novo), em vez de travar a tela.
+  const TIMEOUT_FETCH_MS = 12000;
+  async function fetchComTimeout(url, opcoes) {
+    const controlador = new AbortController();
+    const timer = setTimeout(() => controlador.abort(), TIMEOUT_FETCH_MS);
+    try {
+      return await fetch(url, { ...opcoes, signal: controlador.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function chamarApi(caminho, { method = "GET", body, semAuth = false } = {}) {
     const headers = { "Content-Type": "application/json" };
     if (!semAuth && state.accessToken) headers["Authorization"] = "Bearer " + state.accessToken;
 
-    let resp = await fetch(API + caminho, {
+    let resp = await fetchComTimeout(API + caminho, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -100,7 +118,7 @@
       const renovou = await tentarRenovarToken();
       if (renovou) {
         headers["Authorization"] = "Bearer " + state.accessToken;
-        resp = await fetch(API + caminho, {
+        resp = await fetchComTimeout(API + caminho, {
           method,
           headers,
           body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -456,7 +474,7 @@
     promessaRenovacaoEmAndamento = (async () => {
       try {
         const tentativa = async (token) => {
-          const resp = await fetch(API + "/auth/refresh", {
+          const resp = await fetchComTimeout(API + "/auth/refresh", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ refresh_token: token }),
