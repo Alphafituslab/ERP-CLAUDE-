@@ -2468,7 +2468,9 @@
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Agendar</button>
         </div>
-      </form>`);
+      </form>`,
+      { travado: true }
+    );
     ligarMapaFormularioAgendaEquipe(modal);
     _ligarParticipantesExternosAgendaEquipe(modal);
   }
@@ -2498,7 +2500,9 @@
           <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
           <button type="submit" class="botao">Salvar</button>
         </div>
-      </form>`);
+      </form>`,
+      { travado: true }
+    );
     ligarMapaFormularioAgendaEquipe(modal);
     _ligarParticipantesExternosAgendaEquipe(modal);
   }
