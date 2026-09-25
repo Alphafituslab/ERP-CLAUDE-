@@ -2403,14 +2403,40 @@
       <input type="hidden" name="forcar" value="">`;
   }
 
+  // Pedido do usuário (2026-09-25) — achado real: o Julio (Farmacia
+  // Leandro) não recebeu o convite porque "47984841312" (sem o 55) não
+  // resolve no WhatsApp; um número de 10-11 dígitos podia ser tanto um
+  // BR sem DDI quanto um número internacional de verdade (ex.: EUA tem
+  // 11 dígitos com DDI incluso), então não dá pra simplesmente "adivinhar"
+  // — por isso um seletor de DDI explícito, com Brasil (55) já
+  // selecionado por padrão, pra nunca mais depender de adivinhação.
+  const DDI_AGENDA_EQUIPE = [
+    ["55", "🇧🇷 +55 Brasil"], ["1", "🇺🇸 +1 EUA/Canadá"], ["351", "🇵🇹 +351 Portugal"],
+    ["54", "🇦🇷 +54 Argentina"], ["598", "🇺🇾 +598 Uruguai"], ["595", "🇵🇾 +595 Paraguai"],
+    ["56", "🇨🇱 +56 Chile"], ["52", "🇲🇽 +52 México"], ["34", "🇪🇸 +34 Espanha"],
+    ["44", "🇬🇧 +44 Reino Unido"], ["49", "🇩🇪 +49 Alemanha"], ["39", "🇮🇹 +39 Itália"], ["33", "🇫🇷 +33 França"],
+  ];
+
   function _linhaParticipanteExternoAgendaEquipe(p) {
+    // Uma linha NOVA (sem `p.id`) usa o seletor de DDI, que já vem
+    // combinado com o número na hora de coletar o formulário — uma linha
+    // já existente (editando um convite salvo) mostra o valor bruto que
+    // já está gravado, pra não arriscar prefixar "55" duas vezes em cima
+    // de um número que já estava correto antes desta mudança.
+    const ehNova = !(p && p.id);
+    const celularCampo = ehNova
+      ? `<select class="participante-externo-ddi" style="width:150px;">
+           ${DDI_AGENDA_EQUIPE.map(([codigo, rotulo]) => `<option value="${codigo}" ${codigo === "55" ? "selected" : ""}>${rotulo}</option>`).join("")}
+         </select>
+         <input type="text" class="participante-externo-celular" placeholder="DDD+número" style="flex:1;min-width:130px;">`
+      : `<input type="text" class="participante-externo-celular" placeholder="WhatsApp" style="flex:1;min-width:160px;" value="${escapeHtml(p?.celular_externo || "")}">`;
     return `
       <div class="linha-participante-externo-agenda-equipe" style="display:flex;gap:6px;margin-bottom:6px;flex-wrap:wrap;">
         <input type="hidden" class="participante-externo-id" value="${p && p.id ? p.id : ""}">
         <input type="text" class="participante-externo-nome" placeholder="Nome" list="lista-contatos-externos-agenda-equipe" style="flex:1;min-width:140px;" value="${escapeHtml(p?.nome_externo || p?.nome || "")}">
         <input type="text" class="participante-externo-empresa" placeholder="Empresa" style="flex:1;min-width:120px;" value="${escapeHtml(p?.empresa_externo || p?.empresa || "")}">
         <input type="email" class="participante-externo-email" placeholder="E-mail" style="flex:1;min-width:160px;" value="${escapeHtml(p?.email_externo || "")}">
-        <input type="text" class="participante-externo-celular" placeholder="WhatsApp (DDD+número)" style="flex:1;min-width:160px;" value="${escapeHtml(p?.celular_externo || "")}">
+        ${celularCampo}
         <button type="button" class="botao secundario pequeno" data-acao-local="remover-participante-externo-agenda-equipe">✕</button>
       </div>`;
   }
@@ -2430,6 +2456,8 @@
     });
     // Escolheu um nome já salvo (datalist) — preenche empresa/e-mail/WhatsApp
     // sozinho, sem sobrescrever campos que a pessoa já tenha editado à mão.
+    // O número salvo já vem completo (com DDI) — separa de volta em
+    // seletor+local pra não acabar duplicando o código na hora de coletar.
     corpo.addEventListener("input", (e) => {
       if (!e.target.classList.contains("participante-externo-nome")) return;
       const contato = (state.cache.contatosExternosAgenda || []).find((c) => c.nome === e.target.value);
@@ -2438,10 +2466,26 @@
       const campoEmpresa = linha.querySelector(".participante-externo-empresa");
       const campoEmail = linha.querySelector(".participante-externo-email");
       const campoCelular = linha.querySelector(".participante-externo-celular");
+      const campoDdi = linha.querySelector(".participante-externo-ddi");
       if (!campoEmpresa.value) campoEmpresa.value = contato.empresa || "";
       if (!campoEmail.value) campoEmail.value = contato.email || "";
-      if (!campoCelular.value) campoCelular.value = contato.celular || "";
+      if (!campoCelular.value && contato.celular) {
+        const { ddi, local } = _dividirDdiNumeroAgendaEquipe(contato.celular);
+        if (campoDdi) campoDdi.value = ddi;
+        campoCelular.value = local;
+      }
     });
+  }
+
+  function _dividirDdiNumeroAgendaEquipe(numeroCompleto) {
+    const digitos = (numeroCompleto || "").replace(/\D/g, "");
+    const codigos = [...DDI_AGENDA_EQUIPE.map(([c]) => c)].sort((a, b) => b.length - a.length);
+    for (const codigo of codigos) {
+      if (digitos.startsWith(codigo) && digitos.length - codigo.length >= 8) {
+        return { ddi: codigo, local: digitos.slice(codigo.length) };
+      }
+    }
+    return { ddi: "55", local: digitos };
   }
 
   function _coletarParticipantesExternosAgendaEquipe(form) {
@@ -2449,7 +2493,18 @@
       const nome = linha.querySelector(".participante-externo-nome").value.trim();
       const empresa = linha.querySelector(".participante-externo-empresa").value.trim();
       const email = linha.querySelector(".participante-externo-email").value.trim();
-      const celular = linha.querySelector(".participante-externo-celular").value.trim();
+      const campoDdi = linha.querySelector(".participante-externo-ddi");
+      const celularDigitado = linha.querySelector(".participante-externo-celular").value.trim();
+      // Linha nova (tem seletor de DDI): combina DDI + número num só valor
+      // completo antes de mandar pro backend — nunca depende de adivinhar
+      // o código do país a partir da quantidade de dígitos (Fase 204,
+      // achado real: um número de 11 dígitos pode ser BR sem DDI OU um
+      // número internacional de verdade, ex.: EUA). Linha existente (sem
+      // seletor, editando um convite já salvo): mantém o valor bruto
+      // gravado, sem reprocessar.
+      const celular = campoDdi
+        ? (celularDigitado ? campoDdi.value + celularDigitado.replace(/\D/g, "") : "")
+        : celularDigitado;
       const idExistente = linha.querySelector(".participante-externo-id").value;
       if (!nome || (!email && !celular)) return null;
       const item = { nome, empresa: empresa || null, email: email || null, celular: celular || null };

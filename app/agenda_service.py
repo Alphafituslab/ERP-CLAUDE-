@@ -17,6 +17,7 @@ Canais de lembrete reaproveitados, nenhum inventado do zero:
                    PWA já registra em frontend/static/app.js (`/sw.js`)
 """
 import datetime
+import logging
 import os
 import threading
 import time
@@ -34,6 +35,8 @@ INTERVALO_VERIFICACAO_SEGUNDOS = 60
 # como variável de ambiente, nunca commitadas (mesmo espírito de
 # ALPHAFITUS_JWT_SECRET em app/security.py). Sem essas variáveis definidas,
 # o canal "push" simplesmente não dispara — os outros dois continuam normais.
+_log = logging.getLogger(__name__)
+
 VAPID_PUBLIC_KEY = os.environ.get("ALPHAFITUS_VAPID_PUBLIC_KEY")
 VAPID_PRIVATE_KEY = os.environ.get("ALPHAFITUS_VAPID_PRIVATE_KEY")
 VAPID_CLAIMS_EMAIL = os.environ.get("ALPHAFITUS_VAPID_CLAIMS_EMAIL", "contato@alphafitus.com.br")
@@ -341,23 +344,30 @@ def _dispatch_mensagem_usuario(conn, usuario_row, texto: str, evento_id: int | N
     """Manda `texto` pro usuário pelos 3 canais internos (chat interno,
     WhatsApp, push) — melhor esforço, cada canal isolado (um falhar não
     impede os outros). Mesmo padrão de `enviar_lembrete`, só que disparado
-    na hora (convite/confirmação), não pelo agendador em background."""
+    na hora (convite/confirmação), não pelo agendador em background.
+
+    Achado real (2026-09-25): um `except Exception: pass` sem log nenhum
+    deixa uma falha de envio (WhatsApp/e-mail fora do ar, número inválido,
+    etc.) completamente invisível — ninguém percebe que o convite não
+    chegou até o convidado reclamar. Sempre registra o motivo agora."""
     try:
         email_destino = usuario_row["email_chat_interno"] or usuario_row["email"]
-        chat_interno_service.enviar_mensagem_chat_interno(email_destino, texto)
+        sucesso, motivo = chat_interno_service.enviar_mensagem_chat_interno(email_destino, texto)
+        if not sucesso:
+            _log.warning("Agenda: chat interno não enviado pra usuário %s — %s", usuario_row["id"], motivo)
     except Exception:
-        pass
+        _log.exception("Agenda: falha ao enviar chat interno pra usuário %s", usuario_row["id"])
     if usuario_row["celular"]:
         try:
             config = backup_service.obter_configuracao(conn)
             numero = backup_service.normalizar_numero_brasileiro(usuario_row["celular"])
             backup_service.enviar_texto_whatsapp(config, numero, texto)
         except Exception:
-            pass
+            _log.exception("Agenda: falha ao enviar WhatsApp pra usuário %s (numero=%s)", usuario_row["id"], usuario_row["celular"])
     try:
         enviar_push(conn, usuario_row["id"], "Agenda", texto, {"eventoId": evento_id} if evento_id else None)
     except Exception:
-        pass
+        _log.exception("Agenda: falha ao enviar push pra usuário %s", usuario_row["id"])
 
 
 def _dispatch_email_direto(conn, email: str, assunto: str, texto: str):
@@ -369,10 +379,11 @@ def _dispatch_email_direto(conn, email: str, assunto: str, texto: str):
     try:
         config = notificacoes_service.obter_configuracao_email(conn)
         if not config.get("ativo") or not config.get("smtp_host"):
+            _log.info("Agenda: e-mail pra %s não enviado — SMTP não configurado/ativo.", email)
             return
         notificacoes_service._enviar_email_smtp(config, email, assunto, texto)
     except Exception:
-        pass
+        _log.exception("Agenda: falha ao enviar e-mail pra %s", email)
 
 
 def _dispatch_whatsapp_direto(conn, celular: str, texto: str):
@@ -383,7 +394,7 @@ def _dispatch_whatsapp_direto(conn, celular: str, texto: str):
         numero = backup_service.normalizar_numero_brasileiro(celular)
         backup_service.enviar_texto_whatsapp(config, numero, texto)
     except Exception:
-        pass
+        _log.exception("Agenda: falha ao enviar WhatsApp pro contato externo (numero=%s)", celular)
 
 
 def convidar_participantes(conn, evento: dict, usuario_ids: list, convidado_por_id: int, convidado_por_nome: str):
