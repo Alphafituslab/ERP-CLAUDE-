@@ -2306,9 +2306,7 @@
           (ev) => `
         <button type="button" class="agenda-equipe-chip ${ev.meu_convite_status === "pendente" ? "agenda-equipe-chip-pendente" : ""} ${ev.usuario_dono_id === state.usuarioAtual.id ? "agenda-equipe-chip-minha" : ""}" style="background:${ev.cor}; border-left-color:color-mix(in srgb, ${ev.cor} 60%, black);"
                 data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}${ev.usuario_dono_id === state.usuarioAtual.id ? " — sua agenda" : ` — agenda de ${escapeHtml(ev.dono_nome || "")}`}${ev.meu_convite_status === "pendente" ? " — convite pendente" : ""}">
-          ${ev.usuario_dono_id === state.usuarioAtual.id
-            ? '<span class="agenda-equipe-chip-selo-eu">Eu</span>'
-            : `<span class="agenda-equipe-chip-selo-dono">${escapeHtml((ev.dono_nome || "?").split(" ")[0])}</span>`}
+          <span class="${ev.usuario_dono_id === state.usuarioAtual.id ? "agenda-equipe-chip-selo-eu" : "agenda-equipe-chip-selo-dono"}">${escapeHtml((ev.dono_nome || "?").split(" ")[0])}</span>
           <span class="agenda-equipe-chip-hora">${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
           <span class="agenda-equipe-chip-titulo">${escapeHtml(ev.titulo)}</span>
           ${ev.meu_convite_status === "pendente" ? '<span class="agenda-equipe-chip-selo-convite">convite</span>' : ""}

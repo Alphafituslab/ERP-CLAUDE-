@@ -1454,18 +1454,16 @@ tr.linha-selecionada td { background: #e6eef7; }
    marca de relance quem é o dono, e um anel dourado reforça visualmente
    sem depender só do texto (útil pra quem olha rápido, de longe). */
 .agenda-equipe-chip-minha { box-shadow: 0 0 0 2px var(--dourado), 0 1px 3px rgba(0,0,0,.25); }
-.agenda-equipe-chip-selo-eu {
-  flex-shrink: 0; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em;
-  background: var(--dourado); color: #1a1408; border-radius: 999px; padding: 1px 5px;
+.agenda-equipe-chip-selo-eu, .agenda-equipe-chip-selo-dono {
+  flex-shrink: 0; font-size: 9.5px; font-weight: 800; max-width: 64px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; border-radius: 999px; padding: 1px 6px;
 }
-/* Pedido do usuário (2026-09-25): no card de quem NÃO é você, mostrar o
-   primeiro nome do dono em vez de deixar sem nenhuma pista — discreto
-   (mesmo estilo neutro do selo de convite/confirmação), mas sempre
-   visível, sem precisar abrir o compromisso pra saber de quem é. */
-.agenda-equipe-chip-selo-dono {
-  flex-shrink: 0; font-size: 9.5px; font-weight: 700; max-width: 64px; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; background: rgba(0,0,0,.28); border-radius: 999px; padding: 1px 6px;
-}
+/* Pedido do usuário (2026-09-25): mostrar o PRIMEIRO NOME de quem é o
+   dono em todo card, o seu incluso (era só "Eu" antes, ficou melhor ver
+   o próprio nome igual aos outros) — o seu continua se destacando pela
+   cor dourada + anel ao redor do card, os demais num tom neutro. */
+.agenda-equipe-chip-selo-eu { background: var(--dourado); color: #1a1408; }
+.agenda-equipe-chip-selo-dono { font-weight: 700; background: rgba(0,0,0,.28); }
 .agenda-equipe-filtro { display: flex; gap: 6px; }
 
 .agenda-equipe-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
