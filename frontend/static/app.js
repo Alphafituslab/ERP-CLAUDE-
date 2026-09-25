@@ -1187,17 +1187,6 @@
     // link no menu; Protocolo nunca existiu aqui dentro, mesmo raciocínio
     // de fidelidade) se mudaram pra dentro de Qualidade > Shelf Life, ver
     // acima — não ficam mais soltos no nível raiz do menu.
-    // Rótulo "Agenda de Compromissos" (não só "Agenda") de propósito — já
-    // existe "Agenda" dentro de APS (Sequenciamento), que é outra coisa
-    // completamente diferente (agendamento de ordem de produção em centro
-    // de trabalho, Fase 25). Pedido do usuário (2026-09-24): nunca
-    // misturar os dois, nem visualmente nem na busca. Fica LOGO ACIMA do
-    // grupo Administração (posição pedida), mas como item SOLTO, não
-    // dentro do grupo — sem `permissao`, de propósito, pra aparecer pra
-    // QUALQUER usuário logado (achado real: colocar dentro de
-    // Administração escondia a Agenda de quem não é admin, e é sobre
-    // deveres/compromissos de todo mundo, não só administração).
-    { rota: "#/agenda-equipe", chave: "agenda-equipe", label: "Agenda de Compromissos", apelidos: ["compromisso", "compromissos", "reuniao", "reunião", "evento", "calendario", "calendário", "agenda pessoal", "agenda da equipe", "dever", "deveres", "atendimento", "atendimentos"] },
     {
       tipo: "grupo", chave: "grupo-administracao", nome: "Administração",
       itens: [
@@ -1227,6 +1216,20 @@
         { rota: "https://whatts.alphafitus.com.br/downloads/Manual_AlphafitusOS.html", chave: "manual-sistema", label: "Manual do Sistema", abrirNovaAba: true },
       ],
     },
+    // Rótulo "Agenda de Compromissos" (não só "Agenda") de propósito — já
+    // existe "Agenda" dentro de APS (Sequenciamento), que é outra coisa
+    // completamente diferente (agendamento de ordem de produção em centro
+    // de trabalho, Fase 25). Pedido do usuário (2026-09-24): nunca
+    // misturar os dois, nem visualmente nem na busca. Fica LOGO ABAIXO do
+    // grupo Administração (posição pedida), como item SOLTO — sem
+    // `permissao`, de propósito, pra aparecer pra QUALQUER usuário logado
+    // (achado real: colocar DENTRO de Administração escondia a Agenda de
+    // quem não é admin, e é sobre deveres/compromissos de todo mundo, não
+    // só administração). Ficando aqui, embaixo dos grupos (mesma seção de
+    // WhatsApp/Minha Conta/Notificações), a pílula `.link-nav` não fica
+    // mais espremida entre rótulos de grupo (FINANCEIRO, ADMINISTRAÇÃO em
+    // caixa alta) — evita a mistura visual que o usuário reportou.
+    { rota: "#/agenda-equipe", chave: "agenda-equipe", label: "Agenda de Compromissos", apelidos: ["compromisso", "compromissos", "reuniao", "reunião", "evento", "calendario", "calendário", "agenda pessoal", "agenda da equipe", "dever", "deveres", "atendimento", "atendimentos"] },
     // Fase 123 (Parte 2) — Whatts Inbox incluso, rodando localmente (porta
     // 5050) como um módulo nativo do AlphafitusOS. Abre numa aba nova de
     // propósito (login e tela de conversa continuam exatamente como no
