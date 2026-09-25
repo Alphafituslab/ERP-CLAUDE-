@@ -340,34 +340,43 @@ def _link_convite(token: str) -> str:
     return f"{base.rstrip('/')}/portal/agenda-convite/{token}"
 
 
-def _dispatch_mensagem_usuario(conn, usuario_row, texto: str, evento_id: int | None = None):
+def _dispatch_mensagem_usuario(conn, usuario_row, texto: str, evento_id: int | None = None, evento: dict | None = None):
     """Manda `texto` pro usuário pelos 3 canais internos (chat interno,
     WhatsApp, push) — melhor esforço, cada canal isolado (um falhar não
     impede os outros). Mesmo padrão de `enviar_lembrete`, só que disparado
     na hora (convite/confirmação), não pelo agendador em background.
 
+    Pedido do usuário (2026-09-25): "às vezes a agenda é só interna, não
+    precisa mandar no WhatsApp" — os MESMOS 3 interruptores do compromisso
+    (`notificar_chat_interno`/`notificar_whatsapp`/`notificar_push`, hoje já
+    escolhidos na tela) agora valem pro CONVITE também, não só pro lembrete
+    de antes do horário. Sem `evento` (chamada antiga/legado), assume os
+    3 ligados — mantém compatível.
+
     Achado real (2026-09-25): um `except Exception: pass` sem log nenhum
     deixa uma falha de envio (WhatsApp/e-mail fora do ar, número inválido,
     etc.) completamente invisível — ninguém percebe que o convite não
     chegou até o convidado reclamar. Sempre registra o motivo agora."""
-    try:
-        email_destino = usuario_row["email_chat_interno"] or usuario_row["email"]
-        sucesso, motivo = chat_interno_service.enviar_mensagem_chat_interno(email_destino, texto)
-        if not sucesso:
-            _log.warning("Agenda: chat interno não enviado pra usuário %s — %s", usuario_row["id"], motivo)
-    except Exception:
-        _log.exception("Agenda: falha ao enviar chat interno pra usuário %s", usuario_row["id"])
-    if usuario_row["celular"]:
+    if evento is None or evento.get("notificar_chat_interno"):
+        try:
+            email_destino = usuario_row["email_chat_interno"] or usuario_row["email"]
+            sucesso, motivo = chat_interno_service.enviar_mensagem_chat_interno(email_destino, texto)
+            if not sucesso:
+                _log.warning("Agenda: chat interno não enviado pra usuário %s — %s", usuario_row["id"], motivo)
+        except Exception:
+            _log.exception("Agenda: falha ao enviar chat interno pra usuário %s", usuario_row["id"])
+    if usuario_row["celular"] and (evento is None or evento.get("notificar_whatsapp")):
         try:
             config = backup_service.obter_configuracao(conn)
             numero = backup_service.normalizar_numero_brasileiro(usuario_row["celular"])
             backup_service.enviar_texto_whatsapp(config, numero, texto)
         except Exception:
             _log.exception("Agenda: falha ao enviar WhatsApp pra usuário %s (numero=%s)", usuario_row["id"], usuario_row["celular"])
-    try:
-        enviar_push(conn, usuario_row["id"], "Agenda", texto, {"eventoId": evento_id} if evento_id else None)
-    except Exception:
-        _log.exception("Agenda: falha ao enviar push pra usuário %s", usuario_row["id"])
+    if evento is None or evento.get("notificar_push"):
+        try:
+            enviar_push(conn, usuario_row["id"], "Agenda", texto, {"eventoId": evento_id} if evento_id else None)
+        except Exception:
+            _log.exception("Agenda: falha ao enviar push pra usuário %s", usuario_row["id"])
 
 
 def _dispatch_email_direto(conn, email: str, assunto: str, texto: str):
@@ -420,7 +429,7 @@ def convidar_participantes(conn, evento: dict, usuario_ids: list, convidado_por_
             continue
         link = _link_convite(token)
         texto = _texto_convite(evento, convidado_por_nome, link)
-        _dispatch_mensagem_usuario(conn, usuario_row, texto, evento["id"])
+        _dispatch_mensagem_usuario(conn, usuario_row, texto, evento["id"], evento)
         _dispatch_email_direto(conn, usuario_row["email"], f"Convite: {evento['titulo']}", texto)
 
 
@@ -452,7 +461,8 @@ def convidar_participantes_externos(conn, evento: dict, participantes_externos: 
         salvar_contato_externo(conn, nome, empresa, email, celular, convidado_por_id)
         link = _link_convite(token)
         texto = _texto_convite(evento, convidado_por_nome, link)
-        _dispatch_whatsapp_direto(conn, celular, texto)
+        if evento.get("notificar_whatsapp"):
+            _dispatch_whatsapp_direto(conn, celular, texto)
         _dispatch_email_direto(conn, email, f"Convite: {evento['titulo']}", texto)
 
 
@@ -573,10 +583,11 @@ def _responder_convite_nucleo(conn, participante_id: int, aceitar: bool, motivo:
         usuario_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (participante["usuario_id"],)).fetchone()
         if usuario_row is not None:
             nome_convidado = usuario_row["nome"]
-            _dispatch_mensagem_usuario(conn, usuario_row, texto_confirmacao, evento["id"])
+            _dispatch_mensagem_usuario(conn, usuario_row, texto_confirmacao, evento["id"], evento)
     else:
         nome_convidado = participante["nome_externo"]
-        _dispatch_whatsapp_direto(conn, participante["celular_externo"], texto_confirmacao)
+        if evento.get("notificar_whatsapp"):
+            _dispatch_whatsapp_direto(conn, participante["celular_externo"], texto_confirmacao)
         _dispatch_email_direto(conn, participante["email_externo"], f"Confirmação: {evento['titulo']}", texto_confirmacao)
 
     convidado_por = conn.execute("SELECT * FROM usuarios WHERE id = ?", (participante["convidado_por"],)).fetchone()
@@ -585,7 +596,7 @@ def _responder_convite_nucleo(conn, participante_id: int, aceitar: bool, motivo:
         texto_organizador = f"{nome_convidado} {acao} o convite para \"{evento['titulo']}\"."
         if not aceitar and motivo:
             texto_organizador += f" Motivo: {motivo}"
-        _dispatch_mensagem_usuario(conn, convidado_por, texto_organizador, evento["id"])
+        _dispatch_mensagem_usuario(conn, convidado_por, texto_organizador, evento["id"], evento)
 
     return dict(conn.execute("SELECT * FROM agenda_participantes WHERE id = ?", (participante_id,)).fetchone())
 

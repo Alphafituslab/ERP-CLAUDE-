@@ -2368,7 +2368,7 @@
       <div class="campo"><label>Para quem é esse compromisso</label><select name="usuario_dono_id">${opcoesDono}</select></div>
       <div class="campo">
         <label>Convidar participantes (opcional)</label>
-        <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Quem for convidado recebe um aviso por WhatsApp, chat interno, push e e-mail (o que estiver configurado), com opção de aceitar ou recusar. Um compromisso sem convidados não avisa ninguém.</div>
+        <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Quem for convidado recebe um aviso pelos canais marcados em "Canais de aviso" (mais abaixo) e por e-mail, com opção de aceitar ou recusar. Um compromisso sem convidados não avisa ninguém.</div>
         <div class="grade-checkbox">
           ${usuarios.filter((u) => u.id !== donoAtualId).map((u) => `<label><input type="checkbox" name="participante_ids" value="${u.id}" ${(evento?.participantes || []).some((p) => p.usuario_id === u.id) ? "checked" : ""}> ${escapeHtml(u.nome)}</label>`).join("") || '<p class="texto-suave">Não há outros usuários pra convidar.</p>'}
         </div>
@@ -2384,7 +2384,8 @@
       </div>
       <div class="campo"><label>Cor</label><div class="agenda-equipe-swatches">${opcoesCor}</div></div>
       <div class="campo">
-        <label>Lembrete</label>
+        <label>Canais de aviso</label>
+        <div class="texto-suave" style="font-size:12px;margin-bottom:6px;">Vale tanto pro CONVITE (na hora de criar) quanto pro lembrete antes do compromisso — desmarque o que não fizer sentido (ex.: compromisso só interno não precisa ir pro WhatsApp).</div>
         <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
           <label><input type="checkbox" name="notificar_chat_interno" ${evento ? (evento.notificar_chat_interno ? "checked" : "") : "checked"}> Chat interno</label>
           <label><input type="checkbox" name="notificar_whatsapp" ${evento ? (evento.notificar_whatsapp ? "checked" : "") : "checked"}> WhatsApp</label>
