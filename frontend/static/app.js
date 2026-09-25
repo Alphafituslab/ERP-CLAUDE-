@@ -2396,6 +2396,7 @@
         <div class="campo" style="flex:1;min-width:180px;"><label>Início</label><input type="datetime-local" name="data_inicio" required value="${evento ? paraDatetimeLocalAgendaEquipe(evento.data_inicio) : inicioPadrao}"></div>
         <div class="campo" style="flex:1;min-width:180px;"><label>Fim (opcional)</label><input type="datetime-local" name="data_fim" value="${evento ? paraDatetimeLocalAgendaEquipe(evento.data_fim) : ""}"></div>
       </div>
+      ${evento && (evento.participantes || []).length ? `<p class="texto-suave" style="margin-top:-8px;font-size:12px;">Pra REAGENDAR: mude a data/hora aqui em cima e clique em "Salvar" no final — o sistema pergunta se quer enviar pedindo confirmação de presença de novo pra quem já foi convidado.</p>` : ""}
       <div class="campo">
         <label>Local (opcional)</label>
         <div style="display:flex;gap:8px;">
