@@ -619,6 +619,41 @@ def resolver_convite_por_token(conn, token: str):
     return dict(row) if row else None
 
 
+def _texto_atualizacao(evento: dict, atualizado_por_nome: str) -> str:
+    inicio = datetime.datetime.fromisoformat(evento["data_inicio"])
+    linhas = [
+        f"🔄 {atualizado_por_nome} atualizou um compromisso que você já tinha sido convidado:",
+        f"*{evento['titulo']}*",
+        f"🗓️ {inicio.strftime('%d/%m/%Y às %H:%M')}",
+    ]
+    if evento.get("local_texto"):
+        linhas.append(f"📍 {evento['local_texto']}")
+    if evento.get("link_video"):
+        linhas.append(f"📹 Videochamada: {evento['link_video']}")
+    return "\n".join(linhas)
+
+
+def notificar_atualizacao_participantes(conn, evento: dict, atualizado_por_nome: str):
+    """Pedido do usuário (2026-09-25): mudar detalhe de um compromisso que
+    já tem gente convidada (pendente ou já aceito) pergunta ANTES se avisa
+    essas pessoas — nunca reseta a resposta de quem já respondeu, é só um
+    aviso informativo da mudança."""
+    participantes = conn.execute(
+        "SELECT * FROM agenda_participantes WHERE evento_id = ? AND status IN ('pendente','aceito')", (evento["id"],)
+    ).fetchall()
+    texto = _texto_atualizacao(evento, atualizado_por_nome)
+    for p in participantes:
+        p = dict(p)
+        if p["usuario_id"]:
+            usuario_row = conn.execute("SELECT * FROM usuarios WHERE id = ?", (p["usuario_id"],)).fetchone()
+            if usuario_row is not None:
+                _dispatch_mensagem_usuario(conn, usuario_row, texto, evento["id"], evento)
+        else:
+            if evento.get("notificar_whatsapp"):
+                _dispatch_whatsapp_direto(conn, p["celular_externo"], texto)
+            _dispatch_email_direto(conn, p["email_externo"], f"Atualização: {evento['titulo']}", texto)
+
+
 # ─── Envio de lembretes ─────────────────────────────────────────────────────
 
 def _texto_lembrete(evento: dict) -> str:

@@ -2567,6 +2567,7 @@
     // lista original), perguntar antes — nunca reenviar/enviar convite
     // sem confirmação explícita, mesmo que seja só uma pessoa a mais.
     modal.querySelector('form[data-form="editar-evento-agenda-equipe"]')._participantesOriginais = evento.participantes || [];
+    modal.querySelector('form[data-form="editar-evento-agenda-equipe"]')._eventoOriginal = evento;
   }
 
   function ligarMapaFormularioAgendaEquipe(modal) {
@@ -21869,12 +21870,21 @@
       case "editar-evento-agenda-equipe": {
         const corpo = montarCorpoEventoAgendaEquipe(dados);
         corpo.participantes_externos = _coletarParticipantesExternosAgendaEquipe(form);
-        // Pedido do usuário: editar um compromisso já criado e salvar NUNCA
-        // manda convite novo sem perguntar antes — só quem já estava na
-        // lista original não dispara nada de novo (isso o backend já
-        // garante sozinho); um convidado a mais (interno ou externo) exige
-        // confirmação explícita aqui, mesmo sendo só uma edição de rotina.
+        // Pedido do usuário (2026-09-25): só abrir e fechar sem mudar nada
+        // não pode alterar nada nem reenviar nada; mudar QUALQUER coisa
+        // (detalhe do compromisso ou lista de convidados) deve perguntar
+        // antes de mandar aviso — com opção de sim ou não, nos dois casos:
+        // convidado NOVO (pergunta se manda o convite) e detalhe mudado
+        // com convidado JÁ existente (pergunta se avisa da mudança).
+        const original = form._eventoOriginal || {};
         const originais = form._participantesOriginais || [];
+        const camposComparar = [
+          "titulo", "descricao", "data_inicio", "data_fim", "local_texto", "link_video", "cor", "usuario_dono_id",
+          "notificar_chat_interno", "notificar_whatsapp", "notificar_push",
+          "lembrete_antecedencia_min", "lembrete_repeticoes", "lembrete_intervalo_min", "lembrete_mensagem_custom",
+        ];
+        const detalhesMudaram = camposComparar.some((campo) => (corpo[campo] ?? null) !== (original[campo] ?? null));
+
         const idsInternosOriginais = new Set(originais.filter((p) => !p.externo).map((p) => p.usuario_id));
         const idsExternosOriginais = new Set(originais.filter((p) => p.externo).map((p) => p.id));
         const todosUsuariosAgenda = state.cache.usuariosAgenda || [];
@@ -21885,10 +21895,32 @@
         const nomesNovosExternos = corpo.participantes_externos
           .filter((p) => !p.id || !idsExternosOriginais.has(p.id)).map((p) => p.nome);
         const todosNovos = [...nomesNovosInternos, ...nomesNovosExternos];
+
+        const idsInternosMantidos = new Set(corpo.participante_ids);
+        const idsExternosMantidos = new Set(corpo.participantes_externos.filter((p) => p.id).map((p) => p.id));
+        const algumRemovido = originais.some((p) => p.externo ? !idsExternosMantidos.has(p.id) : !idsInternosMantidos.has(p.usuario_id));
+
+        if (!detalhesMudaram && !todosNovos.length && !algumRemovido) {
+          return fecharModais();  // abriu e fechou sem mudar nada — não faz nada, não reenvia nada
+        }
+
         if (todosNovos.length) {
           const confirmou = confirm(`Isso vai enviar o convite pra: ${todosNovos.join(", ")}.\n\nConfirma o envio?`);
           if (!confirmou) return;
         }
+
+        // Detalhe do compromisso mudou (horário/local/link/etc.) e tem
+        // gente que já foi convidada antes (pendente ou já aceitou) e
+        // continua na lista — pergunta se avisa essas pessoas da mudança
+        // (nunca reseta a resposta delas, só manda um aviso informativo).
+        const existentesAtivos = originais.filter((p) =>
+          (p.status === "pendente" || p.status === "aceito") &&
+          (p.externo ? idsExternosMantidos.has(p.id) : idsInternosMantidos.has(p.usuario_id))
+        );
+        corpo.avisar_atualizacao = detalhesMudaram && existentesAtivos.length
+          ? confirm(`Você alterou o compromisso. Deseja avisar quem já foi convidado (${existentesAtivos.map((p) => p.nome).join(", ")}) sobre a mudança?`)
+          : false;
+
         return salvarEventoAgendaEquipeComConflito(`/agenda/eventos/${form.dataset.id}`, "PUT", corpo);
       }
       case "criar-funcionario": {

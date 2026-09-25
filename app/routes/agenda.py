@@ -149,6 +149,8 @@ def atualizar_evento(evento_id):
         agenda_service.sincronizar_participantes(
             conn, evento, participante_ids, participantes_externos, g.usuario_atual["id"], g.usuario_atual["nome"]
         )
+    if dados.get("avisar_atualizacao"):
+        agenda_service.notificar_atualizacao_participantes(conn, evento, g.usuario_atual["nome"])
     audit.registrar(conn, tabela="agenda_eventos", registro_id=evento_id, usuario_id=g.usuario_atual["id"],
                      acao="editar", valor_anterior=evento_atual, valor_novo=evento, ip=client_ip(), dispositivo=client_device())
     return jsonify(evento)
