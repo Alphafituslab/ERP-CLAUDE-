@@ -1449,6 +1449,17 @@ tr.linha-selecionada td { background: #e6eef7; }
 }
 .agenda-equipe-convites-pendentes { border-color: var(--dourado); }
 
+/* Fase 208 — pedido do usuário: "como eu sei que essas agendas são
+   minhas?" — antes só dava pra saber abrindo cada compromisso. O selo "Eu"
+   marca de relance quem é o dono, e um anel dourado reforça visualmente
+   sem depender só do texto (útil pra quem olha rápido, de longe). */
+.agenda-equipe-chip-minha { box-shadow: 0 0 0 2px var(--dourado), 0 1px 3px rgba(0,0,0,.25); }
+.agenda-equipe-chip-selo-eu {
+  flex-shrink: 0; font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .03em;
+  background: var(--dourado); color: #1a1408; border-radius: 999px; padding: 1px 5px;
+}
+.agenda-equipe-filtro { display: flex; gap: 6px; }
+
 .agenda-equipe-swatches { display: flex; gap: 8px; flex-wrap: wrap; }
 .agenda-equipe-swatch-rotulo { cursor: pointer; }
 .agenda-equipe-swatch-rotulo input { position: absolute; opacity: 0; width: 0; height: 0; }

@@ -2241,10 +2241,18 @@
     const gradeInicio = new Date(ano, mes, 1 - diaSemanaInicioMes);
     const gradeFim = new Date(gradeInicio.getFullYear(), gradeInicio.getMonth(), gradeInicio.getDate() + 42);
 
-    const [eventos, convitesPendentes] = await Promise.all([
+    const [todosEventos, convitesPendentes] = await Promise.all([
       chamarApi(`/agenda/eventos?de=${encodeURIComponent(gradeInicio.toISOString())}&ate=${encodeURIComponent(gradeFim.toISOString())}`),
       chamarApi("/agenda/convites-pendentes"),
     ]);
+
+    // Pedido do usuário (2026-09-25): "como eu sei que essas agendas são
+    // minhas?" — antes todo mundo aparecia igual, distinguível só pela cor
+    // que cada um escolheu (nada a ver com dono). Agora cada card do
+    // compromisso QUE É SEU ganha um selinho "Eu", e um filtro no topo
+    // deixa esconder tudo que não é seu quando quiser.
+    const filtro = state.agendaEquipeFiltro || "todos";
+    const eventos = filtro === "meus" ? todosEventos.filter((ev) => ev.usuario_dono_id === state.usuarioAtual.id) : todosEventos;
 
     const porDia = {};
     eventos.forEach((ev) => {
@@ -2266,8 +2274,9 @@
         .slice(0, 3)
         .map(
           (ev) => `
-        <button type="button" class="agenda-equipe-chip ${ev.meu_convite_status === "pendente" ? "agenda-equipe-chip-pendente" : ""}" style="background:${ev.cor}; border-left-color:color-mix(in srgb, ${ev.cor} 60%, black);"
-                data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}${ev.meu_convite_status === "pendente" ? " — convite pendente" : ""}">
+        <button type="button" class="agenda-equipe-chip ${ev.meu_convite_status === "pendente" ? "agenda-equipe-chip-pendente" : ""} ${ev.usuario_dono_id === state.usuarioAtual.id ? "agenda-equipe-chip-minha" : ""}" style="background:${ev.cor}; border-left-color:color-mix(in srgb, ${ev.cor} 60%, black);"
+                data-acao="ver-evento-agenda-equipe" data-id="${ev.id}" title="${escapeHtml(ev.titulo)}${ev.usuario_dono_id === state.usuarioAtual.id ? " — sua agenda" : ` — agenda de ${escapeHtml(ev.dono_nome || "")}`}${ev.meu_convite_status === "pendente" ? " — convite pendente" : ""}">
+          ${ev.usuario_dono_id === state.usuarioAtual.id ? '<span class="agenda-equipe-chip-selo-eu">Eu</span>' : ""}
           <span class="agenda-equipe-chip-hora">${new Date(ev.data_inicio).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}</span>
           <span class="agenda-equipe-chip-titulo">${escapeHtml(ev.titulo)}</span>
           ${ev.meu_convite_status === "pendente" ? '<span class="agenda-equipe-chip-selo-convite">convite</span>' : ""}
@@ -2300,6 +2309,10 @@
           <span class="agenda-equipe-mes-titulo">${nomesMeses[mes]} de ${ano}</span>
           <button type="button" class="botao secundario pequeno" data-acao="mudar-mes-agenda-equipe" data-ano="${anoSeguinte}" data-mes="${mesSeguinte}">›</button>
           <button type="button" class="botao secundario pequeno" data-acao="mudar-mes-agenda-equipe" data-ano="${hoje.getFullYear()}" data-mes="${hoje.getMonth()}">Hoje</button>
+        </div>
+        <div class="agenda-equipe-filtro" role="group" aria-label="Filtrar compromissos">
+          <button type="button" class="botao ${filtro === "todos" ? "" : "secundario"} pequeno" data-acao="filtrar-agenda-equipe" data-filtro="todos">Todos</button>
+          <button type="button" class="botao ${filtro === "meus" ? "" : "secundario"} pequeno" data-acao="filtrar-agenda-equipe" data-filtro="meus">Só os meus</button>
         </div>
         <div class="agenda-equipe-acoes">
           <button type="button" class="botao secundario pequeno" data-acao="ativar-push-agenda-equipe">🔔 Ativar notificações</button>
@@ -19970,6 +19983,9 @@
         return renderUsuarios(estaNaTelaMemorialDeUsuarios());
       case "mudar-mes-agenda-equipe":
         return renderAgenda(Number(alvo.dataset.ano), Number(alvo.dataset.mes));
+      case "filtrar-agenda-equipe":
+        state.agendaEquipeFiltro = alvo.dataset.filtro;
+        return renderAgenda();
       case "novo-evento-agenda-equipe":
         await modalNovoEventoAgendaEquipe(alvo.dataset.data);
         return;
