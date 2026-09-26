@@ -14896,6 +14896,7 @@
     const wrap = abrirModal(`
       <h3>Editar ${escapeHtml(orcamento.numero)}</h3>
       <p class="texto-suave">Cliente: <strong>${escapeHtml(orcamento.cliente.razao_social)}</strong> (não muda depois de criado)</p>
+      ${orcamento.status === "enviado" ? '<p class="mensagem-erro">Este orçamento já foi enviado ao cliente — salvar aqui revoga o link de aprovação atual (pra ele nunca decidir em cima de uma versão antiga); gere um novo link depois de salvar.</p>' : ""}
       <form data-form="editar-orcamento" data-id="${orcamento.id}">
         <div class="campo"><label>Validade (dias)</label><input type="number" name="validade_dias" min="1" value="${orcamento.validade_dias}"></div>
         <div class="campo"><label>Itens</label>
@@ -14989,7 +14990,7 @@
        <div class="cartao">
          <div class="barra-acoes"><h3 style="margin:0;">Itens</h3>
            <div style="display:flex;gap:8px;">
-             ${podeGerenciar && orcamento.status === "rascunho" ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-editar-orcamento" data-id="${orcamento.id}">✏️ Editar</button>` : ""}
+             ${podeGerenciar && ["rascunho", "enviado"].includes(orcamento.status) ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-editar-orcamento" data-id="${orcamento.id}">✏️ Editar</button>` : ""}
              <button type="button" class="botao secundario pequeno" data-acao="ver-pdf-orcamento" data-id="${orcamento.id}">📄 Ver PDF</button>
            </div>
          </div>

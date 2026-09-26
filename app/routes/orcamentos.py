@@ -42,7 +42,7 @@ bp = Blueprint("orcamentos", __name__, url_prefix="/api/v1/orcamentos")
 # do ERP já é público — usar ele direto, sem relay nenhum no meio.
 URL_BASE_PORTAL_PUBLICO = "https://erp.alphafitus.com.br"
 TTL_LINK_PORTAL_DIAS = 30
-STATUS_EDITAVEL = ("rascunho",)
+STATUS_EDITAVEL = ("rascunho", "enviado")
 
 
 def _now_iso():
@@ -63,7 +63,15 @@ def _notificar_aprovacao_interna_pendente(conn, orcamento_id, numero, urgente=Fa
     ele pediu (a partir de N vezes sem resolver, aciona outra coisa; esse
     fluxo em si ainda não está implementado, ver conversa). Só cria uma
     notificação nova de verdade se não houver nenhuma ainda para aquele
-    usuário sobre este orçamento."""
+    usuário sobre este orçamento. Fase 228 — pedido do usuário: "deve
+    aparecer o responsável por quem deve aprovar e quem solicitou" — a
+    mensagem passa a dizer quem PEDIU (o nome vinculado ao login de quem
+    criou o orçamento), já que "aguardando SUA aprovação" já deixa claro
+    quem é o responsável (o próprio dono da notificação)."""
+    solicitante = conn.execute(
+        "SELECT u.nome FROM orcamentos o JOIN usuarios u ON u.id = o.criado_por WHERE o.id = ?", (orcamento_id,)
+    ).fetchone()
+    nome_solicitante = solicitante["nome"] if solicitante else "alguém"
     masters = conn.execute("SELECT id FROM usuarios WHERE usuario_master = 1 AND status = 'ativo'").fetchall()
     for m in masters:
         existente = conn.execute(
@@ -73,14 +81,14 @@ def _notificar_aprovacao_interna_pendente(conn, orcamento_id, numero, urgente=Fa
         if existente:
             nova_contagem = existente["contagem"] + 1
             prefixo = "🔴 URGENTE — " if urgente else ""
-            mensagem = f"{prefixo}Orçamento {numero} está aguardando sua aprovação interna. ({nova_contagem}ª solicitação)"
+            mensagem = f"{prefixo}Orçamento {numero} (solicitado por {nome_solicitante}) está aguardando sua aprovação interna. ({nova_contagem}ª solicitação)"
             conn.execute(
                 "UPDATE notificacoes SET mensagem = ?, lida = 0, contagem = ?, criado_em = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
                 (mensagem, nova_contagem, existente["id"]),
             )
         else:
             prefixo = "🔴 URGENTE — " if urgente else ""
-            mensagem = f"{prefixo}Orçamento {numero} está aguardando sua aprovação interna."
+            mensagem = f"{prefixo}Orçamento {numero} (solicitado por {nome_solicitante}) está aguardando sua aprovação interna."
             notificacoes_service.criar(
                 conn, usuario_id=m["id"], tipo="orcamento_aprovacao_interna", mensagem=mensagem,
                 referencia_tipo="orcamento", referencia_id=orcamento_id,
@@ -227,7 +235,7 @@ def editar_orcamento(orcamento_id):
     conn = get_db()
     orcamento = _orcamento_ou_404(conn, orcamento_id)
     if orcamento["status"] not in STATUS_EDITAVEL:
-        raise ApiError("Só é possível editar um orçamento em rascunho.", status=400)
+        raise ApiError("Só é possível editar um orçamento em rascunho ou já enviado (aguardando decisão).", status=400)
 
     dados = request.get_json(silent=True) or {}
     anterior = orcamento_detalhado(conn, orcamento_id)
@@ -246,6 +254,14 @@ def editar_orcamento(orcamento_id):
     )
     if "itens" in dados:
         _validar_e_gravar_itens(conn, orcamento_id, dados["itens"])
+
+    # Pedido do usuário: o autorizador (ou qualquer um com permissão) pode
+    # editar mesmo depois de enviado ao cliente — mas se o link público já
+    # estava ativo, revoga ele: o cliente nunca pode aprovar em cima de uma
+    # versão que acabou de mudar (mesmo espírito do "reagendar" da Agenda,
+    # Fase 208 — força gerar um link novo, refletindo o conteúdo atual).
+    if orcamento["status"] == "enviado":
+        conn.execute("UPDATE orcamento_links_portal SET revogado = 1 WHERE orcamento_id = ? AND revogado = 0", (orcamento_id,))
 
     novo = orcamento_detalhado(conn, orcamento_id)
     audit.registrar(conn, tabela="orcamentos", registro_id=orcamento_id, usuario_id=usuario_atual["id"],
