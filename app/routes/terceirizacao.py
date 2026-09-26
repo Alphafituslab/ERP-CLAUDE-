@@ -38,14 +38,14 @@ from ..imagens import validar_imagem_base64
 from ..pdf_marca import desenhar_cabecalho_logo
 from ..permissions import requires_permission
 
-# Fase 136 — o portal do cliente roda por trás de um túnel SSH reverso
-# (máquina local → VPS), exposto publicamente pelo Caddy em
-# whatts.alphafitus.com.br:9445 (path-restrito a /portal/*, ver nota
-# completa em migrations/schema_fase136.sql e no Caddyfile do VPS) — esta
-# é a ÚNICA origem pública que existe pra essa URL; nunca montar o link a
-# partir de `request.host`/localhost, que só o computador da empresa
-# consegue abrir.
-URL_BASE_PORTAL_PUBLICO = "https://whatts.alphafitus.com.br:9445"
+# Fase 224 — BUG REAL em produção, achado pelo usuário 2026-09-26 (link de
+# Orçamento devolvendo 502 Bad Gateway pro cliente): esta URL ainda
+# apontava pro túnel SSH reverso da Fase 136 (ERP rodando na máquina do
+# escritório, exposto via whatts.alphafitus.com.br:9445). Esse túnel não
+# está mais no ar — desde a Fase 157b o ERP roda direto na nuvem
+# (erp.alphafitus.com.br), que já é uma origem pública de verdade; usar
+# ela direto, sem relay nenhum no meio.
+URL_BASE_PORTAL_PUBLICO = "https://erp.alphafitus.com.br"
 TTL_LINK_PORTAL_DIAS = 30
 
 bp = Blueprint("terceirizacao", __name__, url_prefix="/api/v1/terceirizacao")

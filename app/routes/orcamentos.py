@@ -24,6 +24,7 @@ from flask import Blueprint, Response, g, jsonify, request
 
 from .. import audit
 from .. import backup_service
+from .. import notificacoes_service
 from .. import whatts_contatos_service
 from ..context import ApiError, client_device, client_ip, get_db
 from ..pdf_marca import desenhar_cabecalho_formal
@@ -33,7 +34,13 @@ from . import comercial as com  # reaproveita _cliente_ou_404/_validar_item_vend
 bp = Blueprint("orcamentos", __name__, url_prefix="/api/v1/orcamentos")
 
 # Mesmo esquema de URL pública dos outros portais (Contrato/Terceirização)
-URL_BASE_PORTAL_PUBLICO = "https://whatts.alphafitus.com.br:9445"
+# Fase 224 — BUG REAL em produção, achado pelo usuário 2026-09-26: este
+# link ainda apontava pro túnel antigo (Fase 136/152, quando o ERP rodava
+# na máquina do escritório) — desde a Fase 157b o ERP roda direto na nuvem
+# (erp.alphafitus.com.br), e aquele túnel/relay não está mais no ar (502
+# Bad Gateway pra qualquer cliente que abrisse o link). O próprio domínio
+# do ERP já é público — usar ele direto, sem relay nenhum no meio.
+URL_BASE_PORTAL_PUBLICO = "https://erp.alphafitus.com.br"
 TTL_LINK_PORTAL_DIAS = 30
 STATUS_EDITAVEL = ("rascunho",)
 
@@ -44,6 +51,19 @@ def _now_iso():
 
 def _expira_em_daqui_a_dias(dias):
     return (datetime.datetime.utcnow() + datetime.timedelta(days=dias)).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
+def _notificar_aprovacao_interna_pendente(conn, orcamento_id, numero, urgente=False):
+    """Fase 223 — avisa TODO usuário master (só o Clayton, por enquanto —
+    ver a nota no topo da migration) que um orçamento está aguardando a
+    aprovação interna dele. Reaproveita `notificacoes_service.criar` —
+    mesmo sino que já existe, agora piscando (Fase 223, styles.css) — nunca
+    inventa um canal de aviso novo."""
+    prefixo = "🔴 URGENTE — " if urgente else ""
+    mensagem = f"{prefixo}Orçamento {numero} está aguardando sua aprovação interna."
+    masters = conn.execute("SELECT id FROM usuarios WHERE usuario_master = 1 AND status = 'ativo'").fetchall()
+    for m in masters:
+        notificacoes_service.criar(conn, usuario_id=m["id"], tipo="orcamento_aprovacao_interna", mensagem=mensagem)
 
 
 def _gerar_numero_orcamento(conn):
@@ -77,6 +97,11 @@ def orcamento_detalhado(conn, orcamento_id):
         "SELECT token, expira_em FROM orcamento_links_portal WHERE orcamento_id = ? AND revogado = 0", (orcamento_id,)
     ).fetchone()
     orcamento["link_portal"] = f"{URL_BASE_PORTAL_PUBLICO}/portal/orcamento/{link_ativo['token']}" if link_ativo else None
+    if orcamento.get("aprovacao_interna_aprovado_por"):
+        aprovador = conn.execute("SELECT nome FROM usuarios WHERE id = ?", (orcamento["aprovacao_interna_aprovado_por"],)).fetchone()
+        orcamento["aprovacao_interna_aprovado_por_nome"] = aprovador["nome"] if aprovador else None
+    else:
+        orcamento["aprovacao_interna_aprovado_por_nome"] = None
     return orcamento
 
 
@@ -149,17 +174,22 @@ def criar_orcamento():
     cur = conn.execute(
         """
         INSERT INTO orcamentos (numero, cliente_id, vendedor_id, empresa_id, condicao_pagamento_id,
-                                 validade_dias, condicoes_texto, observacoes, criado_por)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 validade_dias, condicoes_texto, observacoes, criado_por, aprovacao_interna_solicitado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             numero, cliente_id, dados.get("vendedor_id"), dados.get("empresa_id"), condicao_pagamento_id,
             dados.get("validade_dias") or 15, dados.get("condicoes_texto"), dados.get("observacoes"),
-            usuario_atual["id"],
+            usuario_atual["id"], _now_iso(),
         ),
     )
     orcamento_id = cur.lastrowid
     _validar_e_gravar_itens(conn, orcamento_id, itens)
+
+    # Fase 223 — pedido do usuário: TODO orçamento já nasce pedindo
+    # aprovação interna, mesmo que quem criou seja o próprio aprovador
+    # ("mesmo que eu tenha feito o orçamento deve enviar").
+    _notificar_aprovacao_interna_pendente(conn, orcamento_id, numero)
 
     audit.registrar(conn, tabela="orcamentos", registro_id=orcamento_id, usuario_id=usuario_atual["id"],
                      acao="orcamento_criado", valor_novo={"numero": numero, "cliente_id": cliente_id},
@@ -199,6 +229,70 @@ def editar_orcamento(orcamento_id):
                      acao="orcamento_editado", valor_anterior=anterior, valor_novo=novo,
                      ip=client_ip(), dispositivo=client_device())
     return jsonify(novo)
+
+
+@bp.post("/<int:orcamento_id>/solicitar-aprovacao-interna")
+@requires_permission("orcamentos", "criar")
+def solicitar_aprovacao_interna(orcamento_id):
+    """Fase 223 — "enviar novamente solicitando revisar a solicitação"
+    (pedido do usuário): reenvia o aviso ao(s) usuário(s) master, mesmo se
+    já tinha sido aprovado antes (volta pra 'pendente' — quem pede de novo
+    quer que olhem de novo) e pode marcar urgente. Qualquer um que possa
+    CRIAR orçamento pode reenviar, mesmo sendo quem criou este."""
+    usuario_atual = g.usuario_atual
+    conn = get_db()
+    orcamento = _orcamento_ou_404(conn, orcamento_id)
+    if orcamento["status"] in ("cancelado",):
+        raise ApiError("Não é possível solicitar aprovação de um orçamento cancelado.", status=400)
+    dados = request.get_json(silent=True) or {}
+    urgente = bool(dados.get("urgente"))
+
+    conn.execute(
+        """
+        UPDATE orcamentos SET aprovacao_interna_status = 'pendente', aprovacao_interna_urgente = ?,
+               aprovacao_interna_solicitado_em = ?, aprovacao_interna_aprovado_por = NULL,
+               aprovacao_interna_aprovado_em = NULL
+        WHERE id = ?
+        """,
+        (1 if urgente else 0, _now_iso(), orcamento_id),
+    )
+    _notificar_aprovacao_interna_pendente(conn, orcamento_id, orcamento["numero"], urgente=urgente)
+    audit.registrar(conn, tabela="orcamentos", registro_id=orcamento_id, usuario_id=usuario_atual["id"],
+                     acao="aprovacao_interna_solicitada", valor_novo={"urgente": urgente},
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(orcamento_detalhado(conn, orcamento_id))
+
+
+@bp.post("/<int:orcamento_id>/aprovar-interno")
+@requires_permission("orcamentos", "criar")
+def aprovar_interno_orcamento(orcamento_id):
+    """Fase 223 — só o usuário master aprova (por enquanto, só o Clayton —
+    ver nota da migration). `observacao` fica registrada e visível pra
+    quem pediu (pedido do usuário: "deixar uma observação também")."""
+    usuario_atual = g.usuario_atual
+    if not usuario_atual.get("usuario_master"):
+        raise ApiError("Só o responsável pela aprovação interna pode aprovar este orçamento.", status=403)
+    conn = get_db()
+    orcamento = _orcamento_ou_404(conn, orcamento_id)
+    dados = request.get_json(silent=True) or {}
+    observacao = (dados.get("observacao") or "").strip() or None
+
+    conn.execute(
+        """
+        UPDATE orcamentos SET aprovacao_interna_status = 'aprovada', aprovacao_interna_observacao = ?,
+               aprovacao_interna_aprovado_por = ?, aprovacao_interna_aprovado_em = ?
+        WHERE id = ?
+        """,
+        (observacao, usuario_atual["id"], _now_iso(), orcamento_id),
+    )
+    mensagem = f"Seu orçamento {orcamento['numero']} foi aprovado internamente por {usuario_atual['nome']}."
+    if observacao:
+        mensagem += f" Observação: {observacao}"
+    notificacoes_service.criar(conn, usuario_id=orcamento["criado_por"], tipo="orcamento_aprovado_interno", mensagem=mensagem)
+    audit.registrar(conn, tabela="orcamentos", registro_id=orcamento_id, usuario_id=usuario_atual["id"],
+                     acao="aprovacao_interna_aprovada", valor_novo={"observacao": observacao},
+                     ip=client_ip(), dispositivo=client_device())
+    return jsonify(orcamento_detalhado(conn, orcamento_id))
 
 
 @bp.post("/<int:orcamento_id>/cancelar")

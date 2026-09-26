@@ -54,10 +54,12 @@ MESES_PT = {
 }
 STATUS_EDITAVEL = ("rascunho",)
 
-# Mesmo esquema de URL pública do portal de Terceirização (Fase 136) —
-# ver nota completa em terceirizacao.py sobre o túnel SSH reverso/Caddy;
-# nunca montar a partir de `request.host`, que só funciona na máquina local.
-URL_BASE_PORTAL_PUBLICO = "https://whatts.alphafitus.com.br:9445"
+# Fase 224 — BUG REAL em produção, achado pelo usuário 2026-09-26 (via o
+# mesmo link quebrado no portal de Orçamentos — 502 Bad Gateway): este
+# apontava pro túnel antigo (Fase 136, ERP rodando na máquina do
+# escritório). Desde a Fase 157b o ERP roda direto na nuvem
+# (erp.alphafitus.com.br), que já é público — usar direto, sem túnel/relay.
+URL_BASE_PORTAL_PUBLICO = "https://erp.alphafitus.com.br"
 TTL_LINK_PORTAL_DIAS = 30
 
 
