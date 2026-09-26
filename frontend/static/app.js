@@ -15606,21 +15606,21 @@
         <div id="campos-precificacao-wrap" class="${c.id ? "precificacao-bloqueado" : ""}">
         <div style="${grade}">
           <div class="campo">
-            <label>Nome do cenário</label>
-            <input name="nome" required value="${escapeHtml(c.nome)}" placeholder="ex.: Creatina sem sabor — Cliente Farma">
-          </div>
-          <div class="campo">
             <label>Categoria do produto</label>
             ${htmlFiltroCategoriaItem("campo-categoria-item-precificacao", itemAtual ? itemAtual.tipo : "")}
           </div>
           <div class="campo">
-            <label>Produto (opcional — sugere o custo real)</label>
+            <label>Produto (opcional — sugere o custo real e preenche o nome)</label>
             <input list="lista-itens-precificacao" id="campo-item-precificacao" placeholder="Escolha a categoria e busque por código ou descrição"
               value="${itemAtual ? escapeHtml(itemAtual.codigo + " — " + itemAtual.descricao) : ""}">
             <input type="hidden" id="campo-item-id-precificacao" value="${c.item_id || ""}">
             <datalist id="lista-itens-precificacao">
               ${(itemAtual ? itensCatalogo.filter((i) => i.tipo === itemAtual.tipo) : itensCatalogo).map((i) => `<option value="${escapeHtml(i.codigo + " — " + i.descricao)}"></option>`).join("")}
             </datalist>
+          </div>
+          <div class="campo">
+            <label>Nome do cenário</label>
+            <input name="nome" required value="${escapeHtml(c.nome)}" placeholder="Preenchido pelo produto escolhido, ou digite outro nome">
           </div>
         </div>
 
@@ -15804,6 +15804,13 @@
         const encontrado = itens.find((i) => `${i.codigo} — ${i.descricao}` === texto);
         campoItemId.value = encontrado ? encontrado.id : "";
         if (encontrado && campoCategoriaItem) campoCategoriaItem.value = encontrado.tipo;
+        // Pedido do usuário: escolher o produto preenche o nome do cenário
+        // sozinho (só quando o campo ainda está vazio — nunca sobrescreve
+        // um nome que a pessoa já escreveu à mão; digitar um "operador"
+        // livre, tipo "— Cliente Farma" depois, continua funcionando
+        // normalmente).
+        const campoNome = form.querySelector('[name="nome"]');
+        if (encontrado && campoNome && !campoNome.value.trim()) campoNome.value = encontrado.descricao;
         if (!encontrado) { renderOpcoesCusto(null); return; }
         try {
           const sugestao = await chamarApi(`/precificacao/sugestao-custo/${encontrado.id}`);
