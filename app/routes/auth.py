@@ -994,6 +994,12 @@ def me():
         "notificar_por_email": bool(usuario["notificar_por_email"]),
         "foto_perfil": usuario["foto_perfil"],
         "celular": usuario["celular"],
+        # Fase 202 (Agenda) — reaproveitado agora pela Fase 223 (aprovação
+        # interna de Orçamentos): o frontend precisa saber se É o usuário
+        # master pra mostrar a fila "aguardando minha aprovação" e o botão
+        # de aprovar — nunca exposto antes desta fase, só usado internamente
+        # no backend.
+        "usuario_master": bool(usuario["usuario_master"]),
         # Fase 94 — "exige_2fa" no perfil virou só uma RECOMENDAÇÃO exibida
         # em Minha Conta (a Fase 92 bloqueava a API inteira até configurar;
         # o usuário pediu para escolher quando e poder desativar depois):

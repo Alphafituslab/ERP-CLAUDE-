@@ -1057,6 +1057,13 @@ tr.linha-selecionada td { background: #e6eef7; }
    para [hidden], mesmo com a mesma especificidade — a origem "autor"
    sempre tem prioridade sobre a folha de estilo padrão do navegador. */
 .badge-notificacoes[hidden] { display: none; }
+/* Fase 223 — pedido do usuário: com vários tipos de aviso previstos (a
+   aprovação interna de Orçamentos é o primeiro), o sino não pode passar
+   despercebido — pisca enquanto tiver algo não lido. Qualquer aviso novo
+   que já usa `notificacoes_service.criar()` (o mesmo mecanismo de sempre)
+   herda isso de graça, sem precisar mexer aqui de novo. */
+@keyframes piscar-badge-notificacao { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(1.15); } }
+.badge-notificacoes:not([hidden]) { animation: piscar-badge-notificacao 1.1s ease-in-out infinite; }
 .linha-nao-lida { font-weight: 600; }
 [data-tema="escuro"] .linha-nao-lida , [data-tema="verde-escuro"] .linha-nao-lida { font-weight: 600; }
 

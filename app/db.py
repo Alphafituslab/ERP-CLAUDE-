@@ -200,6 +200,7 @@ SCHEMA_FILES = [
     "schema_fase204.sql",  # Fase 204 — Agenda: contatos externos salvos (reaproveitar em convites futuros) + empresa
     "schema_fase212.sql",  # Fase 212 — Precificação: cálculo de rentabilidade e custo (Comercial & Vendas)
     "schema_fase213.sql",  # Fase 213 — Precificação: modo "markup" passa a pedir margem LÍQUIDA desejada, não bruta
+    "schema_fase223.sql",  # Fase 223 — Orçamentos: aprovação interna (usuário master)
 ]
 
 

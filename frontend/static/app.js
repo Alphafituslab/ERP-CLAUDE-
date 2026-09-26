@@ -14643,18 +14643,33 @@
     return `<span class="selo ${par[0]}">${escapeHtml(par[1])}</span>`;
   }
 
+  // Fase 223 — badge de aprovação INTERNA (o master revisa o orçamento em
+  // si), diferente do selo de status (que é sobre a aprovação do CLIENTE
+  // no portal público) e do selo de aprovação financeira do cadastro do
+  // cliente (esses dois já existiam antes).
+  function seloAprovacaoInterna(o) {
+    if (o.aprovacao_interna_status === "aprovada") return '<span class="selo ativo">✅ Aprovado internamente</span>';
+    return o.aprovacao_interna_urgente
+      ? '<span class="selo bloqueado">🔴 Urgente — aguardando aprovação</span>'
+      : '<span class="selo amarelo">🕓 Aguardando aprovação interna</span>';
+  }
+
   async function renderOrcamentosLista() {
     app.innerHTML = '<div class="carregando">Carregando orçamentos…</div>';
     const [clientes, itens] = await Promise.all([chamarApi("/comercial/clientes"), chamarApi("/itens")]);
     state.cache.clientes = clientes;
     state.cache.itensVendaveis = itens.filter((i) => i.tipo === "produto_acabado");
     const podeCriar = temPermissao("orcamentos", "criar");
+    const souMaster = !!(state.usuarioAtual && state.usuarioAtual.usuario_master);
     const orcamentos = await chamarApi("/orcamentos");
+    const somenteMinhasAprovacoes = souMaster && state.filtroOrcamentosSoAprovacao;
+    const listaFiltrada = somenteMinhasAprovacoes ? orcamentos.filter((o) => o.aprovacao_interna_status === "pendente") : orcamentos;
 
-    const linhas = orcamentos.map((o) => `<tr>
+    const linhas = listaFiltrada.map((o) => `<tr>
       <td class="mono"><a href="#/orcamentos/${o.id}">${escapeHtml(o.numero)}</a></td>
       <td>${escapeHtml(o.cliente_razao_social)}</td>
       <td>${seloStatusOrcamento(o.status)}</td>
+      ${souMaster ? `<td>${seloAprovacaoInterna(o)}</td>` : ""}
       <td>${fmtData(o.criado_em)}</td>
       <td><a class="botao secundario pequeno" href="#/orcamentos/${o.id}">Abrir</a></td>
     </tr>`).join("");
@@ -14665,16 +14680,28 @@
          ${podeCriar ? `<button type="button" class="botao" data-acao="novo-orcamento">+ Novo orçamento</button>` : ""}
        </div>
        <p class="texto-suave" style="margin-top:-6px;">Proposta comercial formal — envie por link, o cliente aprova ou recusa sem precisar de login. Ao aprovar, o Pedido de Venda é gerado sozinho, já com os itens e preços negociados aqui.</p>
+       ${souMaster ? `
+       <label style="display:inline-flex;align-items:center;gap:6px;font-weight:normal;margin-bottom:10px;">
+         <input type="checkbox" data-acao-local="filtro-orcamentos-minha-aprovacao" ${somenteMinhasAprovacoes ? "checked" : ""}>
+         Mostrar só os que aguardam minha aprovação
+       </label>` : ""}
        <div class="cartao">
          <div class="tabela-scroll">
          <table>
-           <thead><tr><th>Número</th><th>Cliente</th><th>Status</th><th>Criado em</th><th></th></tr></thead>
-           <tbody>${linhas || '<tr><td colspan="5" class="texto-suave">Nenhum orçamento cadastrado ainda.</td></tr>'}</tbody>
+           <thead><tr><th>Número</th><th>Cliente</th><th>Status</th>${souMaster ? "<th>Aprovação interna</th>" : ""}<th>Criado em</th><th></th></tr></thead>
+           <tbody>${linhas || `<tr><td colspan="${souMaster ? 6 : 5}" class="texto-suave">Nenhum orçamento encontrado.</td></tr>`}</tbody>
          </table>
          </div>
        </div>`,
       "orcamentos"
     );
+    const checkboxFiltro = document.querySelector('[data-acao-local="filtro-orcamentos-minha-aprovacao"]');
+    if (checkboxFiltro) {
+      checkboxFiltro.addEventListener("change", () => {
+        state.filtroOrcamentosSoAprovacao = checkboxFiltro.checked;
+        renderOrcamentosLista();
+      });
+    }
   }
 
   function _linhaItemOrcamento(item) {
@@ -14812,6 +14839,31 @@
     });
   }
 
+  // Fase 223 — pedido do usuário: reenviar o pedido de aprovação interna
+  // (mesmo se ele mesmo criou o orçamento) e poder marcar urgente.
+  function modalSolicitarAprovacaoInterna(orcamentoId) {
+    abrirModal(`
+      <h3>Reenviar pedido de aprovação interna</h3>
+      <p class="texto-suave">Avisa de novo quem aprova internamente — volta o status pra "aguardando aprovação", mesmo que já tivesse sido aprovado antes.</p>
+      <label style="display:flex;gap:6px;align-items:center;font-weight:normal;margin-top:10px;">
+        <input type="checkbox" id="checkbox-urgente-aprovacao-orcamento"> Marcar como urgente
+      </label>
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+        <button type="button" class="botao" data-acao="confirmar-solicitar-aprovacao-interna" data-id="${orcamentoId}">Enviar</button>
+      </div>`);
+  }
+
+  function modalAprovarInternoOrcamento(orcamentoId) {
+    abrirModal(`
+      <h3>Aprovar internamente</h3>
+      <div class="campo"><label>Observação (opcional)</label><textarea id="campo-observacao-aprovar-interno-orcamento" rows="3" placeholder="Visível pra quem criou o orçamento"></textarea></div>
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+        <button type="button" class="botao" data-acao="confirmar-aprovar-interno-orcamento" data-id="${orcamentoId}">Aprovar</button>
+      </div>`);
+  }
+
   function modalEditarOrcamento(orcamento) {
     const wrap = abrirModal(`
       <h3>Editar ${escapeHtml(orcamento.numero)}</h3>
@@ -14889,6 +14941,7 @@
     const orcamento = await chamarApi(`/orcamentos/${orcamentoId}`);
     const podeGerenciar = temPermissao("orcamentos", "criar");
     const podeCancelar = temPermissao("orcamentos", "cancelar");
+    const souMaster = !!(state.usuarioAtual && state.usuarioAtual.usuario_master);
     const linhasItens = orcamento.itens.map((it) => `<tr>
       <td>${escapeHtml(it.item_codigo)} — ${escapeHtml(it.item_descricao)}</td>
       <td>${it.quantidade} ${escapeHtml(it.unidade || "")}</td>
@@ -14933,6 +14986,16 @@
            <button type="button" class="botao pequeno" data-acao="gerar-link-orcamento" data-id="${orcamento.id}">Gerar link de aprovação</button>
            <button type="button" class="botao secundario pequeno" data-acao="gerar-link-orcamento" data-id="${orcamento.id}" data-whatsapp="1">Gerar e enviar por WhatsApp</button>
          ` : '<p class="texto-suave">—</p>'}
+       </div>
+
+       <div class="cartao">
+         <h3 style="margin-top:0;">Aprovação interna</h3>
+         <p>${seloAprovacaoInterna(orcamento)}</p>
+         ${orcamento.aprovacao_interna_status === "aprovada" ? `<p class="texto-suave">Aprovado em ${fmtData(orcamento.aprovacao_interna_aprovado_em)} por ${escapeHtml(orcamento.aprovacao_interna_aprovado_por_nome || "")}${orcamento.aprovacao_interna_observacao ? ` — "${escapeHtml(orcamento.aprovacao_interna_observacao)}"` : ""}</p>` : ""}
+         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+           ${podeGerenciar && orcamento.status !== "cancelado" ? `<button type="button" class="botao secundario pequeno" data-acao="solicitar-aprovacao-interna-orcamento" data-id="${orcamento.id}">🔁 Enviar novamente solicitando revisar</button>` : ""}
+           ${souMaster && orcamento.aprovacao_interna_status === "pendente" ? `<button type="button" class="botao pequeno" data-acao="abrir-aprovar-interno-orcamento" data-id="${orcamento.id}">✅ Aprovar internamente</button>` : ""}
+         </div>
        </div>
 
        ${orcamento.status === "recusado" && orcamento.motivo_recusa ? `<div class="cartao"><p class="mensagem-erro">Recusado pelo cliente: ${escapeHtml(orcamento.motivo_recusa)}</p></div>` : ""}
@@ -20699,6 +20762,34 @@
       case "novo-orcamento":
         modalNovoOrcamento();
         return;
+      case "solicitar-aprovacao-interna-orcamento":
+        modalSolicitarAprovacaoInterna(alvo.dataset.id);
+        return;
+      case "confirmar-solicitar-aprovacao-interna": {
+        const urgente = document.getElementById("checkbox-urgente-aprovacao-orcamento").checked;
+        fecharModais();
+        try {
+          await chamarApi(`/orcamentos/${alvo.dataset.id}/solicitar-aprovacao-interna`, { method: "POST", body: { urgente } });
+          definirFlash("ok", "Pedido de aprovação interna reenviado.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível reenviar o pedido.");
+        }
+        return renderOrcamentoDetalhe(Number(alvo.dataset.id));
+      }
+      case "abrir-aprovar-interno-orcamento":
+        modalAprovarInternoOrcamento(alvo.dataset.id);
+        return;
+      case "confirmar-aprovar-interno-orcamento": {
+        const observacao = document.getElementById("campo-observacao-aprovar-interno-orcamento").value.trim();
+        fecharModais();
+        try {
+          await chamarApi(`/orcamentos/${alvo.dataset.id}/aprovar-interno`, { method: "POST", body: { observacao: observacao || null } });
+          definirFlash("ok", "Orçamento aprovado internamente.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível aprovar.");
+        }
+        return renderOrcamentoDetalhe(Number(alvo.dataset.id));
+      }
       case "abrir-editar-orcamento": {
         const orcamento = await chamarApi(`/orcamentos/${alvo.dataset.id}`);
         modalEditarOrcamento(orcamento);
