@@ -15667,7 +15667,8 @@
         </div>
         <div class="campo" data-campo-modo="preco_fixo" ${c.modo !== "preco_fixo" ? "hidden" : ""}>
           <label>Preço de venda final (R$)</label>
-          <input name="preco_venda_final" type="number" step="any" min="0" value="${c.preco_venda_final != null ? c.preco_venda_final : ""}">
+          <input name="preco_venda_final" type="number" step="0.01" min="0" data-preco-2casas
+            value="${c.preco_venda_final != null ? Number(c.preco_venda_final).toFixed(2) : ""}">
         </div>
 
         <div class="campo"><label>Observações</label><textarea name="observacoes" rows="2">${escapeHtml(c.observacoes || "")}</textarea></div>
@@ -15688,7 +15689,7 @@
     return `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;padding:10px;border:1px solid rgba(0,0,0,0.1);border-radius:8px;margin-bottom:12px;">
         <div><span class="texto-suave">Preço de venda final (pode editar)</span><br>
-          <input type="number" step="any" min="0" value="${r.preco_final}" data-editar-preco-final
+          <input type="number" step="0.01" min="0" value="${Number(r.preco_final).toFixed(2)}" data-editar-preco-final data-preco-2casas
             style="font-size:16px;font-weight:600;width:110px;padding:2px 6px;">
         </div>
         <div><span class="texto-suave">Quanto sobra líquido pra empresa (depois de tudo)</span><br><strong style="font-size:16px;color:#1a7f37;">${fmtRealPrecificacao(r.lucro_final_produtor)}</strong></div>
@@ -15873,6 +15874,18 @@
       clearTimeout(timeoutRecalculo);
       timeoutRecalculo = setTimeout(recalcular, 350);
     });
+
+    // Pedido do usuário: preço de venda é dinheiro de verdade — sempre com
+    // exatamente 2 casas (16,90, nunca 16,9) e nunca mais que 2. `step` já
+    // trava o teclado numérico do navegador em centavos; isto arredonda pro
+    // formato certo assim que a pessoa sai do campo (não a cada tecla, pra
+    // não brigar com o cursor enquanto ela ainda está digitando).
+    form.addEventListener("blur", (e) => {
+      const campo = e.target.closest("[data-preco-2casas]");
+      if (!campo || campo.value === "") return;
+      const numero = Number(campo.value);
+      if (!Number.isNaN(numero)) campo.value = numero.toFixed(2);
+    }, true);
 
     alternarCamposModo();
     recalcular();
