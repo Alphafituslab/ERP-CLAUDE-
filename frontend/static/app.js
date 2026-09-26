@@ -15692,25 +15692,47 @@
           <input type="number" step="0.01" min="0" value="${Number(r.preco_final).toFixed(2)}" data-editar-preco-final data-preco-2casas
             style="font-size:16px;font-weight:600;width:110px;padding:2px 6px;">
         </div>
-        <div><span class="texto-suave">Quanto sobra líquido pra empresa (depois de tudo)</span><br><strong style="font-size:16px;color:#1a7f37;">${fmtRealPrecificacao(r.lucro_final_produtor)}</strong></div>
-        <div><span class="texto-suave">Margem líquida</span><br><strong style="font-size:16px;color:#1a7f37;">${fmtPctPrecificacao(r.margem_liquida_pct)}</strong></div>
+        <div><span class="texto-suave">Quanto sobra líquido pra empresa (depois de tudo)</span><br><strong id="res-lucro-final" style="font-size:16px;color:#1a7f37;">${fmtRealPrecificacao(r.lucro_final_produtor)}</strong></div>
+        <div><span class="texto-suave">Margem líquida</span><br><strong id="res-margem-liquida" style="font-size:16px;color:#1a7f37;">${fmtPctPrecificacao(r.margem_liquida_pct)}</strong></div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
-        <div><span class="texto-suave">Preço mínimo (cobre custo+tributos)</span><br><strong>${fmtRealPrecificacao(r.preco_1)}</strong></div>
-        <div><span class="texto-suave">Preço líquido de comissão</span><br><strong>${fmtRealPrecificacao(r.preco_2)}</strong></div>
-        <div><span class="texto-suave">Margem bruta (markup, antes de comissão/IRPJ)</span><br><strong>${fmtPctPrecificacao(r.margem_bruta_pct)}</strong></div>
-        <div><span class="texto-suave">Comissão (valor)</span><br><strong>${fmtRealPrecificacao(r.comissao_real)}</strong></div>
-        <div><span class="texto-suave">Base tributável (IRPJ/CSLL)</span><br><strong>${fmtRealPrecificacao(r.base_tributavel_irpj)}</strong></div>
-        <div><span class="texto-suave">IRPJ + CSLL</span><br><strong>${fmtRealPrecificacao(r.irpj_csll)}</strong></div>
+        <div><span class="texto-suave">Preço mínimo (cobre custo+tributos)</span><br><strong id="res-preco-1">${fmtRealPrecificacao(r.preco_1)}</strong></div>
+        <div><span class="texto-suave">Preço líquido de comissão</span><br><strong id="res-preco-2">${fmtRealPrecificacao(r.preco_2)}</strong></div>
+        <div><span class="texto-suave">Margem bruta (markup, antes de comissão/IRPJ)</span><br><strong id="res-margem-bruta">${fmtPctPrecificacao(r.margem_bruta_pct)}</strong></div>
+        <div><span class="texto-suave">Comissão (valor)</span><br><strong id="res-comissao-valor">${fmtRealPrecificacao(r.comissao_real)}</strong></div>
+        <div><span class="texto-suave">Base tributável (IRPJ/CSLL)</span><br><strong id="res-base-tributavel">${fmtRealPrecificacao(r.base_tributavel_irpj)}</strong></div>
+        <div><span class="texto-suave">IRPJ + CSLL</span><br><strong id="res-irpj-csll">${fmtRealPrecificacao(r.irpj_csll)}</strong></div>
       </div>
       <hr style="margin:14px 0;border:none;border-top:1px solid rgba(0,0,0,0.08);">
-      <p class="texto-suave" style="margin-bottom:6px;"><strong>Totais para ${Number(r.quantidade).toLocaleString("pt-BR")} unidade(s)</strong></p>
+      <p class="texto-suave" style="margin-bottom:6px;"><strong>Totais para <span id="res-quantidade">${Number(r.quantidade).toLocaleString("pt-BR")}</span> unidade(s)</strong></p>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
-        <div><span class="texto-suave">Valor total do pedido</span><br><strong>${fmtRealPrecificacao(r.valor_total_pedido)}</strong></div>
-        <div><span class="texto-suave">Comissão total</span><br><strong>${fmtRealPrecificacao(r.comissao_total)}</strong></div>
-        <div><span class="texto-suave">Lucro real total</span><br><strong>${fmtRealPrecificacao(r.lucro_real_total)}</strong></div>
-        <div><span class="texto-suave">Lucro hipotético sem IRPJ/CSLL</span><br><strong>${fmtRealPrecificacao(r.lucro_hipotetico_total)}</strong></div>
+        <div><span class="texto-suave">Valor total do pedido</span><br><strong id="res-valor-total-pedido">${fmtRealPrecificacao(r.valor_total_pedido)}</strong></div>
+        <div><span class="texto-suave">Comissão total</span><br><strong id="res-comissao-total">${fmtRealPrecificacao(r.comissao_total)}</strong></div>
+        <div><span class="texto-suave">Lucro real total</span><br><strong id="res-lucro-real-total">${fmtRealPrecificacao(r.lucro_real_total)}</strong></div>
+        <div><span class="texto-suave">Lucro hipotético sem IRPJ/CSLL</span><br><strong id="res-lucro-hipotetico-total">${fmtRealPrecificacao(r.lucro_hipotetico_total)}</strong></div>
       </div>`;
+  }
+
+  // Pedido do usuário: ao digitar no "Preço de venda final" (o campo dentro
+  // do próprio resultado), o cursor não pode sumir do campo a cada
+  // recálculo — só atualiza os NÚMEROS ao redor (por id), nunca troca o
+  // próprio `innerHTML` do painel enquanto esse campo está focado (é
+  // exatamente essa troca que reconstrói o input e derruba o foco/cursor).
+  function atualizarResultadoPrecificacaoParcial(painel, r) {
+    const set = (id, texto) => { const el = painel.querySelector("#" + id); if (el) el.textContent = texto; };
+    set("res-lucro-final", fmtRealPrecificacao(r.lucro_final_produtor));
+    set("res-margem-liquida", fmtPctPrecificacao(r.margem_liquida_pct));
+    set("res-preco-1", fmtRealPrecificacao(r.preco_1));
+    set("res-preco-2", fmtRealPrecificacao(r.preco_2));
+    set("res-margem-bruta", fmtPctPrecificacao(r.margem_bruta_pct));
+    set("res-comissao-valor", fmtRealPrecificacao(r.comissao_real));
+    set("res-base-tributavel", fmtRealPrecificacao(r.base_tributavel_irpj));
+    set("res-irpj-csll", fmtRealPrecificacao(r.irpj_csll));
+    set("res-quantidade", Number(r.quantidade).toLocaleString("pt-BR"));
+    set("res-valor-total-pedido", fmtRealPrecificacao(r.valor_total_pedido));
+    set("res-comissao-total", fmtRealPrecificacao(r.comissao_total));
+    set("res-lucro-real-total", fmtRealPrecificacao(r.lucro_real_total));
+    set("res-lucro-hipotetico-total", fmtRealPrecificacao(r.lucro_hipotetico_total));
   }
 
   function ligarFormularioPrecificacao() {
@@ -15871,7 +15893,12 @@
       }
       try {
         const r = await chamarApi("/precificacao/calcular", { method: "POST", body: dadosAtual });
-        painelResultado.innerHTML = htmlResultadoPrecificacao(r.resultado);
+        const focoNoPrecoEditavel = document.activeElement && document.activeElement.hasAttribute("data-editar-preco-final");
+        if (focoNoPrecoEditavel && painelResultado.querySelector("#res-lucro-final")) {
+          atualizarResultadoPrecificacaoParcial(painelResultado, r.resultado);
+        } else {
+          painelResultado.innerHTML = htmlResultadoPrecificacao(r.resultado);
+        }
       } catch (erro) {
         painelResultado.innerHTML = `<p class="texto-suave">${escapeHtml(erro.message || "Não foi possível calcular.")}</p>`;
       }
