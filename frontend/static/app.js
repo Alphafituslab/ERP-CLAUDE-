@@ -14759,6 +14759,39 @@
       <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes" rows="2">${escapeHtml(orcamento?.observacoes || "")}</textarea></div>`;
   }
 
+  // Pedido do usuário: dava pra CRIAR um orçamento mas não editar depois
+  // (só cancelar) — o backend (`PUT /orcamentos/:id`) já aceitava validade,
+  // condições, observações e itens desde a Fase 197, só nunca ficou
+  // exposto na tela. Formulário PRÓPRIO (não reaproveita
+  // `_htmlFormularioOrcamento`, que tem busca de CLIENTE) porque o cliente
+  // de um orçamento já criado não muda — o próprio backend nem aceita esse
+  // campo no PUT — mostrar como texto fixo evita a falsa impressão de que
+  // dá pra trocar.
+  function modalEditarOrcamento(orcamento) {
+    const wrap = abrirModal(`
+      <h3>Editar ${escapeHtml(orcamento.numero)}</h3>
+      <p class="texto-suave">Cliente: <strong>${escapeHtml(orcamento.cliente.razao_social)}</strong> (não muda depois de criado)</p>
+      <form data-form="editar-orcamento" data-id="${orcamento.id}">
+        <div class="campo"><label>Validade (dias)</label><input type="number" name="validade_dias" min="1" value="${orcamento.validade_dias}"></div>
+        <div class="campo"><label>Itens</label>
+          <table style="width:100%;">
+            <thead><tr><th style="text-align:left;font-size:11px;color:var(--texto-suave);">Produto</th><th style="font-size:11px;color:var(--texto-suave);">Qtd.</th><th style="font-size:11px;color:var(--texto-suave);">Unid.</th><th style="font-size:11px;color:var(--texto-suave);">Preço unit.</th><th></th></tr></thead>
+            <tbody id="corpo-itens-orcamento">${orcamento.itens.map(_linhaItemOrcamento).join("")}</tbody>
+          </table>
+          <button type="button" class="botao secundario pequeno" data-acao-local="adicionar-linha-item-orcamento" style="margin-top:8px;">+ Adicionar item</button>
+        </div>
+        <div class="campo"><label>Condições (opcional)</label><textarea name="condicoes_texto" rows="2">${escapeHtml(orcamento.condicoes_texto || "")}</textarea></div>
+        <div class="campo"><label>Observações (opcional)</label><textarea name="observacoes" rows="2">${escapeHtml(orcamento.observacoes || "")}</textarea></div>
+        <div class="rodape-modal">
+          <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+          <button type="submit" class="botao">Salvar alterações</button>
+        </div>
+      </form>`,
+      { largo: true }
+    );
+    _ligarLinhasItemOrcamento(wrap);
+  }
+
   function modalNovoOrcamento() {
     const wrap = abrirModal(`
       <h3>Novo orçamento</h3>
@@ -14829,7 +14862,10 @@
 
        <div class="cartao">
          <div class="barra-acoes"><h3 style="margin:0;">Itens</h3>
-           <button type="button" class="botao secundario pequeno" data-acao="ver-pdf-orcamento" data-id="${orcamento.id}">📄 Ver PDF</button>
+           <div style="display:flex;gap:8px;">
+             ${podeGerenciar && orcamento.status === "rascunho" ? `<button type="button" class="botao secundario pequeno" data-acao="abrir-editar-orcamento" data-id="${orcamento.id}">✏️ Editar</button>` : ""}
+             <button type="button" class="botao secundario pequeno" data-acao="ver-pdf-orcamento" data-id="${orcamento.id}">📄 Ver PDF</button>
+           </div>
          </div>
          <div class="tabela-scroll"><table>
            <thead><tr><th>Produto</th><th>Qtd.</th><th>Preço unit.</th><th>Subtotal</th></tr></thead>
@@ -20618,6 +20654,11 @@
       case "novo-orcamento":
         modalNovoOrcamento();
         return;
+      case "abrir-editar-orcamento": {
+        const orcamento = await chamarApi(`/orcamentos/${alvo.dataset.id}`);
+        modalEditarOrcamento(orcamento);
+        return;
+      }
       case "ver-pdf-orcamento": {
         try {
           await abrirBinarioEmNovaAba(`/orcamentos/${alvo.dataset.id}/pdf`);
@@ -24280,6 +24321,23 @@
         fecharModais();
         definirFlash("ok", "Pedido criado como rascunho.");
         return dados.get("origem") === "lf" ? renderLancarFaturarPedidos() : navegarPara(`#/pedido/${pedido.id}`);
+      }
+      case "editar-orcamento": {
+        const itensOrcamento = _coletarItensOrcamento(form);
+        if (!itensOrcamento.length) throw new Error("Adicione ao menos um item.");
+        const id = form.dataset.id;
+        await chamarApi(`/orcamentos/${id}`, {
+          method: "PUT",
+          body: {
+            validade_dias: dados.get("validade_dias") ? Number(dados.get("validade_dias")) : undefined,
+            condicoes_texto: dados.get("condicoes_texto") || null,
+            observacoes: dados.get("observacoes") || null,
+            itens: itensOrcamento,
+          },
+        });
+        fecharModais();
+        definirFlash("ok", "Orçamento atualizado.");
+        return renderOrcamentoDetalhe(Number(id));
       }
       case "criar-orcamento": {
         if (!dados.get("cliente_id")) throw new Error("Busque e selecione um cliente.");
