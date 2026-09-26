@@ -15564,6 +15564,12 @@
     const grade = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;";
     return `
       <form data-form="salvar-precificacao" id="form-precificacao" data-id="${c.id || ""}" data-custo-origem="${c.custo_origem || "manual"}">
+        ${c.id ? `
+        <div id="aviso-bloqueio-precificacao" class="cartao" style="background:rgba(0,0,0,0.15);display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+          <span>🔒 Cenário salvo — campos travados pra evitar alteração sem querer. Toda edição fica registrada na Auditoria.</span>
+          <button type="button" class="botao secundario pequeno" data-acao="liberar-edicao-precificacao">🔓 Liberar edição</button>
+        </div>` : ""}
+        <div id="campos-precificacao-wrap" class="${c.id ? "precificacao-bloqueado" : ""}">
         <div style="${grade}">
           <div class="campo">
             <label>Nome do cenário</label>
@@ -15634,15 +15640,19 @@
 
         <div class="rodape-modal" style="justify-content:flex-start;margin-top:14px;padding:0;border:none;">
           ${podeCriar ? `<button type="submit" class="botao">${c.id ? "Salvar alterações" : "Salvar cenário"}</button>` : ""}
-          ${c.id ? `<button type="button" class="botao secundario" data-acao="cancelar-edicao-precificacao">Cancelar edição</button>` : ""}
         </div>
+        </div>
+        ${c.id ? `<button type="button" class="botao secundario" data-acao="cancelar-edicao-precificacao" style="margin-top:10px;">Cancelar edição</button>` : ""}
       </form>`;
   }
 
   function htmlResultadoPrecificacao(r) {
     return `
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;padding:10px;border:1px solid rgba(0,0,0,0.1);border-radius:8px;margin-bottom:12px;">
-        <div><span class="texto-suave">Preço de venda final</span><br><strong style="font-size:16px;">${fmtRealPrecificacao(r.preco_final)}</strong></div>
+        <div><span class="texto-suave">Preço de venda final (pode editar)</span><br>
+          <input type="number" step="any" min="0" value="${r.preco_final}" data-editar-preco-final
+            style="font-size:16px;font-weight:600;width:110px;padding:2px 6px;">
+        </div>
         <div><span class="texto-suave">Quanto sobra líquido pra empresa (depois de tudo)</span><br><strong style="font-size:16px;color:#1a7f37;">${fmtRealPrecificacao(r.lucro_final_produtor)}</strong></div>
         <div><span class="texto-suave">Margem líquida</span><br><strong style="font-size:16px;color:#1a7f37;">${fmtPctPrecificacao(r.margem_liquida_pct)}</strong></div>
       </div>
@@ -15682,6 +15692,24 @@
     }
     form.querySelectorAll('input[name="modo"]').forEach((r) => {
       r.addEventListener("change", () => { alternarCamposModo(); recalcular(); });
+    });
+
+    // Pedido do usuário: editar o "Preço de venda final" direto no
+    // resultado — troca pro modo "já tenho o preço" com esse valor,
+    // mantendo o custo de produção (e todo o resto) intocado, já que é a
+    // base de onde tudo mais é calculado. O painel é recriado a cada
+    // recálculo, então o listener fica no container (delegação), não no
+    // input em si.
+    painelResultado.addEventListener("input", (e) => {
+      const campoPrecoEditavel = e.target.closest("[data-editar-preco-final]");
+      if (!campoPrecoEditavel) return;
+      const radioPrecoFixo = form.querySelector('input[name="modo"][value="preco_fixo"]');
+      if (radioPrecoFixo && !radioPrecoFixo.checked) {
+        radioPrecoFixo.checked = true;
+        alternarCamposModo();
+      }
+      const campoPrecoFinalForm = form.querySelector('[name="preco_venda_final"]');
+      if (campoPrecoFinalForm) campoPrecoFinalForm.value = campoPrecoEditavel.value;
     });
 
     const containerOpcoesCusto = document.getElementById("opcoes-custo-precificacao");
@@ -19957,6 +19985,13 @@
       }
       case "cancelar-edicao-precificacao":
         return renderPrecificacao();
+      case "liberar-edicao-precificacao": {
+        const wrapCampos = document.getElementById("campos-precificacao-wrap");
+        const avisoBloqueio = document.getElementById("aviso-bloqueio-precificacao");
+        if (wrapCampos) wrapCampos.classList.remove("precificacao-bloqueado");
+        if (avisoBloqueio) avisoBloqueio.hidden = true;
+        return;
+      }
       case "excluir-precificacao": {
         // Fase 210 — nunca usar confirm() nativo (navegador embutido do
         // instalador suprime silenciosamente, sem mostrar nada).

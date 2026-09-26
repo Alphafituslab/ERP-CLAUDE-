@@ -1032,6 +1032,12 @@ tr.linha-selecionada td { background: #e6eef7; }
 .rodape-modal { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 
 .texto-suave { color: var(--texto-suave); }
+/* Fase 214 — Precificação: cenário salvo abre travado (evita mudar valor
+   sem querer); "Liberar edição" remove esta classe. pointer-events:none em
+   vez de disabled/readonly de propósito — disabled tira o campo do
+   FormData (quebraria o recálculo ao vivo e o texto continuaria certo pro
+   cenário salvo), pointer-events só bloqueia interação do mouse. */
+.precificacao-bloqueado { pointer-events: none; opacity: 0.55; }
 .mono { font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; word-break: break-all; }
 
 .botao-icone {
