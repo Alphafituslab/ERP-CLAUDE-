@@ -123,6 +123,8 @@ def orcamento_detalhado(conn, orcamento_id):
         orcamento["aprovacao_interna_aprovado_por_nome"] = aprovador["nome"] if aprovador else None
     else:
         orcamento["aprovacao_interna_aprovado_por_nome"] = None
+    criador = conn.execute("SELECT nome FROM usuarios WHERE id = ?", (orcamento["criado_por"],)).fetchone()
+    orcamento["criado_por_nome"] = criador["nome"] if criador else None
     return orcamento
 
 
@@ -483,6 +485,17 @@ def gerar_pdf_orcamento(orcamento):
         elementos.append(Paragraph(f"<b>Observações:</b> {escape(orcamento['observacoes'])}", estilo_normal))
     elementos.append(Spacer(1, 0.4 * cm))
     elementos.append(Paragraph("Esta proposta é válida até a data indicada acima. A aprovação pode ser feita pelo link enviado, sem necessidade de login.", estilo_suave))
+    elementos.append(Spacer(1, 0.6 * cm))
+    elementos.append(HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#cccccc"), spaceAfter=6))
+    # Pedido do usuário: rodapé com quem GEROU a proposta (não é assinatura
+    # eletrônica com CPF/certificado, como a do Contrato/Terceirização —
+    # orçamento é uma decisão comercial, não um documento jurídico assinado,
+    # ver docstring do módulo; isto só identifica o autor, pra rastreio).
+    nome_gerador = escape(orcamento.get("criado_por_nome") or "—")
+    linha_assinatura = f"Documento gerado digitalmente por: <b>{nome_gerador}</b> — Alphafitus OS, em {criado_em.strftime('%d/%m/%Y às %H:%M')}."
+    if orcamento.get("aprovacao_interna_aprovado_por_nome"):
+        linha_assinatura += f"<br/>Aprovado internamente por: <b>{escape(orcamento['aprovacao_interna_aprovado_por_nome'])}</b>."
+    elementos.append(Paragraph(linha_assinatura, estilo_suave))
 
     buffer = __import__("io").BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=A4, topMargin=3.4 * cm, bottomMargin=1.8 * cm, leftMargin=2 * cm, rightMargin=2 * cm)
