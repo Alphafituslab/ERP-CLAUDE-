@@ -15557,7 +15557,7 @@
     const c = cenario || {
       id: null, nome: "", item_id: null, modo: "markup", custo_producao: "", custo_origem: "manual",
       icms_pct: 12, pis_pct: 1.65, cofins_pct: 7.6, analises_pct: 8, frete_pct: 8, despesas_fixas_pct: 8,
-      comissao_pct: 5, margem_bruta_pct: 50, preco_venda_final: "", aliquota_irpj_csll_pct: 34, quantidade: 1,
+      comissao_pct: 5, margem_liquida_desejada_pct: 20, preco_venda_final: "", aliquota_irpj_csll_pct: 34, quantidade: 1,
       observacoes: "",
     };
     const itemAtual = c.item_id ? itensCatalogo.find((i) => i.id === c.item_id) : null;
@@ -15616,8 +15616,9 @@
         </div>
 
         <div class="campo" data-campo-modo="markup" ${c.modo !== "markup" ? "hidden" : ""}>
-          <label>Margem bruta desejada (%)</label>
-          <input name="margem_bruta_pct" type="number" step="any" min="0" value="${c.margem_bruta_pct != null ? c.margem_bruta_pct : ""}">
+          <label>Margem líquida desejada (%)</label>
+          <input name="margem_liquida_desejada_pct" type="number" step="any" min="0" value="${c.margem_liquida_desejada_pct != null ? c.margem_liquida_desejada_pct : ""}">
+          <span class="texto-suave" style="font-size:11px;">O que sobra líquido pra empresa depois de custo, tributos, comissão E IRPJ/CSLL — o sistema calcula o preço de venda necessário pra chegar nesse número.</span>
         </div>
         <div class="campo" data-campo-modo="preco_fixo" ${c.modo !== "preco_fixo" ? "hidden" : ""}>
           <label>Preço de venda final (R$)</label>
@@ -15639,16 +15640,18 @@
 
   function htmlResultadoPrecificacao(r) {
     return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;padding:10px;border:1px solid rgba(0,0,0,0.1);border-radius:8px;margin-bottom:12px;">
+        <div><span class="texto-suave">Preço de venda final</span><br><strong style="font-size:16px;">${fmtRealPrecificacao(r.preco_final)}</strong></div>
+        <div><span class="texto-suave">Quanto sobra líquido pra empresa (depois de tudo)</span><br><strong style="font-size:16px;color:#1a7f37;">${fmtRealPrecificacao(r.lucro_final_produtor)}</strong></div>
+        <div><span class="texto-suave">Margem líquida</span><br><strong style="font-size:16px;color:#1a7f37;">${fmtPctPrecificacao(r.margem_liquida_pct)}</strong></div>
+      </div>
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
         <div><span class="texto-suave">Preço mínimo (cobre custo+tributos)</span><br><strong>${fmtRealPrecificacao(r.preco_1)}</strong></div>
         <div><span class="texto-suave">Preço líquido de comissão</span><br><strong>${fmtRealPrecificacao(r.preco_2)}</strong></div>
-        <div><span class="texto-suave">Preço de venda final</span><br><strong>${fmtRealPrecificacao(r.preco_final)}</strong></div>
-        <div><span class="texto-suave">Margem bruta</span><br><strong>${fmtPctPrecificacao(r.margem_bruta_pct)}</strong></div>
+        <div><span class="texto-suave">Margem bruta (markup, antes de comissão/IRPJ)</span><br><strong>${fmtPctPrecificacao(r.margem_bruta_pct)}</strong></div>
         <div><span class="texto-suave">Comissão (valor)</span><br><strong>${fmtRealPrecificacao(r.comissao_real)}</strong></div>
         <div><span class="texto-suave">Base tributável (IRPJ/CSLL)</span><br><strong>${fmtRealPrecificacao(r.base_tributavel_irpj)}</strong></div>
         <div><span class="texto-suave">IRPJ + CSLL</span><br><strong>${fmtRealPrecificacao(r.irpj_csll)}</strong></div>
-        <div><span class="texto-suave">Lucro final (produtor)</span><br><strong>${fmtRealPrecificacao(r.lucro_final_produtor)}</strong></div>
-        <div><span class="texto-suave">Margem líquida</span><br><strong>${fmtPctPrecificacao(r.margem_liquida_pct)}</strong></div>
       </div>
       <hr style="margin:14px 0;border:none;border-top:1px solid rgba(0,0,0,0.08);">
       <p class="texto-suave" style="margin-bottom:6px;"><strong>Totais para ${Number(r.quantidade).toLocaleString("pt-BR")} unidade(s)</strong></p>
@@ -15720,7 +15723,7 @@
         frete_pct: Number(fd.get("frete_pct")) || 0,
         despesas_fixas_pct: Number(fd.get("despesas_fixas_pct")) || 0,
         comissao_pct: Number(fd.get("comissao_pct")) || 0,
-        margem_bruta_pct: fd.get("margem_bruta_pct") ? Number(fd.get("margem_bruta_pct")) : null,
+        margem_liquida_desejada_pct: fd.get("margem_liquida_desejada_pct") ? Number(fd.get("margem_liquida_desejada_pct")) : null,
         preco_venda_final: fd.get("preco_venda_final") ? Number(fd.get("preco_venda_final")) : null,
         aliquota_irpj_csll_pct: Number(fd.get("aliquota_irpj_csll_pct")) || 34,
         quantidade: Number(fd.get("quantidade")) || 1,
@@ -15735,8 +15738,8 @@
         painelResultado.innerHTML = '<p class="texto-suave">Informe o custo de produção pra calcular.</p>';
         return;
       }
-      if (dadosAtual.modo === "markup" && !dadosAtual.margem_bruta_pct) {
-        painelResultado.innerHTML = '<p class="texto-suave">Informe a margem bruta desejada.</p>';
+      if (dadosAtual.modo === "markup" && !dadosAtual.margem_liquida_desejada_pct) {
+        painelResultado.innerHTML = '<p class="texto-suave">Informe a margem líquida desejada.</p>';
         return;
       }
       if (dadosAtual.modo === "preco_fixo" && !dadosAtual.preco_venda_final) {
@@ -22045,7 +22048,7 @@
           frete_pct: Number(dados.get("frete_pct")) || 0,
           despesas_fixas_pct: Number(dados.get("despesas_fixas_pct")) || 0,
           comissao_pct: Number(dados.get("comissao_pct")) || 0,
-          margem_bruta_pct: dados.get("margem_bruta_pct") ? Number(dados.get("margem_bruta_pct")) : null,
+          margem_liquida_desejada_pct: dados.get("margem_liquida_desejada_pct") ? Number(dados.get("margem_liquida_desejada_pct")) : null,
           preco_venda_final: dados.get("preco_venda_final") ? Number(dados.get("preco_venda_final")) : null,
           aliquota_irpj_csll_pct: Number(dados.get("aliquota_irpj_csll_pct")) || 34,
           quantidade: Number(dados.get("quantidade")) || 1,

@@ -128,7 +128,7 @@ def criar_cenario():
         INSERT INTO precificacoes (
             nome, item_id, modo, custo_producao, custo_origem,
             icms_pct, pis_pct, cofins_pct, analises_pct, frete_pct, despesas_fixas_pct, comissao_pct,
-            margem_bruta_pct, preco_venda_final, aliquota_irpj_csll_pct, quantidade, observacoes,
+            margem_liquida_desejada_pct, preco_venda_final, aliquota_irpj_csll_pct, quantidade, observacoes,
             criado_por_id
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
@@ -136,7 +136,7 @@ def criar_cenario():
             cenario["nome"], item_id, cenario["modo"], cenario["custo_producao"], cenario["custo_origem"],
             cenario["icms_pct"], cenario["pis_pct"], cenario["cofins_pct"], cenario["analises_pct"],
             cenario["frete_pct"], cenario["despesas_fixas_pct"], cenario["comissao_pct"],
-            cenario["margem_bruta_pct"], cenario["preco_venda_final"], cenario["aliquota_irpj_csll_pct"],
+            cenario["margem_liquida_desejada_pct"], cenario["preco_venda_final"], cenario["aliquota_irpj_csll_pct"],
             cenario["quantidade"], cenario["observacoes"], usuario_atual["id"],
         ),
     )
@@ -165,7 +165,7 @@ def atualizar_cenario(cenario_id):
         UPDATE precificacoes SET
             nome = ?, item_id = ?, modo = ?, custo_producao = ?, custo_origem = ?,
             icms_pct = ?, pis_pct = ?, cofins_pct = ?, analises_pct = ?, frete_pct = ?,
-            despesas_fixas_pct = ?, comissao_pct = ?, margem_bruta_pct = ?, preco_venda_final = ?,
+            despesas_fixas_pct = ?, comissao_pct = ?, margem_liquida_desejada_pct = ?, preco_venda_final = ?,
             aliquota_irpj_csll_pct = ?, quantidade = ?, observacoes = ?,
             atualizado_em = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), atualizado_por_id = ?
         WHERE id = ?
@@ -174,7 +174,7 @@ def atualizar_cenario(cenario_id):
             cenario["nome"], item_id, cenario["modo"], cenario["custo_producao"], cenario["custo_origem"],
             cenario["icms_pct"], cenario["pis_pct"], cenario["cofins_pct"], cenario["analises_pct"],
             cenario["frete_pct"], cenario["despesas_fixas_pct"], cenario["comissao_pct"],
-            cenario["margem_bruta_pct"], cenario["preco_venda_final"], cenario["aliquota_irpj_csll_pct"],
+            cenario["margem_liquida_desejada_pct"], cenario["preco_venda_final"], cenario["aliquota_irpj_csll_pct"],
             cenario["quantidade"], cenario["observacoes"], usuario_atual["id"], cenario_id,
         ),
     )

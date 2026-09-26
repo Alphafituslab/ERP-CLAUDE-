@@ -29,13 +29,32 @@ grande abaixo sobre o erro real encontrado):
 
   2. Dois modos de uso, escolhidos pelo usuário por cenário:
 
-     - `markup`: o usuário informa a MARGEM BRUTA desejada; o sistema forma
-       o preço pra frente: `preco_2 = preco_1 * (1 + margem)`, depois
-       embute a comissão da mesma forma "por dentro":
-       `preco_final = preco_2 / (1 - comissao)`.
-       (Este é o caminho "eu quero ganhar X%, qual preço eu cobro?" — igual
-       à aba "TABELA PRECIFICAÇÃO" da planilha original, que já era
-       internamente consistente.)
+     - `markup`: o usuário informa a MARGEM LÍQUIDA desejada — quanto ele
+       quer que sobre de verdade pra empresa, JÁ descontando comissão E
+       IRPJ/CSLL (não uma margem bruta antes desses dois descontos, que foi
+       a versão original da Fase 212 — mudada por pedido explícito do
+       usuário na Fase 213: "quero ter a margem total não a bruta...
+       aplicando todos os custos e descontando tudo, qual é o lucro limpo
+       da empresa"). O sistema resolve algebricamente o preço de venda
+       necessário pra chegar nessa margem líquida:
+
+           lucro_final = (preco_final*(1-comissao) - preco_1) * (1-aliquota)
+           margem_liquida_desejada = lucro_final / preco_final
+
+       Isolando `preco_final`:
+
+           preco_final = preco_1*(1-aliquota) / ((1-comissao)*(1-aliquota) - margem_liquida_desejada)
+
+       Se `margem_liquida_desejada` for maior ou igual a
+       `(1-comissao)*(1-aliquota)`, a margem pedida é matematicamente
+       impossível (a comissão e o imposto sozinhos já comeriam tudo ou mais
+       que isso) — validado em `validar_e_normalizar` com uma mensagem que
+       mostra o teto real. (Este modo substitui o antigo "aplicar margem
+       BRUTA sobre o preço-que-cobre-custo", que era o caminho "eu quero
+       ganhar X% de markup, qual preço eu cobro?" — igual à aba "TABELA
+       PRECIFICAÇÃO" da planilha original; esse número de markup continua
+       calculado e devolvido como informação em `margem_bruta_pct`, só
+       deixou de ser o que o usuário PREENCHE.)
 
      - `preco_fixo`: o usuário já tem um preço de venda (de mercado, de
        negociação) e quer saber a rentabilidade real dele — o caminho
@@ -149,17 +168,28 @@ def validar_e_normalizar(dados):
         raise ApiError("Comissão não pode ser 100% ou mais.", status=400)
 
     if modo == "markup":
-        margem = dados.get("margem_bruta_pct")
-        if margem is None:
-            raise ApiError("No modo 'aplicar margem', informe a margem bruta desejada (%).", status=400)
-        normalizado["margem_bruta_pct"] = float(margem)
+        margem_liquida = dados.get("margem_liquida_desejada_pct")
+        if margem_liquida is None:
+            raise ApiError("No modo 'aplicar margem', informe a margem líquida desejada (%).", status=400)
+        margem_liquida = float(margem_liquida)
+        if margem_liquida < 0:
+            raise ApiError("Margem líquida desejada não pode ser negativa.", status=400)
+        teto = (1 - normalizado["comissao_pct"] / 100) * (1 - normalizado["aliquota_irpj_csll_pct"] / 100) * 100
+        if margem_liquida >= teto:
+            raise ApiError(
+                f"Margem líquida de {margem_liquida:.2f}% é impossível com essa comissão ({normalizado['comissao_pct']}%) "
+                f"e alíquota de IRPJ/CSLL ({normalizado['aliquota_irpj_csll_pct']}%) — o máximo que dá pra pedir aqui "
+                f"é {teto:.2f}%.",
+                status=400,
+            )
+        normalizado["margem_liquida_desejada_pct"] = margem_liquida
         normalizado["preco_venda_final"] = None
     else:
         preco_final = dados.get("preco_venda_final")
         if preco_final is None or preco_final <= 0:
             raise ApiError("No modo 'já tenho o preço', informe o preço de venda final (maior que zero).", status=400)
         normalizado["preco_venda_final"] = float(preco_final)
-        normalizado["margem_bruta_pct"] = None
+        normalizado["margem_liquida_desejada_pct"] = None
 
     return normalizado
 
@@ -185,10 +215,14 @@ def calcular(cenario):
     preco_1 = custo / (1 - soma_percentuais_venda)
 
     if cenario["modo"] == "markup":
-        margem_bruta = cenario["margem_bruta_pct"] / 100
-        preco_2 = preco_1 * (1 + margem_bruta)
-        preco_final = preco_2 / (1 - comissao) if comissao > 0 else preco_2
-        margem_bruta_pct_exibicao = round(margem_bruta * 100, 4)
+        # Fase 213 — o usuário informa a margem LÍQUIDA que quer (já
+        # descontando comissão e IRPJ/CSLL); resolve-se `preco_final`
+        # algebricamente (ver a dedução completa na docstring do módulo).
+        margem_liquida_desejada = cenario["margem_liquida_desejada_pct"] / 100
+        denominador = (1 - comissao) * (1 - aliquota_irpj_csll) - margem_liquida_desejada
+        preco_final = preco_1 * (1 - aliquota_irpj_csll) / denominador
+        preco_2 = preco_final * (1 - comissao)
+        margem_bruta_pct_exibicao = round(((preco_2 / preco_1) - 1) * 100, 4) if preco_1 else None
     else:
         preco_final = cenario["preco_venda_final"]
         # Correção do erro real da planilha original (ver docstring do
