@@ -24,6 +24,7 @@ from flask import Blueprint, Response, g, jsonify, request
 
 from .. import audit
 from .. import backup_service
+from .. import whatts_contatos_service
 from ..context import ApiError, client_device, client_ip, get_db
 from ..pdf_marca import desenhar_cabecalho_formal
 from ..permissions import requires_auth, requires_permission
@@ -216,12 +217,31 @@ def cancelar_orcamento(orcamento_id):
     return jsonify(orcamento_detalhado(conn, orcamento_id))
 
 
+@bp.get("/contatos-whatsapp")
+@requires_permission("orcamentos", "criar")
+def buscar_contatos_whatsapp_orcamento():
+    """Fase 222 — pedido do usuário: em vez de mandar direto pro telefone
+    genérico do cadastro do cliente (achado real: um número de linha fixa
+    sem WhatsApp derrubou o envio), busca nos contatos JÁ SALVOS no WhatsApp
+    integrado (Whatts Inbox) — a mesma lista que a pessoa já vê lá dentro."""
+    termo = request.args.get("termo", "")
+    if len(termo.strip()) < 3:
+        return jsonify([])
+    return jsonify(whatts_contatos_service.buscar_contatos(termo))
+
+
 @bp.post("/<int:orcamento_id>/link")
 @requires_permission("orcamentos", "criar")
 def gerar_link_orcamento(orcamento_id):
     """Gera (ou renova — revoga o anterior primeiro) o link de aprovação
-    deste orçamento. `enviar_whatsapp: true` manda a mensagem na hora,
-    usando o telefone já cadastrado do cliente."""
+    deste orçamento. `enviar_whatsapp: true` manda a mensagem na hora.
+
+    Fase 222 — o número usado é sempre um CONTATO de WhatsApp escolhido na
+    tela (`telefone_whatsapp`, com `nome_contato` opcional pra salvar um
+    contato novo) — nunca mais o `clientes.telefone` cego de antes (podia
+    ser uma linha fixa sem WhatsApp, como aconteceu de verdade em produção).
+    `telefone_whatsapp` continua opcional por retrocompatibilidade de API,
+    mas a tela sempre manda."""
     usuario_atual = g.usuario_atual
     conn = get_db()
     orcamento = _orcamento_ou_404(conn, orcamento_id)
@@ -231,6 +251,8 @@ def gerar_link_orcamento(orcamento_id):
 
     dados = request.get_json(silent=True) or {}
     enviar_whatsapp = bool(dados.get("enviar_whatsapp"))
+    telefone_escolhido = (dados.get("telefone_whatsapp") or "").strip()
+    nome_contato = (dados.get("nome_contato") or "").strip() or cliente.get("razao_social")
 
     conn.execute("UPDATE orcamento_links_portal SET revogado = 1 WHERE orcamento_id = ? AND revogado = 0", (orcamento_id,))
     token = secrets_lib.token_urlsafe(32)
@@ -244,12 +266,13 @@ def gerar_link_orcamento(orcamento_id):
     enviado_com_sucesso = False
     erro_envio = None
     if enviar_whatsapp:
-        telefone = (cliente.get("telefone") or "").strip()
+        telefone = telefone_escolhido or (cliente.get("telefone") or "").strip()
         if not telefone:
-            erro_envio = "Este cliente não tem telefone cadastrado (Comercial > editar cliente)."
+            erro_envio = "Escolha (ou cadastre) um contato de WhatsApp pra enviar."
         else:
             try:
                 numero = backup_service.normalizar_numero_brasileiro(telefone)
+                whatts_contatos_service.salvar_contato(nome_contato, numero)
                 config = backup_service.obter_configuracao(conn)
                 texto = (
                     f"Olá! Segue o orçamento {orcamento['numero']} da Alphafitus para sua aprovação:\n{url}\n\n"

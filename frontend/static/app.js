@@ -14767,6 +14767,51 @@
   // de um orçamento já criado não muda — o próprio backend nem aceita esse
   // campo no PUT — mostrar como texto fixo evita a falsa impressão de que
   // dá pra trocar.
+  // Fase 222 — pedido do usuário: o envio por WhatsApp estava pegando
+  // cegamente o telefone genérico do cadastro do cliente (achado real:
+  // uma linha fixa sem WhatsApp derrubou o envio, "exists": false na
+  // Evolution API). Agora sempre passa por aqui — busca nos contatos JÁ
+  // SALVOS no WhatsApp integrado (Whatts Inbox), ou cadastra um novo
+  // (nome + telefone) na hora, que fica salvo pra próxima vez.
+  function modalEnviarOrcamentoWhatsapp(orcamento) {
+    const wrap = abrirModal(`
+      <h3>Enviar orçamento por WhatsApp</h3>
+      <div class="campo">
+        <label>Buscar contato salvo no WhatsApp</label>
+        <input type="text" id="busca-contato-whatsapp-orcamento" placeholder="🔍 Digite pelo menos 3 letras — nome ou número" autocomplete="off">
+        <div id="resultados-contato-whatsapp-orcamento" class="lista-busca-resultados"></div>
+      </div>
+      <p class="texto-suave" style="margin:10px 0 4px;">Não achou? Confirme (ou digite) nome e telefone — fica salvo pra próxima vez:</p>
+      <div class="campo"><label>Nome</label><input id="campo-nome-contato-whatsapp-orcamento" value="${escapeHtml(orcamento.cliente.razao_social)}"></div>
+      <div class="campo"><label>Telefone (DDD + número)</label><input id="campo-telefone-contato-whatsapp-orcamento" placeholder="ex.: 47999998888" autocomplete="off"></div>
+      <div class="rodape-modal">
+        <button type="button" class="botao secundario" data-acao="fechar-modal">Cancelar</button>
+        <button type="button" class="botao" data-acao="confirmar-envio-whatsapp-orcamento" data-id="${orcamento.id}">Enviar</button>
+      </div>`);
+    const campoBusca = wrap.querySelector("#busca-contato-whatsapp-orcamento");
+    const listaResultados = wrap.querySelector("#resultados-contato-whatsapp-orcamento");
+    let timeoutBuscaContato = null;
+    campoBusca.addEventListener("input", () => {
+      clearTimeout(timeoutBuscaContato);
+      const termo = campoBusca.value.trim();
+      if (termo.length < 3) { listaResultados.innerHTML = ""; return; }
+      timeoutBuscaContato = setTimeout(async () => {
+        const contatos = await chamarApi(`/orcamentos/contatos-whatsapp?termo=${encodeURIComponent(termo)}`);
+        listaResultados.innerHTML = contatos.length
+          ? contatos.map((c) => `<button type="button" class="item-busca-resultado" data-nome="${escapeHtml(c.nome || "")}" data-telefone="${escapeHtml(c.telefone)}">${escapeHtml(c.nome || "(sem nome)")} — <span class="mono">${escapeHtml(c.telefone)}</span></button>`).join("")
+          : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nenhum contato salvo com esse termo — cadastre abaixo.</p>';
+      }, 300);
+    });
+    listaResultados.addEventListener("click", (e) => {
+      const botao = e.target.closest(".item-busca-resultado");
+      if (!botao) return;
+      wrap.querySelector("#campo-nome-contato-whatsapp-orcamento").value = botao.dataset.nome;
+      wrap.querySelector("#campo-telefone-contato-whatsapp-orcamento").value = botao.dataset.telefone;
+      listaResultados.innerHTML = "";
+      campoBusca.value = "";
+    });
+  }
+
   function modalEditarOrcamento(orcamento) {
     const wrap = abrirModal(`
       <h3>Editar ${escapeHtml(orcamento.numero)}</h3>
@@ -20677,17 +20722,36 @@
         return montarRota();
       }
       case "gerar-link-orcamento": {
-        const enviarWhatsapp = alvo.dataset.whatsapp === "1";
+        if (alvo.dataset.whatsapp === "1") {
+          const orcamento = await chamarApi(`/orcamentos/${alvo.dataset.id}`);
+          modalEnviarOrcamentoWhatsapp(orcamento);
+          return;
+        }
         try {
           const resultado = await chamarApi(`/orcamentos/${alvo.dataset.id}/link`, {
-            method: "POST", body: { enviar_whatsapp: enviarWhatsapp },
+            method: "POST", body: { enviar_whatsapp: false },
           });
-          if (enviarWhatsapp && resultado.enviado_via_whatsapp) {
+          definirFlash("ok", "Link gerado.");
+        } catch (erro) {
+          definirFlash("erro", erro.message || "Não foi possível gerar o link.");
+        }
+        return renderOrcamentoDetalhe(Number(alvo.dataset.id));
+      }
+      case "confirmar-envio-whatsapp-orcamento": {
+        const modalWrap = alvo.closest(".fundo-modal");
+        const nomeContato = modalWrap.querySelector("#campo-nome-contato-whatsapp-orcamento").value.trim();
+        const telefoneContato = modalWrap.querySelector("#campo-telefone-contato-whatsapp-orcamento").value.trim();
+        if (!telefoneContato) { definirFlash("erro", "Informe o telefone do contato."); return; }
+        fecharModais();
+        try {
+          const resultado = await chamarApi(`/orcamentos/${alvo.dataset.id}/link`, {
+            method: "POST",
+            body: { enviar_whatsapp: true, telefone_whatsapp: telefoneContato, nome_contato: nomeContato },
+          });
+          if (resultado.enviado_via_whatsapp) {
             definirFlash("ok", "Link gerado e enviado por WhatsApp.");
-          } else if (enviarWhatsapp && resultado.erro_envio_whatsapp) {
-            definirFlash("erro", `Link gerado, mas o envio por WhatsApp falhou: ${resultado.erro_envio_whatsapp}`);
           } else {
-            definirFlash("ok", "Link gerado.");
+            definirFlash("erro", `Link gerado, mas o envio por WhatsApp falhou: ${resultado.erro_envio_whatsapp}`);
           }
         } catch (erro) {
           definirFlash("erro", erro.message || "Não foi possível gerar o link.");
@@ -20695,7 +20759,10 @@
         return renderOrcamentoDetalhe(Number(alvo.dataset.id));
       }
       case "cancelar-orcamento": {
-        if (!confirm("Cancelar este orçamento? Essa ação não pode ser desfeita.")) return;
+        // Fase 210 — nunca usar confirm() nativo (navegador embutido do
+        // instalador suprime silenciosamente, sem mostrar nada).
+        const confirmou = await confirmarModal("Cancelar este orçamento? Essa ação não pode ser desfeita.", { titulo: "Cancelar orçamento", textoSim: "Cancelar orçamento" });
+        if (!confirmou) return;
         try {
           await chamarApi(`/orcamentos/${alvo.dataset.id}/cancelar`, { method: "POST" });
           definirFlash("ok", "Orçamento cancelado.");
