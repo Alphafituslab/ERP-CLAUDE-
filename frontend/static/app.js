@@ -902,6 +902,7 @@
           case "terminais": return renderTerminais();
           case "seguranca": return renderSeguranca();
           case "notificacoes": return renderNotificacoes();
+          case "configuracao-email": return renderConfiguracaoEmail();
           case "conta": return renderMinhaConta();
           case "itens": return renderItens();
           case "fornecedores": return renderFornecedores();
@@ -1224,6 +1225,9 @@
         { rota: "#/auditoria", chave: "auditoria", label: "Auditoria", permissao: ["auditoria", "visualizar"] },
         { rota: "#/terminais", chave: "terminais", label: "Terminais", permissao: ["terminais", "visualizar"] },
         { rota: "#/seguranca", chave: "seguranca", label: "Segurança", permissao: ["seguranca", "visualizar"], apelidos: ["2fa", "autenticador", "totp", "dois fatores"] },
+        // Fase 226 (pedido do usuário) — tirado de dentro de Notificações
+        // ("não fica ali ocupando espaço") pra virar configuração própria.
+        { rota: "#/configuracao-email", chave: "configuracao-email", label: "Configuração de E-mail", permissao: ["sistema", "configurar_email"], apelidos: ["smtp", "e-mail", "email"] },
         // Pedido do usuário (2026-09-01): essas 3 telas viviam dentro de
         // "Comercial & Vendas" mas são configuração/cadastro de apoio, não
         // rotina comercial do dia a dia — movidas pra Administração.
@@ -3878,11 +3882,7 @@
   // padrão chega a ver esse cartão.
   async function renderNotificacoes() {
     app.innerHTML = '<div class="carregando">Carregando notificações…</div>';
-    const podeConfigurarEmail = temPermissao("sistema", "configurar_email");
-    const [notificacoes, configuracaoEmail] = await Promise.all([
-      chamarApi("/notificacoes"),
-      podeConfigurarEmail ? chamarApi("/notificacoes/configuracao-email") : Promise.resolve(null),
-    ]);
+    const notificacoes = await chamarApi("/notificacoes");
 
     // Já que a tela acabou de buscar a lista completa, aproveita para
     // sincronizar o número do sino com o que está sendo mostrado agora,
@@ -3914,7 +3914,7 @@
         const rota = rotaDaNotificacao(n);
         return `<tr class="${n.lida ? "" : "linha-nao-lida"}">
           <td class="texto-suave">${fmtData(n.criado_em)}</td>
-          <td>${rota ? `<a href="${rota}">${escapeHtml(n.mensagem)}</a>` : escapeHtml(n.mensagem)}</td>
+          <td>${n.contagem > 1 ? `<span class="selo amarelo" title="Reenviada ${n.contagem} vezes — nunca duplica, sempre a mesma linha">×${n.contagem}</span> ` : ""}${rota ? `<a href="${rota}">${escapeHtml(n.mensagem)}</a>` : escapeHtml(n.mensagem)}</td>
           <td>${seloEnvioEmail(n)}</td>
           <td style="display:flex;gap:6px;flex-wrap:wrap;">
             ${rota ? `<a class="botao secundario pequeno" href="${rota}" data-acao="abrir-notificacao-marcar-lida" data-id="${n.id}">Abrir</a>` : ""}
@@ -3944,10 +3944,21 @@
            <thead><tr><th>Quando</th><th>Mensagem</th><th>E-mail</th><th></th></tr></thead>
            <tbody>${linhas || '<tr><td colspan="4" class="texto-suave">Nenhuma notificação por aqui ainda.</td></tr>'}</tbody>
          </table>
-       </div>
-
-       ${podeConfigurarEmail ? cartaoConfiguracaoEmail(configuracaoEmail) : ""}`,
+       </div>`,
       "notificacoes"
+    );
+  }
+
+  // Fase 226 — pedido do usuário: tirar a Configuração de E-mail (SMTP) de
+  // dentro da tela de Notificações do dia a dia ("não fica ali ocupando
+  // espaço") — agora é uma tela própria em Administração.
+  async function renderConfiguracaoEmail() {
+    app.innerHTML = '<div class="carregando">Carregando configuração de e-mail…</div>';
+    const configuracaoEmail = await chamarApi("/notificacoes/configuracao-email");
+    renderShell(
+      `<h2>Configuração de E-mail</h2>
+       ${cartaoConfiguracaoEmail(configuracaoEmail)}`,
+      "configuracao-email"
     );
   }
 

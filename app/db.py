@@ -202,6 +202,7 @@ SCHEMA_FILES = [
     "schema_fase213.sql",  # Fase 213 — Precificação: modo "markup" passa a pedir margem LÍQUIDA desejada, não bruta
     "schema_fase223.sql",  # Fase 223 — Orçamentos: aprovação interna (usuário master)
     "schema_fase225.sql",  # Fase 225 — Notificações: referencia_tipo/referencia_id (clicável, abre o item de origem)
+    "schema_fase226.sql",  # Fase 226 — Notificações: contador de repetição (nunca duplicar linha ao reenviar)
 ]
 
 

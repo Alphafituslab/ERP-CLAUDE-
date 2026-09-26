@@ -54,27 +54,33 @@ def _expira_em_daqui_a_dias(dias):
 
 
 def _notificar_aprovacao_interna_pendente(conn, orcamento_id, numero, urgente=False):
-    """Fase 225 — pedido do usuário: "não precisa duplicar, sempre manter 1
-    só ali" — reenviar a solicitação (ou o auto-aviso da criação) NUNCA
-    empilha uma notificação nova em cima da anterior sobre o MESMO
-    orçamento; atualiza a que já existe (reabre se tinha sido marcada como
-    lida, atualiza a mensagem/data — útil pra "ficou urgente agora"). Só
-    cria uma notificação nova de verdade se não houver nenhuma ainda para
-    aquele usuário sobre este orçamento."""
-    prefixo = "🔴 URGENTE — " if urgente else ""
-    mensagem = f"{prefixo}Orçamento {numero} está aguardando sua aprovação interna."
+    """Fase 225/226 — pedido do usuário: "não precisa duplicar, sempre
+    manter 1 só ali... colocar os números das contagens" — reenviar a
+    solicitação (ou o auto-aviso da criação) NUNCA empilha uma notificação
+    nova em cima da anterior sobre o MESMO orçamento; atualiza a que já
+    existe (reabre se tinha sido marcada como lida) e incrementa
+    `contagem` (1ª, 2ª, 3ª solicitação...) — a base do escalonamento que
+    ele pediu (a partir de N vezes sem resolver, aciona outra coisa; esse
+    fluxo em si ainda não está implementado, ver conversa). Só cria uma
+    notificação nova de verdade se não houver nenhuma ainda para aquele
+    usuário sobre este orçamento."""
     masters = conn.execute("SELECT id FROM usuarios WHERE usuario_master = 1 AND status = 'ativo'").fetchall()
     for m in masters:
         existente = conn.execute(
-            "SELECT id FROM notificacoes WHERE usuario_id = ? AND referencia_tipo = 'orcamento' AND referencia_id = ? ORDER BY id DESC LIMIT 1",
+            "SELECT id, contagem FROM notificacoes WHERE usuario_id = ? AND referencia_tipo = 'orcamento' AND referencia_id = ? ORDER BY id DESC LIMIT 1",
             (m["id"], orcamento_id),
         ).fetchone()
         if existente:
+            nova_contagem = existente["contagem"] + 1
+            prefixo = "🔴 URGENTE — " if urgente else ""
+            mensagem = f"{prefixo}Orçamento {numero} está aguardando sua aprovação interna. ({nova_contagem}ª solicitação)"
             conn.execute(
-                "UPDATE notificacoes SET mensagem = ?, lida = 0, criado_em = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
-                (mensagem, existente["id"]),
+                "UPDATE notificacoes SET mensagem = ?, lida = 0, contagem = ?, criado_em = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+                (mensagem, nova_contagem, existente["id"]),
             )
         else:
+            prefixo = "🔴 URGENTE — " if urgente else ""
+            mensagem = f"{prefixo}Orçamento {numero} está aguardando sua aprovação interna."
             notificacoes_service.criar(
                 conn, usuario_id=m["id"], tipo="orcamento_aprovacao_interna", mensagem=mensagem,
                 referencia_tipo="orcamento", referencia_id=orcamento_id,
