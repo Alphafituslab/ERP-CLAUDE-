@@ -118,7 +118,8 @@ def aprovar_orcamento_portal(token):
         ip=client_ip(), dispositivo=client_device(),
     )
     mensagem = f"Orçamento {orcamento['numero']} foi APROVADO pelo cliente — Pedido de Venda {numero_pedido} criado como rascunho."
-    notificacoes_service.notificar_usuarios_com_permissao(conn, modulo="orcamentos", acao="criar", tipo="orcamento_aprovado", mensagem=mensagem)
+    notificacoes_service.notificar_usuarios_com_permissao(conn, modulo="orcamentos", acao="criar", tipo="orcamento_aprovado", mensagem=mensagem,
+                                                            referencia_tipo="orcamento", referencia_id=orcamento["id"])
 
     return jsonify(orc.orcamento_detalhado(conn, orcamento["id"]))
 
@@ -141,5 +142,6 @@ def recusar_orcamento_portal(token):
                      acao="orcamento_recusado_pelo_cliente", valor_novo={"motivo": motivo},
                      ip=client_ip(), dispositivo=client_device())
     mensagem = f"Orçamento {orcamento_row['numero']} foi RECUSADO pelo cliente" + (f" — motivo: {motivo}" if motivo else ".")
-    notificacoes_service.notificar_usuarios_com_permissao(conn, modulo="orcamentos", acao="criar", tipo="orcamento_recusado", mensagem=mensagem)
+    notificacoes_service.notificar_usuarios_com_permissao(conn, modulo="orcamentos", acao="criar", tipo="orcamento_recusado", mensagem=mensagem,
+                                                            referencia_tipo="orcamento", referencia_id=orcamento_row["id"])
     return jsonify(orc.orcamento_detalhado(conn, orcamento_row["id"]))

@@ -164,24 +164,31 @@ def _tentar_enviar_email_para_notificacao(conn, notificacao_id, usuario, tipo, m
         )
 
 
-def criar(conn, *, usuario_id, tipo, mensagem):
+def criar(conn, *, usuario_id, tipo, mensagem, referencia_tipo=None, referencia_id=None):
     """Cria UMA notificação para um usuário específico e tenta o envio por
-    e-mail (melhor esforço). Devolve o id da notificação criada."""
+    e-mail (melhor esforço). Devolve o id da notificação criada.
+
+    Fase 225 — `referencia_tipo`/`referencia_id` (ambos opcionais) deixam a
+    notificação CLICÁVEL: o frontend usa `referencia_tipo` pra decidir pra
+    onde navegar (ex.: "orcamento" → abre aquele orçamento) — pedido do
+    usuário, que não conseguia saber nem abrir o que uma notificação
+    estava avisando. Quem não passar nada continua funcionando exatamente
+    como antes (só texto, sem link)."""
     usuario = conn.execute("SELECT id, email, notificar_por_email FROM usuarios WHERE id = ?", (usuario_id,)).fetchone()
     if usuario is None:
         return None
     usuario = dict(usuario)
 
     cur = conn.execute(
-        "INSERT INTO notificacoes (usuario_id, tipo, mensagem) VALUES (?, ?, ?)",
-        (usuario_id, tipo, mensagem),
+        "INSERT INTO notificacoes (usuario_id, tipo, mensagem, referencia_tipo, referencia_id) VALUES (?, ?, ?, ?, ?)",
+        (usuario_id, tipo, mensagem, referencia_tipo, referencia_id),
     )
     notificacao_id = cur.lastrowid
     _tentar_enviar_email_para_notificacao(conn, notificacao_id, usuario, tipo, mensagem)
     return notificacao_id
 
 
-def notificar_usuarios_com_permissao(conn, *, modulo, acao, tipo, mensagem, excluir_usuario_id=None):
+def notificar_usuarios_com_permissao(conn, *, modulo, acao, tipo, mensagem, excluir_usuario_id=None, referencia_tipo=None, referencia_id=None):
     """Cria uma notificação para cada usuário ATIVO que tenha a permissão
     'modulo.acao' — o mesmo critério usado por `requires_permission` para
     liberar a ação de aprovar. `excluir_usuario_id` evita notificar quem
@@ -206,7 +213,8 @@ def notificar_usuarios_com_permissao(conn, *, modulo, acao, tipo, mensagem, excl
         usuario = dict(linha)
         if excluir_usuario_id is not None and usuario["id"] == excluir_usuario_id:
             continue
-        notificacao_id = criar(conn, usuario_id=usuario["id"], tipo=tipo, mensagem=mensagem)
+        notificacao_id = criar(conn, usuario_id=usuario["id"], tipo=tipo, mensagem=mensagem,
+                                referencia_tipo=referencia_tipo, referencia_id=referencia_id)
         if notificacao_id is not None:
             notificados.append(usuario["id"])
     return notificados

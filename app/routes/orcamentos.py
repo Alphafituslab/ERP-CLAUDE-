@@ -54,16 +54,31 @@ def _expira_em_daqui_a_dias(dias):
 
 
 def _notificar_aprovacao_interna_pendente(conn, orcamento_id, numero, urgente=False):
-    """Fase 223 — avisa TODO usuário master (só o Clayton, por enquanto —
-    ver a nota no topo da migration) que um orçamento está aguardando a
-    aprovação interna dele. Reaproveita `notificacoes_service.criar` —
-    mesmo sino que já existe, agora piscando (Fase 223, styles.css) — nunca
-    inventa um canal de aviso novo."""
+    """Fase 225 — pedido do usuário: "não precisa duplicar, sempre manter 1
+    só ali" — reenviar a solicitação (ou o auto-aviso da criação) NUNCA
+    empilha uma notificação nova em cima da anterior sobre o MESMO
+    orçamento; atualiza a que já existe (reabre se tinha sido marcada como
+    lida, atualiza a mensagem/data — útil pra "ficou urgente agora"). Só
+    cria uma notificação nova de verdade se não houver nenhuma ainda para
+    aquele usuário sobre este orçamento."""
     prefixo = "🔴 URGENTE — " if urgente else ""
     mensagem = f"{prefixo}Orçamento {numero} está aguardando sua aprovação interna."
     masters = conn.execute("SELECT id FROM usuarios WHERE usuario_master = 1 AND status = 'ativo'").fetchall()
     for m in masters:
-        notificacoes_service.criar(conn, usuario_id=m["id"], tipo="orcamento_aprovacao_interna", mensagem=mensagem)
+        existente = conn.execute(
+            "SELECT id FROM notificacoes WHERE usuario_id = ? AND referencia_tipo = 'orcamento' AND referencia_id = ? ORDER BY id DESC LIMIT 1",
+            (m["id"], orcamento_id),
+        ).fetchone()
+        if existente:
+            conn.execute(
+                "UPDATE notificacoes SET mensagem = ?, lida = 0, criado_em = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id = ?",
+                (mensagem, existente["id"]),
+            )
+        else:
+            notificacoes_service.criar(
+                conn, usuario_id=m["id"], tipo="orcamento_aprovacao_interna", mensagem=mensagem,
+                referencia_tipo="orcamento", referencia_id=orcamento_id,
+            )
 
 
 def _gerar_numero_orcamento(conn):
@@ -288,7 +303,8 @@ def aprovar_interno_orcamento(orcamento_id):
     mensagem = f"Seu orçamento {orcamento['numero']} foi aprovado internamente por {usuario_atual['nome']}."
     if observacao:
         mensagem += f" Observação: {observacao}"
-    notificacoes_service.criar(conn, usuario_id=orcamento["criado_por"], tipo="orcamento_aprovado_interno", mensagem=mensagem)
+    notificacoes_service.criar(conn, usuario_id=orcamento["criado_por"], tipo="orcamento_aprovado_interno", mensagem=mensagem,
+                                referencia_tipo="orcamento", referencia_id=orcamento_id)
     audit.registrar(conn, tabela="orcamentos", registro_id=orcamento_id, usuario_id=usuario_atual["id"],
                      acao="aprovacao_interna_aprovada", valor_novo={"observacao": observacao},
                      ip=client_ip(), dispositivo=client_device())

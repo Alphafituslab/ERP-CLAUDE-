@@ -201,6 +201,7 @@ SCHEMA_FILES = [
     "schema_fase212.sql",  # Fase 212 — Precificação: cálculo de rentabilidade e custo (Comercial & Vendas)
     "schema_fase213.sql",  # Fase 213 — Precificação: modo "markup" passa a pedir margem LÍQUIDA desejada, não bruta
     "schema_fase223.sql",  # Fase 223 — Orçamentos: aprovação interna (usuário master)
+    "schema_fase225.sql",  # Fase 225 — Notificações: referencia_tipo/referencia_id (clicável, abre o item de origem)
 ]
 
 

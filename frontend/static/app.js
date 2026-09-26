@@ -3896,17 +3896,34 @@
       return "—";
     };
 
+    // Fase 225 — pedido do usuário: "eu não consigo abrir e ver o que é"
+    // — a notificação virou só texto até então, sem jeito nenhum de saber
+    // pra onde ir. `referencia_tipo` é genérico de propósito: qualquer
+    // aviso futuro (solicitação de material, etc.) só precisa adicionar
+    // um `case` aqui pra também virar clicável, sem mexer no resto.
+    function rotaDaNotificacao(n) {
+      if (!n.referencia_tipo || !n.referencia_id) return null;
+      switch (n.referencia_tipo) {
+        case "orcamento": return `#/orcamentos/${n.referencia_id}`;
+        default: return null;
+      }
+    }
+
     const linhas = notificacoes
-      .map(
-        (n) => `<tr class="${n.lida ? "" : "linha-nao-lida"}">
+      .map((n) => {
+        const rota = rotaDaNotificacao(n);
+        return `<tr class="${n.lida ? "" : "linha-nao-lida"}">
           <td class="texto-suave">${fmtData(n.criado_em)}</td>
-          <td>${escapeHtml(n.mensagem)}</td>
+          <td>${rota ? `<a href="${rota}">${escapeHtml(n.mensagem)}</a>` : escapeHtml(n.mensagem)}</td>
           <td>${seloEnvioEmail(n)}</td>
-          <td>${n.lida
-            ? '<span class="texto-suave">lida</span>'
-            : `<button class="botao secundario pequeno" data-acao="marcar-notificacao-lida" data-id="${n.id}">Marcar como lida</button>`}</td>
-        </tr>`
-      )
+          <td style="display:flex;gap:6px;flex-wrap:wrap;">
+            ${rota ? `<a class="botao secundario pequeno" href="${rota}" data-acao="abrir-notificacao-marcar-lida" data-id="${n.id}">Abrir</a>` : ""}
+            ${n.lida
+              ? '<span class="texto-suave">lida</span>'
+              : `<button class="botao secundario pequeno" data-acao="marcar-notificacao-lida" data-id="${n.id}">Marcar como lida</button>`}
+          </td>
+        </tr>`;
+      })
       .join("");
 
     const temNaoLida = notificacoes.some((n) => !n.lida);
@@ -20561,6 +20578,14 @@
       case "marcar-notificacao-lida": {
         await chamarApi(`/notificacoes/${alvo.dataset.id}/marcar-lida`, { method: "POST" });
         return renderNotificacoes();
+      }
+      case "abrir-notificacao-marcar-lida": {
+        // O próprio elemento é um <a href="#/..."> — a navegação natural
+        // do link já acontece sozinha; isto só marca como lida em paralelo
+        // (sem esperar nem re-renderizar Notificações, pra não atrapalhar
+        // a navegação que já está em andamento).
+        chamarApi(`/notificacoes/${alvo.dataset.id}/marcar-lida`, { method: "POST" }).catch(() => {});
+        return;
       }
       case "marcar-todas-notificacoes-lidas": {
         await chamarApi("/notificacoes/marcar-todas-lidas", { method: "POST" });
