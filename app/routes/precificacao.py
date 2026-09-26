@@ -17,7 +17,9 @@ from .. import audit
 from ..context import ApiError, client_device, client_ip, get_db
 from ..permissions import requires_permission
 from .. import precificacao_service as calc
-from .custeio import custo_medio_item, custo_projetado_formula
+from .custeio import custo_variantes_item, custo_projetado_formula_variantes
+
+METODOS_CUSTO_VALIDOS = ("ultimo", "media", "mais_alto")
 
 bp = Blueprint("precificacao", __name__, url_prefix="/api/v1/precificacao")
 
@@ -38,29 +40,59 @@ def _com_resultado(cenario):
 @requires_permission("precificacao", "visualizar")
 def sugestao_custo(item_id):
     """Sugere o custo de produção REAL do item (mesma fonte já usada em
-    Custeio — fórmula ativa se existir, senão custo médio de compra) pra
-    pré-preencher o formulário. Nunca trava o campo: é só uma sugestão que
-    o usuário pode sobrescrever, exatamente como o resto do sistema já faz
-    (ex.: preço sugerido de Tabela de Preço em Novo Pedido)."""
+    Custeio — fórmula ativa se existir, senão histórico de compra direto)
+    pra pré-preencher o formulário. Nunca trava o campo: é só uma sugestão
+    que o usuário pode sobrescrever, exatamente como o resto do sistema já
+    faz (ex.: preço sugerido de Tabela de Preço em Novo Pedido).
+
+    Fase 214 — pedido do usuário: em vez de só a média de compra, sempre
+    devolve os 3 jeitos de olhar o histórico real (`opcoes_custo`: último
+    preço pago, média ponderada, maior preço já pago) mais uma sugestão
+    automática (`metodo_sugerido`/`motivo_sugestao` — ver
+    `custo_variantes_item` em `custeio.py` pra regra completa: se o preço
+    andou subindo, sugere média; senão, sugere o último). `?metodo=` deixa
+    o usuário pedir um método específico em vez do sugerido (dropdown na
+    tela) — sempre um dos 3 (`ultimo`/`media`/`mais_alto`), nunca uma
+    trava."""
     conn = get_db()
     item = conn.execute("SELECT id, codigo, descricao FROM itens WHERE id = ?", (item_id,)).fetchone()
     if item is None:
         raise ApiError("Item não encontrado.", status=404)
 
+    metodo_pedido = request.args.get("metodo")
+    if metodo_pedido is not None and metodo_pedido not in METODOS_CUSTO_VALIDOS:
+        raise ApiError(f"'metodo' inválido — use um de: {', '.join(METODOS_CUSTO_VALIDOS)}.", status=400)
+
     formula = conn.execute(
         "SELECT * FROM formulas WHERE item_produzido_id = ? AND status = 'ativa'", (item_id,)
     ).fetchone()
     if formula:
-        custo = custo_projetado_formula(conn, dict(formula))["custo_total_por_unidade"]
-        origem = "formula_ativa"
+        info = custo_projetado_formula_variantes(conn, dict(formula))
+        opcoes = info["opcoes"]
+        metodo_sugerido = info["metodo_sugerido"]
+        motivo_sugestao = info["motivo_sugestao"]
+        origem = "formula_ativa" if opcoes else None
     else:
-        custo = custo_medio_item(conn, item_id)
-        origem = "custo_medio_compra"
+        variantes = custo_variantes_item(conn, item_id)
+        if variantes["tem_dado"]:
+            opcoes = {"ultimo": variantes["ultimo"]["valor"], "media": variantes["media"], "mais_alto": variantes["mais_alto"]}
+        else:
+            opcoes = None
+        metodo_sugerido = variantes["sugestao_metodo"]
+        motivo_sugestao = variantes["motivo_sugestao"]
+        origem = "custo_medio_compra" if opcoes else None
+
+    metodo_aplicado = metodo_pedido if (metodo_pedido and opcoes) else metodo_sugerido
+    custo_sugerido = opcoes.get(metodo_aplicado) if (opcoes and metodo_aplicado) else None
 
     return jsonify({
         "item_id": item_id, "item_codigo": item["codigo"], "item_descricao": item["descricao"],
-        "custo_sugerido": round(custo, 4) if custo is not None else None,
-        "origem": origem if custo is not None else None,
+        "origem": origem,
+        "opcoes_custo": opcoes,
+        "metodo_sugerido": metodo_sugerido,
+        "metodo_aplicado": metodo_aplicado,
+        "motivo_sugestao": motivo_sugestao,
+        "custo_sugerido": round(custo_sugerido, 4) if custo_sugerido is not None else None,
     })
 
 

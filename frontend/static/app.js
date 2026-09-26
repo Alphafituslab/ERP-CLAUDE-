@@ -15585,6 +15585,7 @@
             <label>Custo de produção (R$/unidade)</label>
             <input name="custo_producao" type="number" step="any" min="0" required value="${c.custo_producao}" id="campo-custo-producao-precificacao">
             <span class="texto-suave" id="origem-custo-precificacao" style="font-size:11px;">${c.custo_origem === "custeio_sistema" ? "Sugerido pelo custo real do sistema." : ""}</span>
+            <div id="opcoes-custo-precificacao"></div>
           </div>
           <div class="campo">
             <label>Quantidade (pra totais)</label>
@@ -15683,23 +15684,55 @@
       r.addEventListener("change", () => { alternarCamposModo(); recalcular(); });
     });
 
+    const containerOpcoesCusto = document.getElementById("opcoes-custo-precificacao");
+    function renderOpcoesCusto(opcoesCusto, metodoSugerido, motivoSugestao, origem) {
+      if (!containerOpcoesCusto) return;
+      if (!opcoesCusto) { containerOpcoesCusto.innerHTML = ""; return; }
+      const labelOrigem = origem === "formula_ativa" ? "fórmula ativa (ficha técnica)" : "histórico de compra";
+      const linhas = [
+        opcoesCusto.ultimo != null ? { chave: "ultimo", label: "Último preço pago" } : null,
+        opcoesCusto.media != null ? { chave: "media", label: "Preço médio" } : null,
+        opcoesCusto.mais_alto != null ? { chave: "mais_alto", label: "Maior preço já pago" } : null,
+      ].filter(Boolean);
+      containerOpcoesCusto.innerHTML = `
+        <div style="margin-top:6px;padding:8px;border:1px solid rgba(0,0,0,0.1);border-radius:6px;">
+          <p class="texto-suave" style="margin:0 0 6px;font-size:11px;">Custo real (${labelOrigem}) — escolha qual usar:</p>
+          ${linhas.map((l) => `
+            <label style="display:block;font-weight:normal;font-size:12px;margin-bottom:2px;">
+              <input type="radio" name="metodo-custo-precificacao" value="${l.chave}" data-valor="${opcoesCusto[l.chave]}" ${l.chave === metodoSugerido ? "checked" : ""}>
+              ${escapeHtml(l.label)} (${fmtRealPrecificacao(opcoesCusto[l.chave])})${l.chave === metodoSugerido ? " — sugerido" : ""}
+            </label>`).join("")}
+          ${motivoSugestao ? `<p class="texto-suave" style="margin:4px 0 0;font-size:11px;">${escapeHtml(motivoSugestao)}</p>` : ""}
+        </div>`;
+    }
+    if (containerOpcoesCusto) {
+      containerOpcoesCusto.addEventListener("change", (e) => {
+        const radio = e.target.closest('input[name="metodo-custo-precificacao"]');
+        if (!radio) return;
+        campoCusto.value = radio.dataset.valor;
+        form.dataset.custoOrigem = "custeio_sistema";
+        recalcular();
+      });
+    }
+
     if (campoItemBusca) {
       campoItemBusca.addEventListener("change", async () => {
         const texto = campoItemBusca.value;
         const itens = state.cache.itensCatalogoPrecificacao || [];
         const encontrado = itens.find((i) => `${i.codigo} — ${i.descricao}` === texto);
         campoItemId.value = encontrado ? encontrado.id : "";
-        if (!encontrado || campoCusto.value) return;
+        if (!encontrado) { renderOpcoesCusto(null); return; }
         try {
           const sugestao = await chamarApi(`/precificacao/sugestao-custo/${encontrado.id}`);
-          if (sugestao.custo_sugerido != null) {
+          renderOpcoesCusto(sugestao.opcoes_custo, sugestao.metodo_sugerido, sugestao.motivo_sugestao, sugestao.origem);
+          if (sugestao.custo_sugerido != null && !campoCusto.value) {
             campoCusto.value = sugestao.custo_sugerido;
             form.dataset.custoOrigem = "custeio_sistema";
-            origemCustoLabel.textContent = `Sugerido pelo custo real do sistema (${sugestao.origem === "formula_ativa" ? "fórmula ativa" : "custo médio de compra"}) — pode sobrescrever.`;
+            origemCustoLabel.textContent = `Sugerido pelo custo real do sistema (${sugestao.origem === "formula_ativa" ? "fórmula ativa" : "histórico de compra"}) — pode sobrescrever ou escolher outro método acima.`;
             recalcular();
           }
         } catch (erro) {
-          // sem custo real disponível pra esse item — segue no manual, sem travar nada.
+          renderOpcoesCusto(null);
         }
       });
     }

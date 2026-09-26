@@ -83,6 +83,103 @@ def custo_medio_item(conn, item_id):
     return row["custo_total"] / row["quantidade_total"]
 
 
+def custo_variantes_item(conn, item_id):
+    """Fase 214 — pedido do usuário na Precificação: em vez de SEMPRE usar
+    a média de compra (acima), oferece os 3 jeitos de olhar o histórico
+    real — o ÚLTIMO preço pago (lote com `criado_em` mais recente que tem
+    custo informado — é quando o lote foi recebido, mesmo campo que o
+    resto do sistema já usa como "quando aconteceu de verdade" pra
+    despesa/receita), a MÉDIA ponderada (`custo_medio_item`, Fase 13) e o
+    MAIOR preço já pago. Nunca inventa nada: só devolve o que existir de
+    verdade nos lotes recebidos.
+
+    Também decide uma SUGESTÃO automática, exatamente como o usuário pediu:
+    se o último preço pago for MAIOR que alguma compra anterior (ou seja, o
+    preço subiu), sugere a média — pra não formar o preço de venda em cima
+    de um valor isolado, possivelmente um pico pontual — e explica o
+    motivo. Se o preço está estável ou caindo, sugere o último preço mesmo
+    (mais atual = mais fiel ao custo de repor o estoque agora). Em
+    qualquer caso, a pessoa pode escolher outro método na tela — isto é só
+    o padrão sugerido, nunca uma trava."""
+    rows = conn.execute(
+        "SELECT custo_unitario, criado_em FROM lotes WHERE item_id = ? AND custo_unitario IS NOT NULL ORDER BY criado_em DESC",
+        (item_id,),
+    ).fetchall()
+    if not rows:
+        return {
+            "tem_dado": False, "ultimo": None, "media": None, "mais_alto": None,
+            "sugestao_metodo": None, "motivo_sugestao": None,
+        }
+
+    ultimo_valor = rows[0]["custo_unitario"]
+    ultimo_em = rows[0]["criado_em"]
+    mais_alto = max(r["custo_unitario"] for r in rows)
+    media = custo_medio_item(conn, item_id)
+
+    precos_anteriores_mais_baixos = any(r["custo_unitario"] < ultimo_valor for r in rows[1:])
+    if precos_anteriores_mais_baixos:
+        sugestao_metodo = "media"
+        motivo_sugestao = "O último preço pago é maior que compras anteriores — usada a média pra não formar o preço em cima de um valor isolado."
+    else:
+        sugestao_metodo = "ultimo"
+        motivo_sugestao = None
+
+    return {
+        "tem_dado": True,
+        "ultimo": {"valor": round(ultimo_valor, 6), "em": ultimo_em},
+        "media": round(media, 6) if media is not None else None,
+        "mais_alto": round(mais_alto, 6),
+        "sugestao_metodo": sugestao_metodo,
+        "motivo_sugestao": motivo_sugestao,
+    }
+
+
+def custo_projetado_formula_variantes(conn, formula):
+    """Fase 214 — mesma ideia de `custo_variantes_item`, mas agregada pra
+    uma fórmula inteira (BOM): calcula o custo total projetado 3 vezes, uma
+    por método, usando `custo_variantes_item` de cada insumo. A sugestão
+    geral é conservadora — se QUALQUER insumo da fórmula tiver o preço
+    subindo, a fórmula inteira sugere média (um único insumo mais caro já é
+    motivo pra não confiar cegamente no "último preço" do conjunto)."""
+    itens = conn.execute(
+        """
+        SELECT fi.item_id, fi.quantidade
+        FROM formula_itens fi WHERE fi.formula_id = ?
+        """,
+        (formula["id"],),
+    ).fetchall()
+    rendimento = formula["rendimento_teorico"] or 0
+    totais = {"ultimo": 0.0, "media": 0.0, "mais_alto": 0.0}
+    incompleto = False
+    sugere_media_geral = False
+    for it in itens:
+        qtd_por_unidade = (it["quantidade"] / rendimento) if rendimento else 0.0
+        variantes = custo_variantes_item(conn, it["item_id"])
+        if not variantes["tem_dado"]:
+            incompleto = True
+            continue
+        totais["ultimo"] += qtd_por_unidade * variantes["ultimo"]["valor"]
+        totais["media"] += qtd_por_unidade * variantes["media"]
+        totais["mais_alto"] += qtd_por_unidade * variantes["mais_alto"]
+        if variantes["sugestao_metodo"] == "media":
+            sugere_media_geral = True
+
+    if incompleto and not any(totais.values()):
+        return {"opcoes": None, "incompleto": True, "metodo_sugerido": None, "motivo_sugestao": None}
+
+    metodo_sugerido = "media" if sugere_media_geral else "ultimo"
+    motivo_sugestao = (
+        "Pelo menos um insumo desta fórmula teve o preço subindo na última compra — "
+        "usada a média geral pra não formar o custo em cima de um valor isolado."
+    ) if sugere_media_geral else None
+    return {
+        "opcoes": {k: round(v, 6) for k, v in totais.items()},
+        "incompleto": incompleto,
+        "metodo_sugerido": metodo_sugerido,
+        "motivo_sugestao": motivo_sugestao,
+    }
+
+
 def custo_lote(conn, lote_id):
     """Devolve (valor_unitario, origem) para um lote específico.
     origem é 'lote' (custo informado neste lote), 'media_item' (caiu para
