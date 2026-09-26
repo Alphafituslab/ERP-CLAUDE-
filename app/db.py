@@ -198,6 +198,7 @@ SCHEMA_FILES = [
     "schema_fase202.sql",  # Fase 202 — Agenda: "usuário master" (flag direto na conta) vê tudo, sem passar por perfil/permissão
     "schema_fase203.sql",  # Fase 203 — Agenda: link de videochamada (Google Meet/Zoom/etc) no compromisso
     "schema_fase204.sql",  # Fase 204 — Agenda: contatos externos salvos (reaproveitar em convites futuros) + empresa
+    "schema_fase212.sql",  # Fase 212 — Precificação: cálculo de rentabilidade e custo (Comercial & Vendas)
 ]
 
 

@@ -616,6 +616,15 @@ PERMISSOES_PADRAO = [
     ("orcamentos", "visualizar", "Ver orçamentos cadastrados", 0),
     ("orcamentos", "criar", "Criar, editar e enviar orçamentos", 0),
     ("orcamentos", "cancelar", "Cancelar um orçamento", 0),
+
+    # Fase 212 — Precificação (cálculo de rentabilidade e custo). Dado
+    # sensível (custo de produção + margem real), mesma régua de segregação
+    # já usada para "custeio.visualizar" desde a Fase 13 — Financeiro e
+    # Diretoria têm por padrão, Comercial/Vendedor não (o vendedor de campo
+    # continua só vendo o preço já formado nas Tabelas de Preço).
+    ("precificacao", "visualizar", "Ver cenários de precificação salvos", 0),
+    ("precificacao", "criar", "Criar, editar e salvar cenários de precificação", 0),
+    ("precificacao", "excluir", "Excluir um cenário de precificação salvo", 0),
 ]
 
 # Fase 92 (depois ajustada na Fase 94) — perfis para os quais o 2FA (TOTP)
@@ -888,6 +897,10 @@ PERFIS_PADRAO = [
         # da tela operacional de Ordens de Produção — mesma segregação já
         # usada para relatorios.visualizar/Diretoria desde a Fase 7).
         "custeio.visualizar",
+        # Fase 212 — mesmo perfil que já vê o custo real de produção
+        # (acima) é quem faz sentido montar/consultar cenários de
+        # precificação — mesma sensibilidade de dado, mesma régua.
+        "precificacao.visualizar", "precificacao.criar", "precificacao.excluir",
         # Fase 40 — quem já lança/baixa contas é quem faz sentido também
         # importar o extrato do banco e conciliar as transações contra
         # elas.
@@ -912,6 +925,8 @@ PERFIS_PADRAO = [
         # Fase 13 — visão executiva de custo de produção, mesma lógica de
         # "número agregado, sem acesso operacional" já usada acima.
         "custeio.visualizar",
+        # Fase 212 — mesma visão executiva, agora também pra rentabilidade.
+        "precificacao.visualizar",
     ]),
     # Fase 24 — perfil novo para quem cuida do Memorial Técnico ANVISA
     # (tipicamente o Responsável Técnico e/ou Controle de Qualidade

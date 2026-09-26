@@ -927,6 +927,7 @@
           case "comercial": return renderComercial();
           case "lancar-faturar": return renderLancarFaturarPedidos();
           case "tabelas-preco": return param ? renderTabelaPrecoDetalhe(Number(param)) : renderTabelasPreco();
+          case "precificacao": return renderPrecificacao();
           case "pedido": return param ? renderPedidoDetalhe(Number(param)) : renderComercial();
           case "app-vendas":
             if (param === "splash") return renderSplashSincronizacaoVendas();
@@ -1151,6 +1152,9 @@
         // entre Comercial e Fiscal a cada etapa.
         { rota: "#/lancar-faturar", chave: "lancar-faturar", label: "Lançar & Faturar Pedidos", permissao: ["comercial", "criar_pedido"] },
         { rota: "#/tabelas-preco", chave: "tabelas-preco", label: "Tabelas de Preço", permissao: ["tabelas_preco", "visualizar"] },
+        // Fase 212 — cálculo de rentabilidade e custo (substitui a planilha
+        // Excel de precificação); mesma permissão sensível de "custeio".
+        { rota: "#/precificacao", chave: "precificacao", label: "Precificação (Rentabilidade)", permissao: ["precificacao", "visualizar"], apelidos: ["custo", "rentabilidade", "markup", "margem", "lucro"] },
         { rota: "#/pagamentos", chave: "pagamentos", label: "Métodos & Condições de Pagamento", permissao: ["comercial", "visualizar"] },
         { rota: "#/app-vendas", chave: "app-vendas", label: "App de Vendas", permissao: ["vendas_app", "usar"] },
         { rota: "#/app-vendas/catalogos", chave: "app-vendas-catalogos", label: "Catálogos", permissao: ["vendas_app", "usar"] },
@@ -15473,6 +15477,289 @@
       </form>`);
   }
 
+  // =======================================================================
+  // Fase 212 — Precificação (cálculo de rentabilidade e custo), pedido do
+  // usuário pra substituir a planilha Excel de precificação de verdade,
+  // dentro do sistema. Ver app/precificacao_service.py pro método completo
+  // (inclusive a correção de um erro real de fórmula achado na planilha
+  // original, na forma como a comissão era descontada do preço final).
+  //
+  // ICMS/PIS/COFINS/Análises/Frete/Despesas Fixas são sempre percentual
+  // "por dentro" do preço de venda (técnica de markup correta pra tributo
+  // que incide sobre o preço, não sobre o custo) — o cálculo em si roda no
+  // BACKEND (nunca duplicado aqui no front, pro número nunca poder
+  // divergir); esta tela só recalcula em tempo real conforme o usuário
+  // digita, via um debounce curto, chamando o mesmo endpoint que valida e
+  // calcula de verdade.
+  // =======================================================================
+  function fmtRealPrecificacao(v) {
+    if (v === null || v === undefined || Number.isNaN(v)) return "—";
+    return Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  }
+  function fmtPctPrecificacao(v) {
+    if (v === null || v === undefined || Number.isNaN(v)) return "—";
+    return Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + "%";
+  }
+
+  async function renderPrecificacao() {
+    app.innerHTML = '<div class="carregando">Carregando precificação…</div>';
+    const [itensCatalogo, cenariosSalvos] = await Promise.all([
+      chamarApi("/itens"),
+      chamarApi("/precificacao"),
+    ]);
+    state.cache.itensCatalogoPrecificacao = itensCatalogo;
+    const podeCriar = temPermissao("precificacao", "criar");
+    const podeExcluir = temPermissao("precificacao", "excluir");
+
+    const linhasSalvos = cenariosSalvos
+      .map((c) => `
+        <tr>
+          <td>${escapeHtml(c.nome)}</td>
+          <td>${c.item_codigo ? escapeHtml(c.item_codigo) : '<span class="texto-suave">—</span>'}</td>
+          <td>${fmtRealPrecificacao(c.resultado.preco_final)}</td>
+          <td>${fmtPctPrecificacao(c.resultado.margem_liquida_pct)}</td>
+          <td>${fmtRealPrecificacao(c.resultado.lucro_real_total)}</td>
+          <td class="texto-suave">${fmtData(c.criado_em)}${c.criado_por_nome ? " — " + escapeHtml(c.criado_por_nome) : ""}</td>
+          <td>
+            <button class="botao secundario pequeno" data-acao="abrir-editar-precificacao" data-id="${c.id}">Abrir</button>
+            ${podeExcluir ? `<button class="botao perigo pequeno" data-acao="excluir-precificacao" data-id="${c.id}">Arquivar</button>` : ""}
+          </td>
+        </tr>`)
+      .join("");
+
+    renderShell(
+      `<h2>Precificação (Rentabilidade)</h2>
+       <p class="texto-suave">Calcula o preço de venda e a rentabilidade real de um produto — em substituição
+       à planilha de precificação. ICMS, PIS, COFINS, Análises, Frete e Despesas Fixas são sempre tratados
+       como percentual "por dentro" do preço de venda (a forma correta de embutir um tributo que incide sobre
+       o preço, não sobre o custo). A empresa é do Lucro Real, por isso a alíquota combinada de
+       IRPJ + Adicional + CSLL fica editável por cenário (padrão 34% = 15% + 10% + 9%, ajuste se a
+       alíquota efetiva real da empresa for outra).</p>
+
+       <div class="cartao" id="cartao-form-precificacao">
+         ${htmlFormularioPrecificacao(null, itensCatalogo, podeCriar)}
+       </div>
+
+       <div class="cartao">
+         <h3>Cenários salvos</h3>
+         <table>
+           <thead><tr><th>Nome</th><th>Item</th><th>Preço final</th><th>Margem líquida</th><th>Lucro total</th><th>Criado</th><th></th></tr></thead>
+           <tbody>${linhasSalvos || '<tr><td colspan="7" class="texto-suave">Nenhum cenário salvo ainda.</td></tr>'}</tbody>
+         </table>
+       </div>`,
+      "precificacao"
+    );
+
+    ligarFormularioPrecificacao();
+  }
+
+  function htmlFormularioPrecificacao(cenario, itensCatalogo, podeCriar) {
+    const c = cenario || {
+      id: null, nome: "", item_id: null, modo: "markup", custo_producao: "", custo_origem: "manual",
+      icms_pct: 12, pis_pct: 1.65, cofins_pct: 7.6, analises_pct: 8, frete_pct: 8, despesas_fixas_pct: 8,
+      comissao_pct: 5, margem_bruta_pct: 50, preco_venda_final: "", aliquota_irpj_csll_pct: 34, quantidade: 1,
+      observacoes: "",
+    };
+    const itemAtual = c.item_id ? itensCatalogo.find((i) => i.id === c.item_id) : null;
+    const grade = "display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;";
+    return `
+      <form data-form="salvar-precificacao" id="form-precificacao" data-id="${c.id || ""}" data-custo-origem="${c.custo_origem || "manual"}">
+        <div style="${grade}">
+          <div class="campo">
+            <label>Nome do cenário</label>
+            <input name="nome" required value="${escapeHtml(c.nome)}" placeholder="ex.: Creatina sem sabor — Cliente Farma">
+          </div>
+          <div class="campo">
+            <label>Produto (opcional — sugere o custo real)</label>
+            <input list="lista-itens-precificacao" id="campo-item-precificacao" placeholder="Buscar por código ou descrição"
+              value="${itemAtual ? escapeHtml(itemAtual.codigo + " — " + itemAtual.descricao) : ""}">
+            <input type="hidden" id="campo-item-id-precificacao" value="${c.item_id || ""}">
+            <datalist id="lista-itens-precificacao">
+              ${itensCatalogo.map((i) => `<option value="${escapeHtml(i.codigo + " — " + i.descricao)}"></option>`).join("")}
+            </datalist>
+          </div>
+        </div>
+
+        <div style="${grade}margin-top:10px;">
+          <div class="campo">
+            <label>Custo de produção (R$/unidade)</label>
+            <input name="custo_producao" type="number" step="any" min="0" required value="${c.custo_producao}" id="campo-custo-producao-precificacao">
+            <span class="texto-suave" id="origem-custo-precificacao" style="font-size:11px;">${c.custo_origem === "custeio_sistema" ? "Sugerido pelo custo real do sistema." : ""}</span>
+          </div>
+          <div class="campo">
+            <label>Quantidade (pra totais)</label>
+            <input name="quantidade" type="number" step="any" min="0.0001" value="${c.quantidade}">
+          </div>
+        </div>
+
+        <p class="texto-suave" style="margin-top:14px;margin-bottom:4px;"><strong>Percentuais sobre o preço de venda</strong></p>
+        <div style="${grade}">
+          <div class="campo"><label>ICMS %</label><input name="icms_pct" type="number" step="any" min="0" max="99" value="${c.icms_pct}"></div>
+          <div class="campo"><label>PIS %</label><input name="pis_pct" type="number" step="any" min="0" max="99" value="${c.pis_pct}"></div>
+          <div class="campo"><label>COFINS %</label><input name="cofins_pct" type="number" step="any" min="0" max="99" value="${c.cofins_pct}"></div>
+          <div class="campo"><label>Análises %</label><input name="analises_pct" type="number" step="any" min="0" max="99" value="${c.analises_pct}"></div>
+          <div class="campo"><label>Frete %</label><input name="frete_pct" type="number" step="any" min="0" max="99" value="${c.frete_pct}"></div>
+          <div class="campo"><label>Despesas Fixas %</label><input name="despesas_fixas_pct" type="number" step="any" min="0" max="99" value="${c.despesas_fixas_pct}"></div>
+        </div>
+
+        <div style="${grade}margin-top:10px;">
+          <div class="campo"><label>Comissão %</label><input name="comissao_pct" type="number" step="any" min="0" max="99" value="${c.comissao_pct}"></div>
+          <div class="campo"><label>Alíquota IRPJ+Adicional+CSLL % (Lucro Real)</label><input name="aliquota_irpj_csll_pct" type="number" step="any" min="0" max="99" value="${c.aliquota_irpj_csll_pct}"></div>
+        </div>
+
+        <div class="campo" style="margin-top:14px;">
+          <label>Modo de cálculo</label>
+          <div style="display:flex;gap:16px;flex-wrap:wrap;">
+            <label style="font-weight:normal;"><input type="radio" name="modo" value="markup" ${c.modo === "markup" ? "checked" : ""}> Aplicar margem desejada</label>
+            <label style="font-weight:normal;"><input type="radio" name="modo" value="preco_fixo" ${c.modo === "preco_fixo" ? "checked" : ""}> Já tenho o preço de venda</label>
+          </div>
+        </div>
+
+        <div class="campo" data-campo-modo="markup" ${c.modo !== "markup" ? "hidden" : ""}>
+          <label>Margem bruta desejada (%)</label>
+          <input name="margem_bruta_pct" type="number" step="any" min="0" value="${c.margem_bruta_pct != null ? c.margem_bruta_pct : ""}">
+        </div>
+        <div class="campo" data-campo-modo="preco_fixo" ${c.modo !== "preco_fixo" ? "hidden" : ""}>
+          <label>Preço de venda final (R$)</label>
+          <input name="preco_venda_final" type="number" step="any" min="0" value="${c.preco_venda_final != null ? c.preco_venda_final : ""}">
+        </div>
+
+        <div class="campo"><label>Observações</label><textarea name="observacoes" rows="2">${escapeHtml(c.observacoes || "")}</textarea></div>
+
+        <div id="resultado-precificacao" class="cartao" style="background:rgba(0,0,0,0.03);margin-top:14px;">
+          <p class="texto-suave">Preencha os campos pra ver o resultado.</p>
+        </div>
+
+        <div class="rodape-modal" style="justify-content:flex-start;margin-top:14px;padding:0;border:none;">
+          ${podeCriar ? `<button type="submit" class="botao">${c.id ? "Salvar alterações" : "Salvar cenário"}</button>` : ""}
+          ${c.id ? `<button type="button" class="botao secundario" data-acao="cancelar-edicao-precificacao">Cancelar edição</button>` : ""}
+        </div>
+      </form>`;
+  }
+
+  function htmlResultadoPrecificacao(r) {
+    return `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
+        <div><span class="texto-suave">Preço mínimo (cobre custo+tributos)</span><br><strong>${fmtRealPrecificacao(r.preco_1)}</strong></div>
+        <div><span class="texto-suave">Preço líquido de comissão</span><br><strong>${fmtRealPrecificacao(r.preco_2)}</strong></div>
+        <div><span class="texto-suave">Preço de venda final</span><br><strong>${fmtRealPrecificacao(r.preco_final)}</strong></div>
+        <div><span class="texto-suave">Margem bruta</span><br><strong>${fmtPctPrecificacao(r.margem_bruta_pct)}</strong></div>
+        <div><span class="texto-suave">Comissão (valor)</span><br><strong>${fmtRealPrecificacao(r.comissao_real)}</strong></div>
+        <div><span class="texto-suave">Base tributável (IRPJ/CSLL)</span><br><strong>${fmtRealPrecificacao(r.base_tributavel_irpj)}</strong></div>
+        <div><span class="texto-suave">IRPJ + CSLL</span><br><strong>${fmtRealPrecificacao(r.irpj_csll)}</strong></div>
+        <div><span class="texto-suave">Lucro final (produtor)</span><br><strong>${fmtRealPrecificacao(r.lucro_final_produtor)}</strong></div>
+        <div><span class="texto-suave">Margem líquida</span><br><strong>${fmtPctPrecificacao(r.margem_liquida_pct)}</strong></div>
+      </div>
+      <hr style="margin:14px 0;border:none;border-top:1px solid rgba(0,0,0,0.08);">
+      <p class="texto-suave" style="margin-bottom:6px;"><strong>Totais para ${Number(r.quantidade).toLocaleString("pt-BR")} unidade(s)</strong></p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;">
+        <div><span class="texto-suave">Valor total do pedido</span><br><strong>${fmtRealPrecificacao(r.valor_total_pedido)}</strong></div>
+        <div><span class="texto-suave">Comissão total</span><br><strong>${fmtRealPrecificacao(r.comissao_total)}</strong></div>
+        <div><span class="texto-suave">Lucro real total</span><br><strong>${fmtRealPrecificacao(r.lucro_real_total)}</strong></div>
+        <div><span class="texto-suave">Lucro hipotético sem IRPJ/CSLL</span><br><strong>${fmtRealPrecificacao(r.lucro_hipotetico_total)}</strong></div>
+      </div>`;
+  }
+
+  function ligarFormularioPrecificacao() {
+    const form = document.getElementById("form-precificacao");
+    if (!form) return;
+    const painelResultado = document.getElementById("resultado-precificacao");
+    const campoItemBusca = document.getElementById("campo-item-precificacao");
+    const campoItemId = document.getElementById("campo-item-id-precificacao");
+    const campoCusto = document.getElementById("campo-custo-producao-precificacao");
+    const origemCustoLabel = document.getElementById("origem-custo-precificacao");
+
+    function alternarCamposModo() {
+      const marcado = form.querySelector('input[name="modo"]:checked');
+      const modo = marcado ? marcado.value : "markup";
+      form.querySelectorAll("[data-campo-modo]").forEach((el) => {
+        el.hidden = el.dataset.campoModo !== modo;
+      });
+    }
+    form.querySelectorAll('input[name="modo"]').forEach((r) => {
+      r.addEventListener("change", () => { alternarCamposModo(); recalcular(); });
+    });
+
+    if (campoItemBusca) {
+      campoItemBusca.addEventListener("change", async () => {
+        const texto = campoItemBusca.value;
+        const itens = state.cache.itensCatalogoPrecificacao || [];
+        const encontrado = itens.find((i) => `${i.codigo} — ${i.descricao}` === texto);
+        campoItemId.value = encontrado ? encontrado.id : "";
+        if (!encontrado || campoCusto.value) return;
+        try {
+          const sugestao = await chamarApi(`/precificacao/sugestao-custo/${encontrado.id}`);
+          if (sugestao.custo_sugerido != null) {
+            campoCusto.value = sugestao.custo_sugerido;
+            form.dataset.custoOrigem = "custeio_sistema";
+            origemCustoLabel.textContent = `Sugerido pelo custo real do sistema (${sugestao.origem === "formula_ativa" ? "fórmula ativa" : "custo médio de compra"}) — pode sobrescrever.`;
+            recalcular();
+          }
+        } catch (erro) {
+          // sem custo real disponível pra esse item — segue no manual, sem travar nada.
+        }
+      });
+    }
+    campoCusto.addEventListener("input", () => {
+      form.dataset.custoOrigem = "manual";
+      origemCustoLabel.textContent = "";
+    });
+
+    function coletarDadosForm() {
+      const fd = new FormData(form);
+      return {
+        nome: fd.get("nome") || "Prévia",
+        item_id: campoItemId.value ? Number(campoItemId.value) : null,
+        modo: fd.get("modo"),
+        custo_producao: Number(fd.get("custo_producao")) || 0,
+        custo_origem: form.dataset.custoOrigem || "manual",
+        icms_pct: Number(fd.get("icms_pct")) || 0,
+        pis_pct: Number(fd.get("pis_pct")) || 0,
+        cofins_pct: Number(fd.get("cofins_pct")) || 0,
+        analises_pct: Number(fd.get("analises_pct")) || 0,
+        frete_pct: Number(fd.get("frete_pct")) || 0,
+        despesas_fixas_pct: Number(fd.get("despesas_fixas_pct")) || 0,
+        comissao_pct: Number(fd.get("comissao_pct")) || 0,
+        margem_bruta_pct: fd.get("margem_bruta_pct") ? Number(fd.get("margem_bruta_pct")) : null,
+        preco_venda_final: fd.get("preco_venda_final") ? Number(fd.get("preco_venda_final")) : null,
+        aliquota_irpj_csll_pct: Number(fd.get("aliquota_irpj_csll_pct")) || 34,
+        quantidade: Number(fd.get("quantidade")) || 1,
+        observacoes: fd.get("observacoes") || null,
+      };
+    }
+
+    let timeoutRecalculo = null;
+    async function recalcular() {
+      const dadosAtual = coletarDadosForm();
+      if (!dadosAtual.custo_producao) {
+        painelResultado.innerHTML = '<p class="texto-suave">Informe o custo de produção pra calcular.</p>';
+        return;
+      }
+      if (dadosAtual.modo === "markup" && !dadosAtual.margem_bruta_pct) {
+        painelResultado.innerHTML = '<p class="texto-suave">Informe a margem bruta desejada.</p>';
+        return;
+      }
+      if (dadosAtual.modo === "preco_fixo" && !dadosAtual.preco_venda_final) {
+        painelResultado.innerHTML = '<p class="texto-suave">Informe o preço de venda final.</p>';
+        return;
+      }
+      try {
+        const r = await chamarApi("/precificacao/calcular", { method: "POST", body: dadosAtual });
+        painelResultado.innerHTML = htmlResultadoPrecificacao(r.resultado);
+      } catch (erro) {
+        painelResultado.innerHTML = `<p class="texto-suave">${escapeHtml(erro.message || "Não foi possível calcular.")}</p>`;
+      }
+    }
+
+    form.addEventListener("input", () => {
+      clearTimeout(timeoutRecalculo);
+      timeoutRecalculo = setTimeout(recalcular, 350);
+    });
+
+    alternarCamposModo();
+    recalcular();
+  }
+
   // Pedido do usuário (2026-09-24): quando aberto a partir de outra tela
   // (Contrato, Orçamento...), "cadastrar aqui deve abrir o local ORIGINAL
   // onde deve ser preenchido e ao terminar volta pra essa tela e seleciona
@@ -19622,6 +19909,30 @@
         const vendedores = state.cache.vendedoresParaTransferirCredito || (await chamarApi("/relatorios/creditos-vendedores"));
         return modalTransferirCreditoVendedor(vendedores);
       }
+      case "abrir-editar-precificacao": {
+        const cenario = await chamarApi(`/precificacao/${alvo.dataset.id}`);
+        const itensCatalogo = state.cache.itensCatalogoPrecificacao || (await chamarApi("/itens"));
+        const cartao = document.getElementById("cartao-form-precificacao");
+        if (!cartao) return renderPrecificacao();
+        cartao.innerHTML = htmlFormularioPrecificacao(cenario, itensCatalogo, temPermissao("precificacao", "criar"));
+        ligarFormularioPrecificacao();
+        cartao.scrollIntoView({ behavior: "smooth" });
+        return;
+      }
+      case "cancelar-edicao-precificacao":
+        return renderPrecificacao();
+      case "excluir-precificacao": {
+        // Fase 210 — nunca usar confirm() nativo (navegador embutido do
+        // instalador suprime silenciosamente, sem mostrar nada).
+        const confirmou = await confirmarModal(
+          "Arquivar este cenário de precificação? Ele sai da lista, mas o histórico continua guardado (pode ser consultado depois).",
+          { titulo: "Arquivar cenário", textoSim: "Arquivar" }
+        );
+        if (!confirmou) return;
+        await chamarApi(`/precificacao/${alvo.dataset.id}`, { method: "DELETE" });
+        definirFlash("ok", "Cenário arquivado.");
+        return renderPrecificacao();
+      }
       case "atualizar-painel-gerencial":
         return renderPainelGerencial({
           data_inicio: alvo.dataset.dataInicio, data_fim: alvo.dataset.dataFim,
@@ -21719,6 +22030,37 @@
     const dados = new FormData(form);
 
     switch (nomeForm) {
+      case "salvar-precificacao": {
+        const itemIdCampo = form.querySelector("#campo-item-id-precificacao");
+        const payload = {
+          nome: dados.get("nome"),
+          item_id: itemIdCampo && itemIdCampo.value ? Number(itemIdCampo.value) : null,
+          modo: dados.get("modo"),
+          custo_producao: Number(dados.get("custo_producao")),
+          custo_origem: form.dataset.custoOrigem || "manual",
+          icms_pct: Number(dados.get("icms_pct")) || 0,
+          pis_pct: Number(dados.get("pis_pct")) || 0,
+          cofins_pct: Number(dados.get("cofins_pct")) || 0,
+          analises_pct: Number(dados.get("analises_pct")) || 0,
+          frete_pct: Number(dados.get("frete_pct")) || 0,
+          despesas_fixas_pct: Number(dados.get("despesas_fixas_pct")) || 0,
+          comissao_pct: Number(dados.get("comissao_pct")) || 0,
+          margem_bruta_pct: dados.get("margem_bruta_pct") ? Number(dados.get("margem_bruta_pct")) : null,
+          preco_venda_final: dados.get("preco_venda_final") ? Number(dados.get("preco_venda_final")) : null,
+          aliquota_irpj_csll_pct: Number(dados.get("aliquota_irpj_csll_pct")) || 34,
+          quantidade: Number(dados.get("quantidade")) || 1,
+          observacoes: dados.get("observacoes") || null,
+        };
+        const idExistente = form.dataset.id;
+        if (idExistente) {
+          await chamarApi(`/precificacao/${idExistente}`, { method: "PUT", body: payload });
+          definirFlash("ok", "Cenário atualizado.");
+        } else {
+          await chamarApi("/precificacao", { method: "POST", body: payload });
+          definirFlash("ok", "Cenário salvo.");
+        }
+        return renderPrecificacao();
+      }
       case "recuperar-senha": {
         const email = dados.get("email");
         const resp = await chamarApi("/auth/recuperar-senha", {

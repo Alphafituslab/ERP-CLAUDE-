@@ -13,7 +13,7 @@ FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # entregue. MESMO número usado em `installer/AlphafitusOS.iss`
 # (MyAppVersion) — assim o que aparece na tela É o que está de fato
 # instalado, sem duas fontes de verdade divergentes.
-VERSAO_SISTEMA = "211.0"
+VERSAO_SISTEMA = "212.0"
 
 
 def create_app(test_config: dict = None) -> Flask:
@@ -97,7 +97,7 @@ def create_app(test_config: dict = None) -> Flask:
         solicitacoes_material, fluxo, transportadoras, tabelas_preco, clientes_documentos, terminais,
         nfe_entrada, terceirizacao, portal_terceirizacao, contratos, portal_contrato,
         catalogos_vendas, crm, sso, seguranca, instalador, funcionarios, agenda,
-        orcamentos, portal_orcamento, portal_agenda_convite,
+        orcamentos, portal_orcamento, portal_agenda_convite, precificacao,
     )
     app.register_blueprint(auth.bp)
     app.register_blueprint(usuarios.bp)
@@ -156,6 +156,7 @@ def create_app(test_config: dict = None) -> Flask:
     app.register_blueprint(orcamentos.bp)
     app.register_blueprint(portal_orcamento.bp)
     app.register_blueprint(portal_agenda_convite.bp)
+    app.register_blueprint(precificacao.bp)
 
     @app.get("/api/v1/saude")
     def saude():
