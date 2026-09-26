@@ -14678,12 +14678,15 @@
   }
 
   function _linhaItemOrcamento(item) {
-    const opcoes = (state.cache.itensVendaveis || [])
-      .map((i) => `<option value="${i.id}" ${item && item.item_id === i.id ? "selected" : ""}>${escapeHtml(i.codigo)} — ${escapeHtml(i.descricao)}</option>`)
-      .join("");
+    const valorAtual = item ? `${item.item_codigo} — ${item.item_descricao}` : "";
     return `
       <tr class="linha-item-orcamento">
-        <td><select class="orcamento-item-select" required><option value="">Escolha…</option>${opcoes}</select></td>
+        <td style="position:relative;">
+          <input type="text" class="orcamento-item-busca" placeholder="🔍 Digite pelo menos 3 letras — código ou descrição..."
+            autocomplete="off" value="${escapeHtml(valorAtual)}" required>
+          <input type="hidden" class="orcamento-item-id-hidden" value="${item ? item.item_id : ""}">
+          <div class="orcamento-item-resultados lista-busca-resultados"></div>
+        </td>
         <td><input type="number" step="any" min="0.0001" class="orcamento-item-qtd" value="${item ? item.quantidade : "1"}" style="width:80px;" required></td>
         <td><input type="text" class="orcamento-item-unidade" value="${escapeHtml(item ? item.unidade || "" : "")}" style="width:70px;" placeholder="UN"></td>
         <td><input type="number" step="0.01" min="0" class="orcamento-item-preco" value="${item ? item.preco_unitario : ""}" style="width:100px;" required></td>
@@ -14693,19 +14696,48 @@
 
   function _ligarLinhasItemOrcamento(wrap) {
     const corpo = wrap.querySelector("#corpo-itens-orcamento");
+    const itensBuscaveis = state.cache.itensVendaveis || [];
     wrap.querySelector('[data-acao-local="adicionar-linha-item-orcamento"]').addEventListener("click", () => {
       corpo.insertAdjacentHTML("beforeend", _linhaItemOrcamento(null));
     });
     corpo.addEventListener("click", (e) => {
-      const botao = e.target.closest('[data-acao-local="remover-linha-item-orcamento"]');
-      if (!botao) return;
-      if (corpo.children.length > 1) botao.closest("tr").remove();
+      const botaoRemover = e.target.closest('[data-acao-local="remover-linha-item-orcamento"]');
+      if (botaoRemover) {
+        if (corpo.children.length > 1) botaoRemover.closest("tr").remove();
+        return;
+      }
+      const botaoResultado = e.target.closest(".item-busca-resultado");
+      if (botaoResultado) {
+        const linha = botaoResultado.closest("tr");
+        linha.querySelector(".orcamento-item-id-hidden").value = botaoResultado.dataset.id;
+        linha.querySelector(".orcamento-item-busca").value = botaoResultado.dataset.rotulo;
+        linha.querySelector(".orcamento-item-resultados").innerHTML = "";
+      }
+    });
+    // Delegado (não por linha) — linhas novas vêm de "+ Adicionar item"
+    // via insertAdjacentHTML, sem re-executar este `addEventListener`.
+    corpo.addEventListener("input", (e) => {
+      const campoBusca = e.target.closest(".orcamento-item-busca");
+      if (!campoBusca) return;
+      const linha = campoBusca.closest("tr");
+      const listaResultados = linha.querySelector(".orcamento-item-resultados");
+      // Invalida a seleção anterior ao editar o texto à mão — evita
+      // salvar um item_id que não bate mais com o que está escrito.
+      linha.querySelector(".orcamento-item-id-hidden").value = "";
+      const termo = campoBusca.value.trim().toLowerCase();
+      if (termo.length < 3) { listaResultados.innerHTML = ""; return; }
+      const encontrados = itensBuscaveis
+        .filter((i) => i.codigo.toLowerCase().includes(termo) || i.descricao.toLowerCase().includes(termo))
+        .slice(0, 8);
+      listaResultados.innerHTML = encontrados.length
+        ? encontrados.map((i) => `<button type="button" class="item-busca-resultado" data-id="${i.id}" data-rotulo="${escapeHtml(i.codigo + " — " + i.descricao)}"><span class="mono">${escapeHtml(i.codigo)}</span> — ${escapeHtml(i.descricao)}</button>`).join("")
+        : '<p class="texto-suave" style="padding:6px 2px;margin:0;">Nada encontrado com esse termo.</p>';
     });
   }
 
   function _coletarItensOrcamento(wrap) {
     return [...wrap.querySelectorAll(".linha-item-orcamento")].map((linha) => ({
-      item_id: Number(linha.querySelector(".orcamento-item-select").value),
+      item_id: Number(linha.querySelector(".orcamento-item-id-hidden").value),
       quantidade: Number(linha.querySelector(".orcamento-item-qtd").value),
       unidade: linha.querySelector(".orcamento-item-unidade").value.trim() || null,
       preco_unitario: Number(linha.querySelector(".orcamento-item-preco").value),
@@ -16138,7 +16170,7 @@
     return `
       <div class="campo">
         <label>Cliente</label>
-        <input type="text" id="busca-cliente-pedido" placeholder="Digite a razão social ou o CNPJ..." autocomplete="off" required>
+        <input type="text" id="busca-cliente-pedido" placeholder="🔍 Digite pelo menos 3 letras — razão social ou CNPJ..." autocomplete="off" required>
         <input type="hidden" name="cliente_id" id="cliente-id-pedido" required>
         <div id="resultados-busca-cliente-pedido" class="lista-busca-resultados"></div>
       </div>`;
@@ -16148,7 +16180,7 @@
     return `
       <div class="campo">
         <label>Item</label>
-        <input type="text" id="busca-item-pedido" placeholder="Digite o código ou a descrição..." autocomplete="off" required>
+        <input type="text" id="busca-item-pedido" placeholder="🔍 Digite pelo menos 3 letras — código ou descrição..." autocomplete="off" required>
         <input type="hidden" name="item_id" id="item-id-pedido" required>
         <div id="resultados-busca-item-pedido" class="lista-busca-resultados"></div>
       </div>`;
@@ -16168,7 +16200,9 @@
       const listaResultados = wrap.querySelector(resultadosSel);
       campoBusca.addEventListener("input", () => {
         const termo = campoBusca.value.trim().toLowerCase();
-        if (!termo) { listaResultados.innerHTML = ""; return; }
+        // Pedido do usuário: só começa a mostrar sugestão a partir de 3
+        // letras/dígitos — evita uma lista gigante logo na primeira tecla.
+        if (termo.length < 3) { listaResultados.innerHTML = ""; return; }
         const encontrados = lista.filter((x) => campos.some((c) => (x[c] || "").toLowerCase().includes(termo))).slice(0, 8);
         listaResultados.innerHTML = encontrados.length
           ? encontrados.map(montarLinha).join("")
