@@ -4172,6 +4172,28 @@
     "materia_prima", "embalagem_primaria", "embalagem_secundaria",
     "produto_intermediario", "produto_a_granel", "produto_acabado", "material_de_laboratorio",
   ];
+  // Fase 215 — pedido do usuário: escolher a CATEGORIA antes de buscar o
+  // item (igual outro sistema que ele usa) nas telas onde a busca cobre o
+  // catálogo inteiro (todas as categorias misturadas) — não nas que já são
+  // implicitamente de uma categoria só (ex.: "Item" do Pedido de Venda, que
+  // já é só "produto_acabado"). Rótulos amigáveis pras 7 categorias que o
+  // Alphafitus já usa (nenhuma categoria nova criada — decisão do usuário).
+  const ROTULOS_TIPO_ITEM = {
+    materia_prima: "Matéria-Prima",
+    embalagem_primaria: "Embalagem Primária",
+    embalagem_secundaria: "Embalagem Secundária",
+    produto_intermediario: "Produto Intermediário",
+    produto_a_granel: "Produto a Granel",
+    produto_acabado: "Produto Acabado",
+    material_de_laboratorio: "Material de Laboratório",
+  };
+  function htmlFiltroCategoriaItem(idSelect, valorAtual) {
+    return `
+      <select id="${idSelect}" data-filtro-categoria-item>
+        <option value="">Todos</option>
+        ${TIPOS_ITEM.map((t) => `<option value="${t}" ${t === valorAtual ? "selected" : ""}>${escapeHtml(ROTULOS_TIPO_ITEM[t])}</option>`).join("")}
+      </select>`;
+  }
 
   async function renderItens() {
     app.innerHTML = '<div class="carregando">Carregando itens…</div>';
@@ -15398,8 +15420,12 @@
          </div>
          ${podeGerenciar ? `
          <div class="campo">
+           <label>Categoria do item</label>
+           ${htmlFiltroCategoriaItem("categoria-busca-item-tabela-preco", "")}
+         </div>
+         <div class="campo">
            <label>Buscar item para definir/alterar o preço</label>
-           <input type="text" id="busca-item-tabela-preco" placeholder="Digite o código ou a descrição..." autocomplete="off">
+           <input type="text" id="busca-item-tabela-preco" placeholder="Escolha a categoria e digite o código ou a descrição..." autocomplete="off">
            <div id="resultados-busca-item-tabela-preco" class="lista-busca-resultados"></div>
          </div>` : ""}
          <table>
@@ -15435,10 +15461,18 @@
     if (podeGerenciar) {
       const campoBusca = document.querySelector("#busca-item-tabela-preco");
       const listaResultados = document.querySelector("#resultados-busca-item-tabela-preco");
+      const campoCategoria = document.querySelector("#categoria-busca-item-tabela-preco");
+      campoCategoria.addEventListener("change", () => {
+        campoBusca.value = "";
+        listaResultados.innerHTML = "";
+        campoBusca.focus();
+      });
       campoBusca.addEventListener("input", () => {
         const termo = campoBusca.value.trim().toLowerCase();
+        const tipo = campoCategoria.value;
         if (!termo) { listaResultados.innerHTML = ""; return; }
         const encontrados = itensCatalogo
+          .filter((i) => !tipo || i.tipo === tipo)
           .filter((i) => i.codigo.toLowerCase().includes(termo) || i.descricao.toLowerCase().includes(termo))
           .slice(0, 8);
         listaResultados.innerHTML = encontrados.length
@@ -15576,12 +15610,16 @@
             <input name="nome" required value="${escapeHtml(c.nome)}" placeholder="ex.: Creatina sem sabor — Cliente Farma">
           </div>
           <div class="campo">
+            <label>Categoria do produto</label>
+            ${htmlFiltroCategoriaItem("campo-categoria-item-precificacao", itemAtual ? itemAtual.tipo : "")}
+          </div>
+          <div class="campo">
             <label>Produto (opcional — sugere o custo real)</label>
-            <input list="lista-itens-precificacao" id="campo-item-precificacao" placeholder="Buscar por código ou descrição"
+            <input list="lista-itens-precificacao" id="campo-item-precificacao" placeholder="Escolha a categoria e busque por código ou descrição"
               value="${itemAtual ? escapeHtml(itemAtual.codigo + " — " + itemAtual.descricao) : ""}">
             <input type="hidden" id="campo-item-id-precificacao" value="${c.item_id || ""}">
             <datalist id="lista-itens-precificacao">
-              ${itensCatalogo.map((i) => `<option value="${escapeHtml(i.codigo + " — " + i.descricao)}"></option>`).join("")}
+              ${(itemAtual ? itensCatalogo.filter((i) => i.tipo === itemAtual.tipo) : itensCatalogo).map((i) => `<option value="${escapeHtml(i.codigo + " — " + i.descricao)}"></option>`).join("")}
             </datalist>
           </div>
         </div>
@@ -15682,6 +15720,21 @@
     const campoItemId = document.getElementById("campo-item-id-precificacao");
     const campoCusto = document.getElementById("campo-custo-producao-precificacao");
     const origemCustoLabel = document.getElementById("origem-custo-precificacao");
+    const campoCategoriaItem = document.getElementById("campo-categoria-item-precificacao");
+    const listaItensDatalist = document.getElementById("lista-itens-precificacao");
+
+    if (campoCategoriaItem && listaItensDatalist) {
+      campoCategoriaItem.addEventListener("change", () => {
+        const tipo = campoCategoriaItem.value;
+        const itens = state.cache.itensCatalogoPrecificacao || [];
+        const filtrados = tipo ? itens.filter((i) => i.tipo === tipo) : itens;
+        listaItensDatalist.innerHTML = filtrados.map((i) => `<option value="${escapeHtml(i.codigo + " — " + i.descricao)}"></option>`).join("");
+        // Mudou a categoria — a busca de item anterior não vale mais (pode
+        // ser de outra categoria), evita salvar um vínculo errado.
+        campoItemBusca.value = "";
+        campoItemId.value = "";
+      });
+    }
 
     function alternarCamposModo() {
       const marcado = form.querySelector('input[name="modo"]:checked');
@@ -15749,6 +15802,7 @@
         const itens = state.cache.itensCatalogoPrecificacao || [];
         const encontrado = itens.find((i) => `${i.codigo} — ${i.descricao}` === texto);
         campoItemId.value = encontrado ? encontrado.id : "";
+        if (encontrado && campoCategoriaItem) campoCategoriaItem.value = encontrado.tipo;
         if (!encontrado) { renderOpcoesCusto(null); return; }
         try {
           const sugestao = await chamarApi(`/precificacao/sugestao-custo/${encontrado.id}`);
